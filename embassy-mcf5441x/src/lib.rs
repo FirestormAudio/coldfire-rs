@@ -19,6 +19,8 @@ pub use mcf5441x_pac as pac;
 #[cfg(target_arch = "m68k")]
 pub use coldfire_rt as rt;
 
+#[cfg(feature = "_cold")]
+pub mod boot;
 pub mod clocks;
 pub mod dma;
 pub mod esdhc;

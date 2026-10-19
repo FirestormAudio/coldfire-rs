@@ -60,4 +60,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("defmt"))'
 
 [package.metadata.docs.rs]
 # documented for the full part; the executors are ColdFire-only and compile out on docs.rs's host target
-features = ["mcf54418", "bootloader", "executor-thread", "executor-interrupt"]
+features = ["mcf54418", "boot-serial", "executor-thread", "executor-interrupt"]

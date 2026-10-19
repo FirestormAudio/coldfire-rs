@@ -118,7 +118,7 @@ def test_docs_build_on_the_host_with_the_docs_rs_features():
     for page in ("coldfire_rt/fn.set_vector.html", "coldfire_rt/struct.Handler.html", "coldfire_rt/macro.exception_entry.html",
                  "coldfire_rt/attr.entry.html", "coldfire/emac/index.html", "coldfire/mmio/index.html",
                  "mcf5441x_pac/constant.UART0.html", "embassy_mcf5441x/usb/struct.Driver.html",
-                 "embassy_mcf5441x/fn.init.html"):
+                 "embassy_mcf5441x/fn.init.html", "embassy_mcf5441x/boot/struct.BootConfig.html"):
         assert (doc / page).exists(), page
 
 
