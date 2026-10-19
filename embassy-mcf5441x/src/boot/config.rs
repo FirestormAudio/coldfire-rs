@@ -100,7 +100,6 @@ pub enum OutOfSpec {
 /// A board's cold-boot description. Make one with [`BootConfig::builder`] in a `const` or `static` initializer: a
 /// check that fails is then a compile error with the check's message.
 #[derive(Copy, Clone, Debug)]
-#[allow(dead_code)] // read by the operation list
 pub struct BootConfig {
     pub(crate) ref_clock: RefClock,
     pub(crate) pll: Pll,
@@ -110,6 +109,7 @@ pub struct BootConfig {
     pub(crate) outdiv4: Option<u8>,
     pub(crate) extra: &'static [ExtraWrite],
     pub(crate) cs0: Option<FlexBusCs0>,
+    #[allow(dead_code)] // read by the fetch
     pub(crate) app: AppSource,
 }
 
@@ -239,14 +239,14 @@ impl BootConfigBuilder {
     /// const C: BootConfig = BootConfig::builder(RefClock::Crystal(13_000_000), Pll::Set(S), DDR).cs0(FlexBusCs0 { cscr: 0, size: 0x100_0000 }).app(A).out_of_spec(OutOfSpec::IKnowWhatImDoing).build();
     /// ```
     ///
-    /// A 528 MHz VCO:
+    /// A VCO above 500 MHz:
     ///
     /// ```compile_fail
     /// # use embassy_mcf5441x::boot::*;
     /// # const DDR: Ddr = Ddr { cr: &[(0, 0x0000_0101)], padcr: 1 << 9 | 1, full_strength: false };
     /// # const S: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };
     /// # const A: AppSource = AppSource::Mapped(0x8000_0000);
-    /// const C: BootConfig = BootConfig::builder(RefClock::Crystal(24_000_000), Pll::Set(PllSettings { fbkdiv: 21, outdiv1: 2, outdiv2: 5, outdiv5: 0, ..S }), DDR).cs0(FlexBusCs0 { cscr: 0, size: 0x100_0000 }).app(A).build();
+    /// const C: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(PllSettings { fbkdiv: 20, outdiv1: 2, outdiv2: 5, outdiv5: 0, ..S }), DDR).cs0(FlexBusCs0 { cscr: 0, size: 0x100_0000 }).app(A).build();
     /// ```
     ///
     /// The same, out of spec on purpose:
@@ -256,7 +256,7 @@ impl BootConfigBuilder {
     /// # const DDR: Ddr = Ddr { cr: &[(0, 0x0000_0101)], padcr: 1 << 9 | 1, full_strength: false };
     /// # const S: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };
     /// # const A: AppSource = AppSource::Mapped(0x8000_0000);
-    /// const C: BootConfig = BootConfig::builder(RefClock::Crystal(24_000_000), Pll::Set(PllSettings { fbkdiv: 21, outdiv1: 2, outdiv2: 5, outdiv5: 0, ..S }), DDR).cs0(FlexBusCs0 { cscr: 0, size: 0x100_0000 }).app(A).out_of_spec(OutOfSpec::IKnowWhatImDoing).build();
+    /// const C: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(PllSettings { fbkdiv: 20, outdiv1: 2, outdiv2: 5, outdiv5: 0, ..S }), DDR).cs0(FlexBusCs0 { cscr: 0, size: 0x100_0000 }).app(A).out_of_spec(OutOfSpec::IKnowWhatImDoing).build();
     /// ```
     ///
     /// A core clock above 250 MHz:
@@ -495,12 +495,13 @@ mod tests {
     }
 
     #[test]
-    fn out_of_spec_opt_out_allows_528_vco() {
-        let s = PllSettings { refdiv: 0, fbkdiv: 21, outdiv1: 1, outdiv2: 3, outdiv5: 0 };
-        let c = builder(RefClock::Crystal(24_000_000), Pll::Keep(s))
+    fn out_of_spec_opt_out_allows_a_525_mhz_vco() {
+        // 25 MHz × 21: VCO 525 MHz and core 262.5 MHz, both over the limits
+        let s = PllSettings { refdiv: 0, fbkdiv: 20, outdiv1: 1, outdiv2: 3, outdiv5: 0 };
+        let c = builder(RefClock::Crystal(25_000_000), Pll::Keep(s))
             .out_of_spec(OutOfSpec::IKnowWhatImDoing)
             .build();
-        assert_eq!(c.clocks().vco_hz, 528_000_000);
+        assert_eq!(c.clocks().vco_hz, 525_000_000);
     }
 
     #[test]
@@ -511,8 +512,8 @@ mod tests {
 
     #[test]
     fn a_failed_check_names_the_limit() {
-        let s = PllSettings { fbkdiv: 21, ..MANUAL };
-        let r = std::panic::catch_unwind(|| builder(RefClock::Crystal(24_000_000), Pll::Set(s)).build());
+        let s = PllSettings { fbkdiv: 20, ..MANUAL };
+        let r = std::panic::catch_unwind(|| builder(RefClock::Crystal(25_000_000), Pll::Set(s)).build());
         let msg = *r.unwrap_err().downcast::<&str>().unwrap();
         assert!(msg.contains("VCO"), "{msg}");
     }

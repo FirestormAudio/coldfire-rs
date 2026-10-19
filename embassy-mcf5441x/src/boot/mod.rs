@@ -2,4 +2,5 @@
 //! DDR and boot medium in a [`BootConfig`]; the boot part checks it at compile time against the reference manual's
 //! limits and runs it from reset.
 mod config;
+pub mod ops;
 pub use config::*;
