@@ -385,26 +385,26 @@ mod tests {
 
     #[test]
     fn divider_midi() {
-        assert_eq!(divider(132_000_000, 31_250), Ok(132)); // UBG2 0x84
+        assert_eq!(divider(125_000_000, 31_250), Ok(125)); // 125 MHz / (32 × 31250)
     }
 
     #[test]
-    fn divider_156250_rounds_to_nearest() {
-        assert_eq!(divider(132_000_000, 156_250), Ok(26)); // 26.4 rounds to 26
+    fn divider_115200_rounds_to_nearest() {
+        assert_eq!(divider(125_000_000, 115_200), Ok(34)); // 33.9 rounds to 34
     }
 
     #[test]
     fn divider_out_of_range() {
-        // 132 MHz / (32 × 9 MHz) = 0.46 → 0: too fast
-        assert_eq!(divider(132_000_000, 9_000_000), Err(ConfigError::BaudrateTooHigh));
-        // 132 MHz / (32 × 60) = 68750 > 0xFFFF: too slow
-        assert_eq!(divider(132_000_000, 60), Err(ConfigError::BaudrateTooLow));
-        assert_eq!(divider(132_000_000, 0), Err(ConfigError::BaudrateTooLow));
+        // 125 MHz / (32 × 9 MHz) = 0.43 → 0: too fast
+        assert_eq!(divider(125_000_000, 9_000_000), Err(ConfigError::BaudrateTooHigh));
+        // 125 MHz / (32 × 50) = 78125 > 0xFFFF: too slow
+        assert_eq!(divider(125_000_000, 50), Err(ConfigError::BaudrateTooLow));
+        assert_eq!(divider(125_000_000, 0), Err(ConfigError::BaudrateTooLow));
     }
 
     #[test]
     fn divider_huge_rates_are_too_high() {
-        assert_eq!(divider(132_000_000, u32::MAX), Err(ConfigError::BaudrateTooHigh));
+        assert_eq!(divider(125_000_000, u32::MAX), Err(ConfigError::BaudrateTooHigh));
         assert_eq!(divider(u32::MAX, 1_000_000), Ok(134)); // 4294967295 / 32e6 = 134.2
     }
 

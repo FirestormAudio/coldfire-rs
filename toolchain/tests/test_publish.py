@@ -206,3 +206,20 @@ def test_every_crate_names_the_public_repository():
         text = (Path(metadata(c)["manifest_path"]).parent / "README.md").read_text()
         if "repository" in text:
             assert REPOSITORY in text, c
+
+
+# register values and the operating point read off one particular board: test values come from the reference manual
+DIGITAKT_VALUES = re.compile(r"0x1015\b|0x071861|528_000_000|264_000_000|132_000_000|0xBE01_?0020|0xFE01_?0020|0xA115_?0061")
+MISCCR2_VALUE = re.compile(r"MISCCR2.*0xE000\b|0xE000\b.*MISCCR2")
+
+
+def test_no_digitakt_values():
+    files = run(["git", "ls-files"]).stdout.split()
+    hits = []
+    for name in files:
+        f = ROOT / name
+        if f.suffix in (".rs", ".md", ".py", ".sh", ".toml", ".x") and f.is_file() and not f.is_symlink():
+            if name == "toolchain/tests/test_publish.py":
+                continue   # holds the patterns themselves
+            hits += _hits(f, name, DIGITAKT_VALUES) + _hits(f, name, MISCCR2_VALUE)
+    assert hits == [], "\n".join(hits)

@@ -142,19 +142,20 @@ mod tests {
     }
 
     #[test]
-    fn from_pll_24mhz_crystal_264mhz_core() {
-        let c = Clocks::from_pll(24_000_000, Cr(0x1015), Dr(0x071861));
-        assert_eq!(c, Clocks { vco_hz: 528_000_000, core_hz: 264_000_000, bus_hz: 132_000_000 });
+    fn from_pll_25mhz_crystal_250mhz_core() {
+        // FBKDIV 19: fVCO = 25 MHz × 20; OUTDIV1 1, OUTDIV2 3: core fVCO/2, bus fVCO/4 (RM 8.3.2's limits exactly)
+        let c = Clocks::from_pll(25_000_000, Cr(0x0013), Dr(0x0000_0061));
+        assert_eq!(c, Clocks { vco_hz: 500_000_000, core_hz: 250_000_000, bus_hz: 125_000_000 });
     }
 
     #[test]
     fn from_pll_refdiv_one_halves_the_reference() {
-        assert_eq!(Clocks::from_pll(24_000_000, Cr(0x1115), Dr(0x071861)).vco_hz, 264_000_000);
+        assert_eq!(Clocks::from_pll(25_000_000, Cr(0x0113), Dr(0x0000_0061)).vco_hz, 250_000_000);
     }
 
     #[test]
     fn from_pll_reserved_refdiv_divides_by_one() {
-        assert_eq!(Clocks::from_pll(24_000_000, Cr(0x1215), Dr(0x071861)).vco_hz, 528_000_000);
+        assert_eq!(Clocks::from_pll(25_000_000, Cr(0x0213), Dr(0x0000_0061)).vco_hz, 500_000_000);
     }
 
     #[test]
@@ -165,8 +166,8 @@ mod tests {
     }
 
     #[test]
-    fn pit_reload_1khz_at_132mhz() {
-        assert_eq!(pit_reload(132_000_000, 1000), (2, 32_999)); // (32999 + 1) << 2 = 132000
+    fn pit_reload_1khz_at_125mhz() {
+        assert_eq!(pit_reload(125_000_000, 1000), (1, 62_499)); // (62499 + 1) << 1 = 125000
     }
 
     #[test]

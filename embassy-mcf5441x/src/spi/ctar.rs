@@ -146,14 +146,16 @@ impl Ctar {
 mod tests {
     use super::*;
 
-    const BUS: u32 = 132_000_000;
+    const BUS: u32 = 125_000_000;
 
     #[test]
-    fn the_boot_flash_preset_is_a_proven_bootloaders_ctar() {
-        let t = Ctar::new(Mode::Mode3).baud(BaudPrescaler::Div3, 0, true).after_transfer(DelayPrescaler::Div1, 2);
-        assert_eq!(t.frames(8), 0xBE01_0020);
-        assert_eq!(t.frames(16), 0xFE01_0020);
-        assert_eq!(t.sck_hz(BUS), 44_000_000);
+    fn a_mode3_ctar_packs_its_fields() {
+        // DBR, FMSZ, CPOL|CPHA, PBR /5, BR 1 (scaler 4), PDT /3, DT 1 (RM 40.3.3's CTAR layout)
+        let t = Ctar::new(Mode::Mode3).baud(BaudPrescaler::Div5, 1, true).after_transfer(DelayPrescaler::Div3, 1);
+        let fields = 1 << 31 | 0b11 << 25 | 0b10 << 16 | 1 | 0b01 << 18 | 1 << 4;
+        assert_eq!(t.frames(8), fields | 7 << 27);
+        assert_eq!(t.frames(16), fields | 15 << 27);
+        assert_eq!(t.sck_hz(BUS), 12_500_000); // 125 MHz / 5 × 2 / 4
     }
 
     #[test]
@@ -178,10 +180,10 @@ mod tests {
 
     #[test]
     fn frequency_is_the_fastest_not_above_the_request() {
-        // bus / 3 × 2 would be 44 MHz, but doubling with prescaler 3 has an uneven duty cycle: bus / 4
-        assert_eq!(Ctar::new(Mode::Mode3).with_frequency(BUS, 44_000_000).unwrap().sck_hz(BUS), 33_000_000);
-        assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 100_000_000).unwrap().sck_hz(BUS), 66_000_000);
-        assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 1_000_000).unwrap().sck_hz(BUS), 825_000); // bus / 5 / 32
+        // bus / 3 × 2 would be 41.7 MHz, but doubling with prescaler 3 has an uneven duty cycle: bus / 4
+        assert_eq!(Ctar::new(Mode::Mode3).with_frequency(BUS, 41_666_667).unwrap().sck_hz(BUS), 31_250_000);
+        assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 100_000_000).unwrap().sck_hz(BUS), 62_500_000);
+        assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 1_000_000).unwrap().sck_hz(BUS), 976_562); // bus / 2 / 64
         // the mode and delays survive
         let t = Ctar::new(Mode::Mode3).after_transfer(DelayPrescaler::Div1, 2);
         let f = t.with_frequency(BUS, 1_000_000).unwrap();
@@ -191,8 +193,8 @@ mod tests {
     #[test]
     fn too_slow_or_zero_is_refused() {
         assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 0), Err(ConfigError::FrequencyTooLow));
-        // the slowest setting is bus / 7 / 32768 = 575 Hz
+        // the slowest setting is bus / 7 / 32768 = 544 Hz
         assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 500), Err(ConfigError::FrequencyTooLow));
-        assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 576).unwrap().sck_hz(BUS), 575);
+        assert_eq!(Ctar::new(Mode::Mode0).with_frequency(BUS, 545).unwrap().sck_hz(BUS), 544);
     }
 }

@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn a_rejected_baud_rate_leaves_the_port_free() {
-        crate::clocks::set(crate::clocks::Clocks { vco_hz: 528_000_000, core_hz: 264_000_000, bus_hz: 132_000_000 });
+        crate::clocks::set(crate::clocks::Clocks { vco_hz: 500_000_000, core_hz: 250_000_000, bus_hz: 125_000_000 });
         // twice: the first failure must not leave UART9 marked as started (and must touch no register)
         for _ in 0..2 {
             let r = unsafe {

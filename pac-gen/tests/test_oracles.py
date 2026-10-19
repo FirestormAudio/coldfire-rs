@@ -17,9 +17,9 @@ pub mod dspi {
     pub const CTAR1: usize = 0x10;
     pub const SR: usize = 0x2C;
     /// 8-bit frames.
-    pub const CTAR0_FLASH: u32 = 0xBE01_0020;
+    pub const CTAR0_FLASH: u32 = 0x3802_0010;
     /// CTAR0_FLASH with 16-bit frames (FMSZ = 15).
-    pub const CTAR1_FLASH16: u32 = 0xFE01_0020;
+    pub const CTAR1_FLASH16: u32 = 0x7802_0010;
     pub const SR_EOQF: u32 = 1 << 28;
 }
 pub mod uart {
