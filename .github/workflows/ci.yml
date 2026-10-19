@@ -74,6 +74,13 @@ jobs:
       - name: Toolchain (toolchain/setup.sh)
         run: toolchain/setup.sh
 
+      - name: Toolchain build logs (on failure)
+        if: failure()
+        run: |
+          for f in build/rust-coldfire/*.log build/rust-coldfire/gcc-build/*.log; do
+            if [ -f "$f" ]; then echo "::group::$f"; tail -n 80 "$f"; echo "::endgroup::"; fi
+          done
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
