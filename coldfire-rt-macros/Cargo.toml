@@ -1,0 +1,18 @@
+[package]
+name = "coldfire-rt-macros"
+version.workspace = true
+edition = "2024"
+description = "Attributes for coldfire-rt: #[entry], #[exception], #[interrupt]"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["coldfire", "m68k", "interrupt", "entry"]
+categories = ["embedded", "development-tools::procedural-macro-helpers"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

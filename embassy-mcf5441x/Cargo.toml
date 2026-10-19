@@ -1,0 +1,56 @@
+[package]
+name = "embassy-mcf5441x"
+version.workspace = true
+edition = "2024"
+description = "Embassy HAL for the NXP MCF5441x (ColdFire V4e)"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["coldfire", "mcf5441x", "embassy", "hal", "nxp"]
+categories = ["embedded", "no-std", "hardware-support"]
+# pac-gen/halgen.py reads these to generate src/peripherals.rs and the pin tables; the crate doesn't need them
+exclude = ["pins.json", "pinmux.json"]
+
+[features]
+default = ["time-driver-pit0"]
+mcf54410 = ["mcf5441x-pac/mcf54410"]
+mcf54415 = ["mcf5441x-pac/mcf54415", "dep:embassy-usb-driver"]
+mcf54416 = ["mcf5441x-pac/mcf54416", "dep:embassy-usb-driver"]
+mcf54417 = ["mcf5441x-pac/mcf54417", "dep:embassy-usb-driver"]
+mcf54418 = ["mcf5441x-pac/mcf54418", "dep:embassy-usb-driver"]
+# embassy-time on one PIT, ticking at 1 kHz (that PIT's token leaves Peripherals)
+time-driver-pit0 = ["_time-driver"]
+time-driver-pit1 = ["_time-driver"]
+time-driver-pit2 = ["_time-driver"]
+time-driver-pit3 = ["_time-driver"]
+_time-driver = ["dep:embassy-time-driver", "dep:embassy-time-queue-utils"]
+executor-thread = ["dep:embassy-executor"]
+executor-interrupt = ["dep:embassy-executor"]
+
+[dependencies]
+mcf5441x-pac = { version = "0.1.0", path = "../mcf5441x-pac" }
+coldfire = { version = "0.1.0", path = "../coldfire" }
+critical-section = { workspace = true }
+embassy-hal-internal = "0.5.0"
+embedded-io = "0.7"
+embedded-io-async = "0.7"
+embedded-hal = "1.0"
+embassy-sync = "0.8.0"
+embassy-usb-driver = { version = "0.2.2", optional = true }
+
+[target.'cfg(target_arch = "m68k")'.dependencies]
+embassy-executor = { version = "0.10.0", optional = true }
+embassy-time-driver = { version = "0.2.2", optional = true, features = ["tick-hz-1_000"] }
+embassy-time-queue-utils = { version = "0.3.2", optional = true, features = ["generic-queue-8"] }
+coldfire-rt = { version = "0.1.0", path = "../coldfire-rt" }
+mcf5441x-pac = { version = "0.1.0", path = "../mcf5441x-pac", features = ["rt"] }
+
+[dev-dependencies]
+critical-section = { workspace = true, features = ["std"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("defmt"))'] }
+
+[package.metadata.docs.rs]
+# documented for the full part; the executors are ColdFire-only and compile out on docs.rs's host target
+features = ["mcf54418", "executor-thread", "executor-interrupt"]

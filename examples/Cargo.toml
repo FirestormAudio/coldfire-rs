@@ -1,0 +1,30 @@
+[package]
+name = "mcf5441x-examples"
+version = "0.0.0"
+edition = "2024"
+description = "Starting points for an MCF5441x board on embassy-mcf5441x: build with toolchain/cargo-cf"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# standalone: these are ColdFire binaries, so they stay out of the host-buildable workspace
+[workspace]
+
+[features]
+default = ["mcf54415"]
+mcf54415 = ["embassy-mcf5441x/mcf54415"]
+mcf54416 = ["embassy-mcf5441x/mcf54416"]
+mcf54417 = ["embassy-mcf5441x/mcf54417"]
+mcf54418 = ["embassy-mcf5441x/mcf54418"]
+
+[dependencies]
+coldfire = { path = "../coldfire" }
+coldfire-rt = { path = "../coldfire-rt" }
+embassy-mcf5441x = { path = "../embassy-mcf5441x", default-features = false, features = ["time-driver-pit0", "executor-thread"] }
+embassy-executor = "0.10.0"
+embassy-time = { version = "0.5.1", features = ["tick-hz-1_000"] }
+embassy-usb = { version = "0.6.0", default-features = false }
+static_cell = "2"
+
+[profile.release]
+opt-level = "s"
+debug = true

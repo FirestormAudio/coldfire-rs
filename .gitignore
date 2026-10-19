@@ -1,0 +1,6 @@
+/build
+target/
+__pycache__/
+# editor settings hold local absolute paths (see the README)
+/.vscode/
+/.zed/

@@ -1,0 +1,33 @@
+[package]
+name = "mcf5441x-pac"
+version.workspace = true
+edition = "2021"
+description = "Peripheral access crate for the NXP MCF5441x (ColdFire V4e), generated from an SVD"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["coldfire", "mcf5441x", "pac", "svd", "nxp"]
+categories = ["embedded", "no-std", "hardware-support"]
+# the generator inputs stay in the repository: the crate ships its sources, the final SVD and its tests
+exclude = ["build-pac.sh", "check-parts.sh", "postgen.py", "transform.yaml", "svd/raw.svd", "svd/patches", "svd/coverage.txt"]
+
+[features]
+# At least one part must be chosen. Features are additive, so with several on (cargo --all-features, or
+# feature unification in a workspace) the crate offers the union of those parts' peripherals.
+mcf54410 = []
+mcf54415 = []
+mcf54416 = []
+mcf54417 = []
+mcf54418 = []
+# `#[interrupt]` through the PAC: `use mcf5441x_pac::interrupt; #[interrupt] fn PIT0() {}` (ColdFire builds only)
+rt = ["dep:coldfire-rt"]
+
+[dependencies]
+coldfire = { version = "0.1.0", path = "../coldfire" }
+
+[target.'cfg(target_arch = "m68k")'.dependencies]
+coldfire-rt = { version = "0.1.0", path = "../coldfire-rt", optional = true }
+
+[package.metadata.docs.rs]
+# documented for the full part (the largest set of peripherals)
+features = ["mcf54418"]

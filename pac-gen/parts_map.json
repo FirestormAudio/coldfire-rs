@@ -1,0 +1,69 @@
+{
+  "_about": [
+    "groups: one per row of RM Table 1-1 (module availability per part). rm2svd names a row by the group whose",
+    "  'match' text the row's label contains, so raw.svd's vendorExtensions carry these keys, not the labels.",
+    "  'peripherals' lists the SVD peripheral name prefixes of the group (UART covers UART0-UART9); 'instances'",
+    "  is true where the row's number counts those peripherals (UARTs 6/10), not ports or channels.",
+    "absent: per part, the SVD peripherals the part lacks; postgen.py gates exactly these behind the part",
+    "  features. MCF54410 follows RM ch. 2's list of modules removed from the 196 MAPBGA package, plus the",
+    "  Table 1-1 rows that are a dash or count fewer instances (MACNET1, ESW).",
+    "silent: where Table 1-1's count and the absent list disagree because the manual doesn't say which",
+    "  instance goes. Those instances stay present; postgen.py accepts exactly these mismatches."
+  ],
+  "groups": {
+    "CORE": {"match": "ColdFire core", "peripherals": []},
+    "CAU": {"match": "(CAU)", "peripherals": []},
+    "CORE_CLOCK": {"match": "Core (system)", "peripherals": []},
+    "PERIPHERAL_CLOCK": {"match": "Peripheral clock", "peripherals": []},
+    "FLEXBUS_CLOCK": {"match": "(FlexBus) clock", "peripherals": []},
+    "PERFORMANCE": {"match": "Dhrystone", "peripherals": []},
+    "SRAM": {"match": "(SRAM)", "peripherals": []},
+    "CACHE": {"match": "cache", "peripherals": []},
+    "USBHOST": {"match": "USB 2.0 Host controller", "peripherals": ["USBHOST"]},
+    "USBOTG": {"match": "On-the-Go", "peripherals": ["USBOTG"]},
+    "ULPI": {"match": "(ULPI)", "peripherals": []},
+    "MACNET": {"match": "10/100", "peripherals": ["MACNET"], "instances": true},
+    "ESW": {"match": "Ethernet switch", "peripherals": ["ESW"]},
+    "ESDHC": {"match": "(eSDHC)", "peripherals": ["ESDHC"]},
+    "SIM": {"match": "(SIM)", "peripherals": ["SIM"]},
+    "UART": {"match": "UARTs", "peripherals": ["UART"], "instances": true},
+    "DSPI": {"match": "DSPI", "peripherals": ["DSPI"], "instances": true},
+    "FLEXCAN": {"match": "CAN 2.0B", "peripherals": ["FLEXCAN"], "instances": true},
+    "I2C": {"match": "I2C", "peripherals": ["I2C"], "instances": true},
+    "SSI": {"match": "(SSI)", "peripherals": ["SSI"], "instances": true},
+    "ADC": {"match": "12-bit ADC", "peripherals": ["ADC"]},
+    "DAC": {"match": "12-bit DAC", "peripherals": ["DAC"], "instances": true},
+    "DTIM": {"match": "DMA timers", "peripherals": ["DTIM"], "instances": true},
+    "PIT": {"match": "(PIT)", "peripherals": ["PIT"], "instances": true},
+    "MCPWM": {"match": "(mcPWM)", "peripherals": ["MCPWM"]},
+    "EDMA": {"match": "DMA controller", "peripherals": ["EDMA"]},
+    "RTC": {"match": "Real-time clock", "peripherals": ["RTC"]},
+    "DDRMC": {"match": "DDR2", "peripherals": ["DDRMC"]},
+    "FLEXBUS": {"match": "FlexBus external", "peripherals": ["FLEXBUS"]},
+    "NFC": {"match": "NAND flash", "peripherals": ["NFC"]},
+    "OW": {"match": "1-Wire", "peripherals": ["OW"]},
+    "SBF": {"match": "Serial boot", "peripherals": []},
+    "WDT": {"match": "Watchdog", "peripherals": []},
+    "INTC": {"match": "(INTC)", "peripherals": ["INTC"], "instances": true},
+    "EPORT": {"match": "(EPORT)", "peripherals": ["EPORT"]},
+    "RGPIO_PINS": {"match": "Rapid GPIO", "peripherals": []},
+    "GPIO_PINS": {"match": "(GPIO) pins", "peripherals": []},
+    "JTAG": {"match": "JTAG", "peripherals": []},
+    "PACKAGE": {"match": "Package", "peripherals": []}
+  },
+  "absent": {
+    "mcf54410": ["UART2", "UART6", "UART9", "MCPWM", "SSI1", "SIM", "USBHOST", "FLEXCAN1", "I2C1", "ADC", "DAC0",
+                 "DAC1", "MACNET1", "ESW"],
+    "mcf54415": ["ESW"],
+    "mcf54416": ["ESW"],
+    "mcf54417": [],
+    "mcf54418": []
+  },
+  "silent": {
+    "mcf54410": {
+      "UART": "Table 1-1 counts 6; RM ch. 2 removes 3 of 10, so one more of the 7 left is absent, but not which",
+      "DSPI": "Table 1-1 counts 3 of 4; neither chapter says which instance is absent",
+      "I2C": "Table 1-1 counts 4; RM ch. 2 removes I2C1, so one more of the 5 left is absent, but not which"
+    }
+  }
+}

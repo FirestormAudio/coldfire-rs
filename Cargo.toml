@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+exclude = ["examples"]   # ColdFire binaries: built with toolchain/cargo-cf, never on a host
+members = ["coldfire", "coldfire-rt", "coldfire-rt-macros", "mcf5441x-pac", "embassy-mcf5441x"]
+# the PAC needs a part feature, so plain cargo commands leave it out
+default-members = ["coldfire", "coldfire-rt", "coldfire-rt-macros"]
+
+[workspace.package]
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/FirestormAudio/coldfire-rs"
+
+[workspace.dependencies]
+critical-section = "1.2"

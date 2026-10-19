@@ -1,0 +1,545 @@
+# svdtools patches: raw.svd (rm2svd from the MCF54418 RM) → mcf5441x.svd.
+# Every entry says why in a comment. Bit positions and widths are from the RM chapter named, or from a board's
+# hardware-proven register constants (pac-gen/oracles).
+_svd: ../raw.svd
+
+# ---------------------------------------------------------------------------------------------------------------
+# Peripheral names: the RM's module acronym where the chapter title gave rm2svd only a first word.
+_modify:
+  DMATIMER0: {name: DTIM0, groupName: DTIM}      # RM ch. 39 title (DTIM0-DTIM3); ch. 17 labels say DTIM
+  DMATIMER1: {name: DTIM1, groupName: DTIM}
+  DMATIMER2: {name: DTIM2, groupName: DTIM}
+  DMATIMER3: {name: DTIM3, groupName: DTIM}
+  ROBUST: {name: RTC, groupName: RTC}            # RM ch. 37 registers are RTC_*; ch. 17 label RTC
+  ETHERNET: {name: ESW, groupName: ESW,          # RM ch. 32 registers are ESW_*
+             addressBlock: {offset: 0x0, size: 0x8000, usage: registers}}   # with the lookup table at +0x4000
+  CLOCK: {name: PLL, groupName: PLL}             # RM ch. 8 registers are PLL_*; ch. 17 label PLL
+  PIN_MULTIPLEXING: {name: GPIO, groupName: GPIO}  # RM ch. 15 ports/pin assignment; U-Boot and Linux say GPIO
+  INTC: {name: IACK, groupName: IACK}            # 0xFC05_4000 holds only the global IACK registers (RM ch. 17)
+  # Address blocks grown over the register arrays added below.
+  EDMA: {addressBlock: {offset: 0x0, size: 0x1800, usage: registers}}     # the 64 TCDs at 0x1000
+
+# Identical instances: one register block, the others derivedFrom it.
+_derive:
+  DTIM1: DTIM0
+  DTIM2: DTIM0
+  DTIM3: DTIM0
+  PIT1: PIT0
+  PIT2: PIT0
+  PIT3: PIT0
+  DAC1: DAC0
+  DSPI1: DSPI0
+  DSPI2: DSPI0
+  DSPI3: DSPI0
+  I2C1: I2C0
+  I2C2: I2C0
+  I2C3: I2C0
+  I2C4: I2C0
+  I2C5: I2C0
+  UART1: UART0
+  UART2: UART0
+  UART3: UART0
+  UART4: UART0
+  UART5: UART0
+  UART6: UART0
+  UART7: UART0
+  UART8: UART0
+  UART9: UART0
+  FLEXCAN1: FLEXCAN0     # raw FLEXCAN1 has the same map; its RXIMR names were garbled in conversion
+  MACNET1: MACNET0       # raw MACNET1 lost RACC/ATSTMP fields (figure names ENET1_*); same map in RM ch. 31
+  SSI1: SSI0             # raw SSI1 has RMASK at 0x48 and 0x4C (figure misnamed); same map in RM ch. 35
+
+# ---------------------------------------------------------------------------------------------------------------
+PIT0:
+  _modify:
+    _interrupts:
+      PCSR0_PIF: {name: PIT0}
+  PCSR:
+    _modify:
+      PIF: {modifiedWriteValues: oneToClear}     # RM ch. 38 PCSR: write 1 clears PIF; a proven PIT time driver relies on it
+    _add:
+      PRE: {description: PRE, bitOffset: 8, bitWidth: 4, access: read-write}  # RM ch. 38 PCSR bits 11-8; lost in conversion (row became a list)
+
+EDMA:
+  _modify:
+    RSH: {name: HRSH, description: HRSH}         # RM ch. 19 figure and section name it HRS (map row says RS)
+    RSL: {name: HRSL, description: HRSL}
+  INTH:
+    _add:
+      INT: {description: INT, bitOffset: 0, bitWidth: 32, access: read-write, modifiedWriteValues: oneToClear}  # RM ch. 19 figure: w1c; the figure has no field table
+  ERRH:
+    _add:
+      ERR: {description: ERR, bitOffset: 0, bitWidth: 32, access: read-write, modifiedWriteValues: oneToClear}  # as INTH
+  INTL:
+    _modify:
+      INTn: {name: INT, description: INT}                        # same name as INTH's field
+  ERRL:
+    _modify:
+      ERRn: {name: ERR, description: ERR}
+  HRSL:
+    _modify:
+      HRSn: {name: HRS, description: HRS}
+  _add:
+    _clusters:
+      # RM ch. 19 TCD map: 64 descriptors of 32 bytes at 0xFC04_5000 (rm2svd leaves the 256-bit row out).
+      # Fields: the reset view (EDMA_CR[EMLM] = 0, E_LINK = 0); the alternate layouts overlap them.
+      "TCD[%s]":
+        description: "TCD[%s]"
+        addressOffset: 0x1000
+        dim: 64
+        dimIncrement: 0x20
+        registers:
+          SADDR:
+            description: SADDR
+            addressOffset: 0x0
+            size: 32
+            access: read-write
+            fields: {SADDR: {description: SADDR, bitOffset: 0, bitWidth: 32}}
+          ATTR:
+            description: ATTR
+            addressOffset: 0x4
+            size: 16
+            access: read-write
+            fields:
+              DSIZE: {description: DSIZE, bitOffset: 0, bitWidth: 3}
+              DMOD: {description: DMOD, bitOffset: 3, bitWidth: 5}
+              SSIZE: {description: SSIZE, bitOffset: 8, bitWidth: 3}
+              SMOD: {description: SMOD, bitOffset: 11, bitWidth: 5}
+          SOFF:
+            description: SOFF
+            addressOffset: 0x6
+            size: 16
+            access: read-write
+            fields: {SOFF: {description: SOFF, bitOffset: 0, bitWidth: 16}}
+          NBYTES:
+            description: NBYTES
+            addressOffset: 0x8
+            size: 32
+            access: read-write
+            fields: {NBYTES: {description: NBYTES, bitOffset: 0, bitWidth: 32}}
+          SLAST:
+            description: SLAST
+            addressOffset: 0xC
+            size: 32
+            access: read-write
+            fields: {SLAST: {description: SLAST, bitOffset: 0, bitWidth: 32}}
+          DADDR:
+            description: DADDR
+            addressOffset: 0x10
+            size: 32
+            access: read-write
+            fields: {DADDR: {description: DADDR, bitOffset: 0, bitWidth: 32}}
+          CITER:
+            description: CITER
+            addressOffset: 0x14
+            size: 16
+            access: read-write
+            fields:
+              CITER: {description: CITER, bitOffset: 0, bitWidth: 15}
+              E_LINK: {description: E_LINK, bitOffset: 15, bitWidth: 1}
+          DOFF:
+            description: DOFF
+            addressOffset: 0x16
+            size: 16
+            access: read-write
+            fields: {DOFF: {description: DOFF, bitOffset: 0, bitWidth: 16}}
+          DLAST_SGA:
+            description: DLAST_SGA
+            addressOffset: 0x18
+            size: 32
+            access: read-write
+            fields: {DLAST_SGA: {description: DLAST_SGA, bitOffset: 0, bitWidth: 32}}
+          BITER:
+            description: BITER
+            addressOffset: 0x1C
+            size: 16
+            access: read-write
+            fields:
+              BITER: {description: BITER, bitOffset: 0, bitWidth: 15}
+              E_LINK: {description: E_LINK, bitOffset: 15, bitWidth: 1}
+          CSR:
+            description: CSR
+            addressOffset: 0x1E
+            size: 16
+            access: read-write
+            fields:
+              START: {description: START, bitOffset: 0, bitWidth: 1}
+              INT_MAJOR: {description: INT_MAJOR, bitOffset: 1, bitWidth: 1}
+              INT_HALF: {description: INT_HALF, bitOffset: 2, bitWidth: 1}
+              D_REQ: {description: D_REQ, bitOffset: 3, bitWidth: 1}
+              E_SG: {description: E_SG, bitOffset: 4, bitWidth: 1}
+              MAJOR_E_LINK: {description: MAJOR_E_LINK, bitOffset: 5, bitWidth: 1}
+              ACTIVE: {description: ACTIVE, bitOffset: 6, bitWidth: 1}
+              DONE: {description: DONE, bitOffset: 7, bitWidth: 1}
+              MAJOR_LINKCH: {description: MAJOR_LINKCH, bitOffset: 8, bitWidth: 6}
+              BWC: {description: BWC, bitOffset: 14, bitWidth: 2}
+  _array:
+    "DCHPRI*": {}                                # 64 channel priority registers, one byte each
+
+# RM ch. 17 figure 17-12: ICR0-63 at +0x40..0x7F in every controller (the INTC1/INTC2 map rows say n = 1:63).
+"INTC1,INTC2":
+  _add:
+    ICR0: {description: ICR0, addressOffset: 0x40, size: 8, access: read-write, resetValue: 0x0}
+"INTC0,INTC1,INTC2":
+  "ICR*":
+    _add:
+      LEVEL: {description: LEVEL, bitOffset: 0, bitWidth: 3, access: read-write}   # RM ch. 17 ICR fields: bits 2-0
+  _array:
+    "ICR*": {}
+
+DSPI0:
+  # RM ch. 40 SR: flags are write-1-to-clear (the figure's w1c cells can't be placed; a proven DSPI driver clears
+  # EOQF and TCF this way).
+  SR:
+    _modify:
+      RFDF: {modifiedWriteValues: oneToClear}
+      RFOF: {modifiedWriteValues: oneToClear}
+      TFFF: {modifiedWriteValues: oneToClear}
+      TFUF: {modifiedWriteValues: oneToClear}
+      EOQF: {modifiedWriteValues: oneToClear}
+      TCF: {modifiedWriteValues: oneToClear}
+  # RM ch. 40 CTAR figure 40-4: rm2svd reads FMSZ, PCSSCK's neighbours and the scalers from the table; the rest
+  # of the table's rows were run together in conversion. A proven SPI NOR driver's CTAR0/CTAR1 values set FMSZ.
+  "CTAR*":
+    _add:
+      DBR: {description: DBR, bitOffset: 31, bitWidth: 1, access: read-write}
+      CPOL: {description: CPOL, bitOffset: 26, bitWidth: 1, access: read-write}
+      CPHA: {description: CPHA, bitOffset: 25, bitWidth: 1, access: read-write}
+      LSBFE: {description: LSBFE, bitOffset: 24, bitWidth: 1, access: read-write}
+      PCSSCK: {description: PCSSCK, bitOffset: 22, bitWidth: 2, access: read-write}
+      DT: {description: DT, bitOffset: 4, bitWidth: 4, access: read-write}
+      BR: {description: BR, bitOffset: 0, bitWidth: 4, access: read-write}
+  POPR:
+    _modify:
+      RXDATA: {readAction: modify}               # RM ch. 40: a read pops the RX FIFO (RXFRn reads don't)
+
+"USBOTG,USBHOST":
+  _modify:
+    MODE: {name: USBMODE, description: USBMODE}  # RM ch. 24 figure and a proven driver call it USBMODE
+
+USBOTG:
+  _copy:
+    EPCR3: {_from: EPCR2}                        # RM ch. 24: EPCR1-3 share one figure (its EPCR3 address is a typo)
+  _modify:
+    EPCR3: {description: EPCR3}                  # _copy brings EPCR2's description along
+    _interrupts:
+      USB_STS: {name: USBOTG}                    # the ch. 17 flag (USB_STS) doesn't say which controller
+  EPSETUPSR:
+    _modify:
+      EPSETUPSTAT: {modifiedWriteValues: oneToClear}   # RM ch. 24: write 1 acknowledges; a proven USB driver writes back
+  EPCOMPLETE:
+    _modify:
+      ERCE: {modifiedWriteValues: oneToClear}    # RM ch. 24 figure W row: w1c (header cells merged in conversion)
+      ETCE: {modifiedWriteValues: oneToClear}
+
+# RM ch. 20 CSCRn EXTS (bit 22) and ASET (bits 21-20): every value is defined; the label rule dropped them for
+# the sentences behind the codes. Names are ours.
+FLEXBUS:
+  "CSCR?":
+    EXTS:
+      _replace_enum:
+        ONE_CYCLE: [0, ONE_CYCLE]
+        UNTIL_CS: [1, UNTIL_CS]
+    ASET:
+      _replace_enum:
+        FIRST_EDGE: [0, FIRST_EDGE]
+        SECOND_EDGE: [1, SECOND_EDGE]
+        THIRD_EDGE: [2, THIRD_EDGE]
+        FOURTH_EDGE: [3, FOURTH_EDGE]
+
+FLEXCAN0:
+  # RM ch. 33 ERRSTAT[ERRINT]: both values are defined (the value rows run on into the next table row)
+  ERRSTAT:
+    ERRINT:
+      _replace_enum:
+        NO_ERROR: [0, NO_ERROR]
+        ERROR: [1, ERROR]
+  _modify:
+    _interrupts:
+      IFLAG0_BUF_N_I: {name: FLEXCAN0_BUF}
+      ERRSTAT0_BOFFINT: {name: FLEXCAN0_BOFF}
+      ERRSTAT0_TXWRN: {name: FLEXCAN0_TXWRN}
+  _delete:
+    - "RXIMR*"                                   # 4 of 16, names garbled; re-added as an array below
+  _add:
+    CANMCR: {description: CANMCR, addressOffset: 0x0, size: 32, access: read-write, resetValue: 0xD890000F}  # RM ch. 33 map row split over two lines
+    "RXIMR[%s]": {description: "RXIMR[%s]", addressOffset: 0x880, size: 32, access: read-write, dim: 16, dimIncrement: 0x4}  # RM ch. 33: RXIMR0-15
+    _clusters:
+      "MB[%s]":                                  # RM ch. 33 message buffers: 16 x 16 bytes at +0x80
+        description: "MB[%s]"
+        addressOffset: 0x80
+        dim: 16
+        dimIncrement: 0x10
+        registers:
+          CS: {description: CS, addressOffset: 0x0, size: 32, access: read-write}     # code, length, time stamp
+          ID: {description: ID, addressOffset: 0x4, size: 32, access: read-write}
+          DATA0: {description: DATA0, addressOffset: 0x8, size: 32, access: read-write}  # data bytes 0-3
+          DATA1: {description: DATA1, addressOffset: 0xC, size: 32, access: read-write}  # data bytes 4-7
+
+ESW:
+  _modify:
+    ESWFFEN: {name: FFEN, description: FFEN}     # RM ch. 32 ESW_FFEN etc.: the underscore was lost in conversion,
+    ESWTDAR: {name: TDAR, description: TDAR}     # so rm2svd couldn't strip the ESW_ prefix
+    ESWLSR: {name: LSR, description: LSR}
+  _add:
+    _clusters:
+      "MAC_LOOKUP[%s]":                          # RM ch. 32: 2048 64-bit entries at 0xFC0E_0000, low word first
+        description: "MAC_LOOKUP[%s]"
+        addressOffset: 0x4000
+        dim: 2048
+        dimIncrement: 0x8
+        registers:
+          LOW: {description: LOW, addressOffset: 0x0, size: 32, access: read-write}
+          HIGH: {description: HIGH, addressOffset: 0x4, size: 32, access: read-write}
+
+MCPWM:
+  _modify:
+    SMCCYC5: {name: SM0CCYC5, description: SM0CCYC5}   # the other submodules' pattern; digit lost
+    _interrupts:
+      PWM_SM_N_SR_REF: {name: PWM_REF}           # any submodule's reload error
+
+# RM ch. 17 INTC2 sources 29 and 34 name two flags each; rm2svd couldn't pick one.
+SIM:
+  _add:
+    _interrupts:
+      SIM_TSR: {value: 221}                      # INTC2 source 29: SIM data interrupt
+  "RBUF0,RBUF1":
+    _modify:
+      RXBUF: {readAction: modify}                # RM ch. 28: a read takes the next receive-FIFO byte
+ADC:
+  _add:
+    _interrupts:
+      ADC_LSR_ZCSR: {value: 226}                 # INTC2 source 34: limit or zero crossing
+  "RSLT*":
+    _modify:
+      "*": {readAction: modifyExternal}          # RM ch. 29: reading RSLTn clears SR[RDYn]
+
+# RM ch. 25 FEVT lists bit 16 as FEVTCCE too (a typo); its figure 25-18 names bit 16 FEVTCTOE and the text says it
+# forces IRQSTAT[CTOE]. Two fields of one name would not compile in the PAC.
+ESDHC:
+  _modify:
+    _interrupts:
+      IRQSTAT: {name: ESDHC}
+  DATPORT:
+    _modify:
+      DATCONT: {readAction: modify}              # RM ch. 25: the buffer data port; a read takes the next word
+  FEVT:
+    _delete:
+      - FEVTCCE
+    _add:
+      FEVTCTOE: {description: FEVTCTOE, bitOffset: 16, bitWidth: 1, access: write-only}
+      FEVTCCE: {description: FEVTCCE, bitOffset: 17, bitWidth: 1, access: write-only}
+
+# ---------------------------------------------------------------------------------------------------------------
+# Interrupt names that don't say which peripheral raised them (ch. 17 flags such as UISR3, PCSR0_PIF): the
+# peripheral's name, or its name and the flag where it has several.
+USBHOST:
+  _modify:
+    _interrupts:
+      USB_STS_210: {name: USBHOST}
+RNG:
+  _modify:
+    _interrupts:
+      EI: {name: RNG}
+  RNGOUT:
+    _add:
+      DATA: {description: DATA, bitOffset: 0, bitWidth: 32, access: read-only, readAction: modify}   # RM ch. 27: a read pops the FIFO
+CCM:
+  _modify:
+    _interrupts:
+      UOCSR: {name: CCM_UOCSR}
+  # RM ch. 10: reading UOCSR / UHCSR clears the interrupt they raised
+  UOCSR:
+    _modify:
+      "*": {readAction: modifyExternal}
+  UHCSR:
+    _modify:
+      "*": {readAction: modifyExternal}
+EPORT:
+  _modify:
+    _interrupts:
+      EPFR0_EPF1: {name: EPORT_EPF1}
+      EPFR0_EPF2: {name: EPORT_EPF2}
+      EPFR0_EPF3: {name: EPORT_EPF3}
+      EPFR0_EPF4: {name: EPORT_EPF4}
+      EPFR0_EPF5: {name: EPORT_EPF5}
+      EPFR0_EPF6: {name: EPORT_EPF6}
+      EPFR0_EPF7: {name: EPORT_EPF7}
+DTIM0:
+  _modify:
+    _interrupts:
+      DTER0: {name: DTIM0}
+    DTCN: {access: read-write}
+  # RM ch. 39 DTCN: the counter can be written when DTXMR[EN1588] is clear (the figure's W row is blank, the map
+  # row says R); that explicit statement outweighs the blank row
+  DTCN:
+    _modify:
+      CNT: {access: read-write}
+DTIM1:
+  _modify:
+    _interrupts:
+      DTER1: {name: DTIM1}
+PIT1:
+  _modify:
+    _interrupts:
+      PCSR1_PIF: {name: PIT1}
+DTIM2:
+  _modify:
+    _interrupts:
+      DTER2: {name: DTIM2}
+PIT2:
+  _modify:
+    _interrupts:
+      PCSR2_PIF: {name: PIT2}
+DTIM3:
+  _modify:
+    _interrupts:
+      DTER3: {name: DTIM3}
+PIT3:
+  _modify:
+    _interrupts:
+      PCSR3_PIF: {name: PIT3}
+UART1:
+  _modify:
+    _interrupts:
+      UISR1: {name: UART1}
+UART2:
+  _modify:
+    _interrupts:
+      UISR2: {name: UART2}
+UART3:
+  _modify:
+    _interrupts:
+      UISR3: {name: UART3}
+UART4:
+  _modify:
+    _interrupts:
+      UISR4: {name: UART4}
+UART5:
+  _modify:
+    _interrupts:
+      UISR5: {name: UART5}
+UART6:
+  _modify:
+    _interrupts:
+      UISR6: {name: UART6}
+UART7:
+  _modify:
+    _interrupts:
+      UISR7: {name: UART7}
+UART8:
+  _modify:
+    _interrupts:
+      UISR8: {name: UART8}
+UART9:
+  _modify:
+    _interrupts:
+      UISR9: {name: UART9}
+I2C1:
+  _modify:
+    _interrupts:
+      I21SR_IIF: {name: I2C1}
+I2C2:
+  _modify:
+    _interrupts:
+      I22SR_IIF: {name: I2C2}
+I2C3:
+  _modify:
+    _interrupts:
+      I23SR_IIF: {name: I2C3}
+I2C4:
+  _modify:
+    _interrupts:
+      I24SR_IIF: {name: I2C4}
+I2C5:
+  _modify:
+    _interrupts:
+      I25SR_IIF: {name: I2C5}
+FLEXCAN1:
+  _modify:
+    _interrupts:
+      IFLAG1_BUF_N_I: {name: FLEXCAN1_BUF}
+      ERRSTAT1_BOFFINT: {name: FLEXCAN1_BOFF}
+      ERRSTAT1_TXWRN: {name: FLEXCAN1_TXWRN}
+
+# ---------------------------------------------------------------------------------------------------------------
+# Reads with side effects (readAction), per the RM chapter named; registers without fields get one to carry it.
+UART0:
+  _modify:
+    _interrupts:
+      UISR0: {name: UART0}
+  URB:
+    _add:
+      RB: {description: RB, bitOffset: 0, bitWidth: 8, access: read-only, readAction: modify}     # RM ch. 41 figure: a read pops
+  # RM ch. 41 UMR2 TXRTS/TXCTS: the value lines were cut off mid-word in conversion (sentence fragments, not names)
+  UMR2:
+    _clear:
+      - TXRTS
+      - TXCTS
+  UTB:
+    _add:
+      TB: {description: TB, bitOffset: 0, bitWidth: 8, access: write-only}                         # RM ch. 41 figure
+  # RM ch. 41 UOP1/UOP0 RTS: both values are defined, but the value 1 sat in a row of its own and the label
+  # rule dropped the pair; names are ours
+  UOP1:
+    RTS:
+      _replace_enum:
+        NO_EFFECT: [0, NO_EFFECT]
+        ASSERT: [1, ASSERT]
+  UOP0:
+    RTS:
+      _replace_enum:
+        NO_EFFECT: [0, NO_EFFECT]
+        NEGATE: [1, NEGATE]
+  # RM ch. 41 figure 41-12: bits 1 and 0 (the table's rows for them were run together in conversion)
+  "UISR,UIMR":
+    _add:
+      TXRDY: {description: TXRDY, bitOffset: 0, bitWidth: 1}
+      FFULL_RXRDY: {description: FFULL_RXRDY, bitOffset: 1, bitWidth: 1}
+OW:
+  ISR:
+    _modify:
+      "*": {readAction: modifyExternal}          # RM ch. 36: reading OW_ISR deactivates the interrupt
+I2C0:
+  _modify:
+    _interrupts:
+      I20SR_IIF: {name: I2C0}
+  I2DR:
+    _modify:
+      DATA: {readAction: modifyExternal}         # RM ch. 42: in master receive, a read starts the next byte
+SSI0:
+  "RX0,RX1":
+    _add:
+      SSI_RX: {description: SSI_RX, bitOffset: 0, bitWidth: 32, access: read-only, readAction: modify}  # RM ch. 35: the RX FIFOs' heads
+  # RM ch. 35 FCSR (its figure is headed by an offset rm2svd doesn't read): FIFO counters and watermarks
+  FCSR:
+    _add:
+      TFWM0: {description: TFWM0, bitOffset: 0, bitWidth: 4, access: read-write}
+      RFWM0: {description: RFWM0, bitOffset: 4, bitWidth: 4, access: read-write}
+      TFCNT0: {description: TFCNT0, bitOffset: 8, bitWidth: 4, access: read-only}
+      RFCNT0: {description: RFCNT0, bitOffset: 12, bitWidth: 4, access: read-only}
+      TFWM1: {description: TFWM1, bitOffset: 16, bitWidth: 4, access: read-write}
+      RFWM1: {description: RFWM1, bitOffset: 20, bitWidth: 4, access: read-write}
+      TFCNT1: {description: TFCNT1, bitOffset: 24, bitWidth: 4, access: read-only}
+      RFCNT1: {description: RFCNT1, bitOffset: 28, bitWidth: 4, access: read-only}
+  # RM ch. 35 figure 35-15: the bit row names bits 14 and 10-0, whose table rows were run together in conversion;
+  # its W row marks ROE1, ROE0, TUE1 and TUE0 w1c (the table reads only ROE1 and TUE0 so)
+  ISR:
+    _add:
+      TFE0: {description: TFE0, bitOffset: 0, bitWidth: 1, access: read-only}
+      TFE1: {description: TFE1, bitOffset: 1, bitWidth: 1, access: read-only}
+      RFF0: {description: RFF0, bitOffset: 2, bitWidth: 1, access: read-only}
+      RFF1: {description: RFF1, bitOffset: 3, bitWidth: 1, access: read-only}
+      RLS: {description: RLS, bitOffset: 4, bitWidth: 1, access: read-only}
+      TLS: {description: TLS, bitOffset: 5, bitWidth: 1, access: read-only}
+      RFS: {description: RFS, bitOffset: 6, bitWidth: 1, access: read-only}
+      TUE1: {description: TUE1, bitOffset: 9, bitWidth: 1, access: read-write, modifiedWriteValues: oneToClear}
+      ROE0: {description: ROE0, bitOffset: 10, bitWidth: 1, access: read-write, modifiedWriteValues: oneToClear}
+      RDR0: {description: RDR0, bitOffset: 14, bitWidth: 1, access: read-only}
+
+# RM ch. 31 figure 31-2: every EIR event bit (30-15) is w1c (ch. 17's clearing column: "Write 1 to ENETn_EIR[…]");
+# the picture text's W row can't be placed bit by bit, and the field descriptions don't say it.
+MACNET0:
+  EIR:
+    _modify:
+      "*": {modifiedWriteValues: oneToClear}

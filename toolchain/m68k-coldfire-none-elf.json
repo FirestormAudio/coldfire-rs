@@ -1,0 +1,15 @@
+{
+  "arch": "m68k",
+  "cpu": "generic",
+  "crt-objects-fallback": "false",
+  "data-layout": "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-i64:16:64-f32:16:32-f64:16:64-n8:16:32-a:0:16-S16",
+  "linker": "m68k-elf-ld",
+  "linker-flavor": "ld",
+  "llvm-target": "m68k",
+  "max-atomic-width": 32,
+  "metadata": {"description": "ColdFire V4e (MCF5441x), rustc_codegen_gcc", "host_tools": false, "std": false, "tier": 3},
+  "panic-strategy": "abort",
+  "relocation-model": "static",
+  "target-endian": "big",
+  "target-pointer-width": 32
+}

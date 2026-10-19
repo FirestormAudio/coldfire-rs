@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Build a crate for ColdFire through rustc_codegen_gcc, then gate every executable it produced.
+# Usage: cargo-cf <crate-dir> [cargo args]
+# Environment: RCF (toolchain build, default <repo>/build/rust-coldfire); CF_MEMORY_DIR (where the board's
+# memory.x is, default the crate dir); CF_PYTHON (default python3); CF_RUSTFLAGS (appended).
+set -euo pipefail
+TOOLCHAIN=$(cd "$(dirname "$0")" && pwd)
+ROOT=$(cd "$TOOLCHAIN/.." && pwd)
+RCF=${RCF:-$ROOT/build/rust-coldfire}
+SR=$RCF/rustc_codegen_gcc/build/build_sysroot/sysroot
+CRATE=$(cd "$1" && pwd); shift
+# a crate with its own link.x uses it; otherwise coldfire-rt's build script puts the runtime's link.x on the search path
+LINKX=$CRATE/link.x; [ -f "$LINKX" ] || LINKX=link.x
+MEMDIR=${CF_MEMORY_DIR:-$CRATE}
+cd "$CRATE"
+export COMPILER_PATH=$RCF/gcc-install/m68k-elf/bin
+export RUSTFLAGS="-Zcodegen-backend=$RCF/rustc_codegen_gcc/target/debug/librustc_codegen_gcc.so --sysroot=$SR -Clinker=m68k-elf-ld -Clinker-flavor=ld -Clink-arg=-L$CRATE -Clink-arg=-L$MEMDIR -Clink-arg=-T$LINKX ${CF_RUSTFLAGS:-}"
+# Cargo's JSON artifact messages name exactly the executables this build produced (honouring --target-dir,
+# examples and stale files alike); diagnostics are still rendered to stderr.
+exes=$(cargo +nightly-2026-09-29 build --release -Zbuild-std=core,alloc -Zjson-target-spec \
+  --target "$TOOLCHAIN/m68k-coldfire-none-elf.json" --message-format=json-render-diagnostics "$@" |
+  python3 -c 'import json,sys
+for l in sys.stdin:
+    m = json.loads(l)
+    if m.get("reason") == "compiler-artifact" and m.get("executable"):
+        print(m["executable"])')
+
+# ColdFire gate on every executable (fails the build on any non-ColdFire instruction)
+if [ -z "$exes" ]; then
+  echo "cargo-cf: no executables built, nothing to gate" >&2
+  exit 0
+fi
+mapfile -t elfs <<<"$exes"
+"${CF_PYTHON:-python3}" "$TOOLCHAIN/cfgate.py" "${elfs[@]}"

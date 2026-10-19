@@ -1,0 +1,860 @@
+ADC          0xfc094000 registers= 46 fields=  41
+CCM          0xec090000 registers= 18 fields=  80
+CLOCK        0xfc0c0000 registers=  3 fields=  19
+DAC0         0xfc098000 registers=  7 fields=  11
+DAC1         0xfc09c000 registers=  7 fields=  11
+DDRMC        0xfc0b8000 registers= 55 fields= 136
+DMATIMER0    0xfc070000 registers=  6 fields=  15
+DMATIMER1    0xfc074000 registers=  6 fields=  15
+DMATIMER2    0xfc078000 registers=  6 fields=  15
+DMATIMER3    0xfc07c000 registers=  6 fields=  15
+DSPI0        0xfc05c000 registers= 46 fields= 137
+DSPI1        0xfc03c000 registers= 46 fields= 137
+DSPI2        0xec038000 registers= 46 fields= 137
+DSPI3        0xec03c000 registers= 46 fields= 137
+EDMA         0xfc044000 registers= 84 fields=  54
+EPORT        0xfc090000 registers=  3 fields=   2
+ESDHC        0xfc0cc000 registers= 23 fields= 124
+ETHERNET     0xfc0dc000 registers=115 fields= 209
+FLEXBUS      0xfc008000 registers= 18 fields=  48
+FLEXCAN0     0xfc020000 registers= 13 fields=  38
+FLEXCAN1     0xfc024000 registers= 13 fields=  38
+I2C0         0xfc058000 registers=  5 fields=  17
+I2C1         0xfc038000 registers=  5 fields=  17
+I2C2         0xec010000 registers=  5 fields=  17
+I2C3         0xec014000 registers=  5 fields=  17
+I2C4         0xec018000 registers=  5 fields=  17
+I2C5         0xec01c000 registers=  5 fields=  17
+INTC         0xfc054000 registers=  8 fields=   1
+INTC0        0xfc048000 registers= 83 fields=  12
+INTC1        0xfc04c000 registers= 79 fields=   8
+INTC2        0xfc050000 registers= 79 fields=   7
+MACNET0      0xfc0d4000 registers= 49 fields= 102
+MACNET1      0xfc0d8000 registers= 49 fields= 102
+MCPWM        0xec088000 registers=152 fields= 385
+NFC          0xfc0fc000 registers= 15 fields=  54
+OW           0xec008000 registers=  7 fields=  21
+PIN_MULTIPLEXING 0xec094000 registers= 97 fields= 213
+PIT0         0xfc080000 registers=  3 fields=   8
+PIT1         0xfc084000 registers=  3 fields=   8
+PIT2         0xfc088000 registers=  3 fields=   8
+PIT3         0xfc08c000 registers=  3 fields=   8
+SCM          0xfc040000 registers= 18 fields=  30
+RGPIO        0x8c000000 registers=  6 fields=   0
+RNG          0xfc0c4000 registers=  7 fields=   0
+ROBUST       0xfc0a8000 registers= 20 fields=  37
+SIM          0xfc0ac000 registers= 31 fields=  96
+SSI0         0xfc0bc000 registers= 20 fields=  66
+SSI1         0xfc0c8000 registers= 21 fields=  67
+UART0        0xfc060000 registers= 16 fields=  32
+UART1        0xfc064000 registers= 16 fields=  32
+UART2        0xfc068000 registers= 16 fields=  32
+UART3        0xfc06c000 registers= 16 fields=  32
+UART4        0xec060000 registers= 16 fields=  32
+UART5        0xec064000 registers= 16 fields=  32
+UART6        0xec068000 registers= 16 fields=  32
+UART7        0xec06c000 registers= 16 fields=  32
+UART8        0xec070000 registers= 16 fields=  32
+UART9        0xec074000 registers= 16 fields=  32
+USBHOST      0xfc0b4000 registers= 25 fields= 113
+USBOTG       0xfc0b0000 registers= 41 fields= 193
+XBS          0xfc004000 registers= 12 fields=  72
+
+problems: 797
+not memory-mapped: ch03-coldfire-core 14 rows with offsets/BDM codes and no base address
+not memory-mapped: ch04-memory-management-unit-mmu memory map has no absolute addresses
+not memory-mapped: ch05-enhanced-multiply-accumulate-unit-emac 8 rows with offsets/BDM codes and no base address
+not memory-mapped: ch06-cache 9 rows with offsets/BDM codes and no base address
+not memory-mapped: ch07-static-ram-sram 1 rows with offsets/BDM codes and no base address
+no fields: ch09-power-management PPMHR0 0xfc040030
+no fields: ch09-power-management PPMLR0 0xfc040034
+no fields: ch09-power-management PPMHR 0xfc040038
+no fields: ch09-power-management PPMLR 0xfc04003c
+no fields: ch10-chip-configuration-module-ccm RCON 0xec090008
+field row unread: ch10-chip-configuration-module-ccm MISCCR 15<br>PWM<br>EXTCLK
+field table names another register: ch10-chip-configuration-module-ccm FNACR 0xec090024 table 'UHPCR & UOPCR'; kept, the figure shows its fields
+no fields: ch13-system-control-module-scm CWSR 0xfc04001b
+unread map row: ch14-crossbar-switch-xbs 0x40000000 no register in the row
+figure name differs: ch14-crossbar-switch-xbs XBS_PRS0 0xfc004010 mapped as XBS_CRS0; its field table names the register, fields taken
+figure name differs: ch14-crossbar-switch-xbs XBS_PRS1 0xfc004110 mapped as XBS_CRS1; its field table names the register, fields taken
+figure name differs: ch14-crossbar-switch-xbs XBS_PRS2 0xfc004210 mapped as XBS_CRS2; its field table names the register, fields taken
+figure name differs: ch14-crossbar-switch-xbs XBS_PRS4 0xfc004410 mapped as XBS_CRS4; its field table names the register, fields taken
+figure name differs: ch14-crossbar-switch-xbs XBS_PRS6 0xfc004610 mapped as XBS_CRS6; its field table names the register, fields taken
+figure name differs: ch14-crossbar-switch-xbs XBS_PRS7 0xfc004710 mapped as XBS_CRS7; its field table names the register, fields taken
+no fields: ch15-pin-multiplexing-and-control PPDSDR_A 0xec094018
+no fields: ch15-pin-multiplexing-and-control PPDSDR_B 0xec094019
+no fields: ch15-pin-multiplexing-and-control PPDSDR_C 0xec09401a
+no fields: ch15-pin-multiplexing-and-control PPDSDR_D 0xec09401b
+no fields: ch15-pin-multiplexing-and-control PPDSDR_E 0xec09401c
+no fields: ch15-pin-multiplexing-and-control PPDSDR_F 0xec09401d
+no fields: ch15-pin-multiplexing-and-control PPDSDR_G 0xec09401e
+no fields: ch15-pin-multiplexing-and-control PPDSDR_H 0xec09401f
+no fields: ch15-pin-multiplexing-and-control PPDSDR_I 0xec094020
+no fields: ch15-pin-multiplexing-and-control PPDSDR_J 0xec094021
+no fields: ch15-pin-multiplexing-and-control PPDSDR_K 0xec094022
+access: ch15-pin-multiplexing-and-control PCLRR_A 0xec094024 figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_B 0xec094025 figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_C 0xec094026 figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_D 0xec094027 figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_E 0xec094028 figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_F 0xec094029 figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_G 0xec09402a figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_H 0xec09402b figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_I 0xec09402c figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_J 0xec09402d figure's R row is blank; PCLRRx made write-only
+access: ch15-pin-multiplexing-and-control PCLRR_K 0xec09402e figure's R row is blank; PCLRRx made write-only
+no fields: ch15-pin-multiplexing-and-control PAR_FBCTL 0xec094048
+no fields: ch15-pin-multiplexing-and-control PAR_BE 0xec094049
+no fields: ch15-pin-multiplexing-and-control PAR_CS 0xec09404a
+no fields: ch15-pin-multiplexing-and-control PAR_CANI2C 0xec09404b
+no fields: ch15-pin-multiplexing-and-control PAR_IRQ0H 0xec09404c
+no figure: ch15-pin-multiplexing-and-control PAR_IRQ0L 0xec09404d
+no fields: ch15-pin-multiplexing-and-control PAR_DSPIOWH 0xec09404e
+no fields: ch15-pin-multiplexing-and-control PAR_DSPIOWL 0xec09404f
+no fields: ch15-pin-multiplexing-and-control PAR_TIMER 0xec094050
+no fields: ch15-pin-multiplexing-and-control PAR_UART2 0xec094051
+no fields: ch15-pin-multiplexing-and-control PAR_UART1 0xec094052
+no fields: ch15-pin-multiplexing-and-control PAR_UART0 0xec094053
+no fields: ch15-pin-multiplexing-and-control PAR_SDHCH 0xec094054
+no fields: ch15-pin-multiplexing-and-control PAR_SDHCL 0xec094055
+no fields: ch15-pin-multiplexing-and-control PAR_SIMP0H 0xec094056
+no figure: ch15-pin-multiplexing-and-control PAR_SIMP0L 0xec094057
+no fields: ch15-pin-multiplexing-and-control PAR_SSI0H 0xec094058
+no fields: ch15-pin-multiplexing-and-control PAR_SSI0L 0xec094059
+no fields: ch15-pin-multiplexing-and-control PAR_DEBUGH1 0xec09405a
+no fields: ch15-pin-multiplexing-and-control PAR_DEBUGH0 0xec09405b
+no fields: ch15-pin-multiplexing-and-control PAR_DEBUGL 0xec09405c
+no fields: ch15-pin-multiplexing-and-control PAR_FEC 0xec09405e
+no fields: ch15-pin-multiplexing-and-control SRCR_FB1 0xec094064
+no fields: ch15-pin-multiplexing-and-control SRCR_FB2 0xec094065
+no fields: ch15-pin-multiplexing-and-control SRCR_FB3 0xec094066
+no fields: ch15-pin-multiplexing-and-control SRCR_FB4 0xec094067
+no fields: ch15-pin-multiplexing-and-control SRCR_DSPIOW 0xec094068
+no fields: ch15-pin-multiplexing-and-control SRCR_CANI2C 0xec094069
+no fields: ch15-pin-multiplexing-and-control SRCR_IRQ0 0xec09406a
+no fields: ch15-pin-multiplexing-and-control SRCR_TIMER 0xec09406b
+no fields: ch15-pin-multiplexing-and-control SRCR_UART 0xec09406c
+no fields: ch15-pin-multiplexing-and-control SRCR_FEC 0xec09406d
+no fields: ch15-pin-multiplexing-and-control SRCR_SDHC 0xec09406e
+no figure: ch15-pin-multiplexing-and-control SRCR_SIMP0 0xec09406f
+no fields: ch15-pin-multiplexing-and-control SRCRSSI0 0xec094070
+field table names another register: ch15-pin-multiplexing-and-control URXDWOM 0xec09407c table 'UTXD_WOM'; left out
+no fields: ch15-pin-multiplexing-and-control URXDWOM 0xec09407c
+no fields: ch15-pin-multiplexing-and-control HCR1 0xec094080
+no fields: ch15-pin-multiplexing-and-control HCR0 0xec094084
+figure name differs: ch15-pin-multiplexing-and-control SRCR_SIM0 0xec09406f mapped as SRCR_SIMP0
+no figure: ch16-rapid-gpio-rgpio RGPIO_DIR 0x8c000000
+no figure: ch16-rapid-gpio-rgpio RGPIO_DATA 0x8c000002
+no figure: ch16-rapid-gpio-rgpio RGPIO_ENB 0x8c000004
+no figure: ch16-rapid-gpio-rgpio RGPIO_CLR 0x8c000006
+no figure: ch16-rapid-gpio-rgpio RGPIO_SET 0x8c00000a
+no figure: ch16-rapid-gpio-rgpio RGPIO_TOG 0x8c00000e
+no figure: ch16-rapid-gpio-rgpio RGPIO_DIR 0x8c000000
+no figure: ch16-rapid-gpio-rgpio RGPIO_DATA 0x8c000002
+no figure: ch16-rapid-gpio-rgpio RGPIO_ENB 0x8c000004
+no figure: ch16-rapid-gpio-rgpio RGPIO_DATA 0x8c000006
+no figure: ch16-rapid-gpio-rgpio RGPIO_DIR 0x8c000008
+no figure: ch16-rapid-gpio-rgpio RGPIO_DATA 0x8c00000a
+no figure: ch16-rapid-gpio-rgpio RGPIO_DIR 0x8c00000c
+no figure: ch16-rapid-gpio-rgpio RGPIO_DATA 0x8c00000e
+no fields: ch17-interrupt-controller-modules-intc IPRH 0xfc048000
+no fields: ch17-interrupt-controller-modules-intc IMRH 0xfc048008
+no fields: ch17-interrupt-controller-modules-intc INTFRCH 0xfc048010
+no figure: ch17-interrupt-controller-modules-intc ICR0 0xfc048040
+no figure: ch17-interrupt-controller-modules-intc ICR1 0xfc048041
+no figure: ch17-interrupt-controller-modules-intc ICR2 0xfc048042
+no figure: ch17-interrupt-controller-modules-intc ICR3 0xfc048043
+no figure: ch17-interrupt-controller-modules-intc ICR4 0xfc048044
+no figure: ch17-interrupt-controller-modules-intc ICR5 0xfc048045
+no figure: ch17-interrupt-controller-modules-intc ICR6 0xfc048046
+no figure: ch17-interrupt-controller-modules-intc ICR7 0xfc048047
+no figure: ch17-interrupt-controller-modules-intc ICR8 0xfc048048
+no figure: ch17-interrupt-controller-modules-intc ICR9 0xfc048049
+no figure: ch17-interrupt-controller-modules-intc ICR10 0xfc04804a
+no figure: ch17-interrupt-controller-modules-intc ICR11 0xfc04804b
+no figure: ch17-interrupt-controller-modules-intc ICR12 0xfc04804c
+no figure: ch17-interrupt-controller-modules-intc ICR13 0xfc04804d
+no figure: ch17-interrupt-controller-modules-intc ICR14 0xfc04804e
+no figure: ch17-interrupt-controller-modules-intc ICR15 0xfc04804f
+no figure: ch17-interrupt-controller-modules-intc ICR16 0xfc048050
+no figure: ch17-interrupt-controller-modules-intc ICR17 0xfc048051
+no figure: ch17-interrupt-controller-modules-intc ICR18 0xfc048052
+no figure: ch17-interrupt-controller-modules-intc ICR19 0xfc048053
+no figure: ch17-interrupt-controller-modules-intc ICR20 0xfc048054
+no figure: ch17-interrupt-controller-modules-intc ICR21 0xfc048055
+no figure: ch17-interrupt-controller-modules-intc ICR22 0xfc048056
+no figure: ch17-interrupt-controller-modules-intc ICR23 0xfc048057
+no figure: ch17-interrupt-controller-modules-intc ICR24 0xfc048058
+no figure: ch17-interrupt-controller-modules-intc ICR25 0xfc048059
+no figure: ch17-interrupt-controller-modules-intc ICR26 0xfc04805a
+no figure: ch17-interrupt-controller-modules-intc ICR27 0xfc04805b
+no figure: ch17-interrupt-controller-modules-intc ICR28 0xfc04805c
+no figure: ch17-interrupt-controller-modules-intc ICR29 0xfc04805d
+no figure: ch17-interrupt-controller-modules-intc ICR30 0xfc04805e
+no figure: ch17-interrupt-controller-modules-intc ICR31 0xfc04805f
+no figure: ch17-interrupt-controller-modules-intc ICR32 0xfc048060
+no figure: ch17-interrupt-controller-modules-intc ICR33 0xfc048061
+no figure: ch17-interrupt-controller-modules-intc ICR34 0xfc048062
+no figure: ch17-interrupt-controller-modules-intc ICR35 0xfc048063
+no figure: ch17-interrupt-controller-modules-intc ICR36 0xfc048064
+no figure: ch17-interrupt-controller-modules-intc ICR37 0xfc048065
+no figure: ch17-interrupt-controller-modules-intc ICR38 0xfc048066
+no figure: ch17-interrupt-controller-modules-intc ICR39 0xfc048067
+no figure: ch17-interrupt-controller-modules-intc ICR40 0xfc048068
+no figure: ch17-interrupt-controller-modules-intc ICR41 0xfc048069
+no figure: ch17-interrupt-controller-modules-intc ICR42 0xfc04806a
+no figure: ch17-interrupt-controller-modules-intc ICR43 0xfc04806b
+no figure: ch17-interrupt-controller-modules-intc ICR44 0xfc04806c
+no figure: ch17-interrupt-controller-modules-intc ICR45 0xfc04806d
+no figure: ch17-interrupt-controller-modules-intc ICR46 0xfc04806e
+no figure: ch17-interrupt-controller-modules-intc ICR47 0xfc04806f
+no figure: ch17-interrupt-controller-modules-intc ICR48 0xfc048070
+no figure: ch17-interrupt-controller-modules-intc ICR49 0xfc048071
+no figure: ch17-interrupt-controller-modules-intc ICR50 0xfc048072
+no figure: ch17-interrupt-controller-modules-intc ICR51 0xfc048073
+no figure: ch17-interrupt-controller-modules-intc ICR52 0xfc048074
+no figure: ch17-interrupt-controller-modules-intc ICR53 0xfc048075
+no figure: ch17-interrupt-controller-modules-intc ICR54 0xfc048076
+no figure: ch17-interrupt-controller-modules-intc ICR55 0xfc048077
+no figure: ch17-interrupt-controller-modules-intc ICR56 0xfc048078
+no figure: ch17-interrupt-controller-modules-intc ICR57 0xfc048079
+no figure: ch17-interrupt-controller-modules-intc ICR58 0xfc04807a
+no figure: ch17-interrupt-controller-modules-intc ICR59 0xfc04807b
+no figure: ch17-interrupt-controller-modules-intc ICR60 0xfc04807c
+no figure: ch17-interrupt-controller-modules-intc ICR61 0xfc04807d
+no figure: ch17-interrupt-controller-modules-intc ICR62 0xfc04807e
+no figure: ch17-interrupt-controller-modules-intc ICR63 0xfc04807f
+no figure: ch17-interrupt-controller-modules-intc L1IACK 0xfc0480e4
+no figure: ch17-interrupt-controller-modules-intc L2IACK 0xfc0480e8
+no figure: ch17-interrupt-controller-modules-intc L3IACK 0xfc0480ec
+no figure: ch17-interrupt-controller-modules-intc L4IACK 0xfc0480f0
+no figure: ch17-interrupt-controller-modules-intc L5IACK 0xfc0480f4
+no figure: ch17-interrupt-controller-modules-intc L6IACK 0xfc0480f8
+no figure: ch17-interrupt-controller-modules-intc L7IACK 0xfc0480fc
+no fields: ch17-interrupt-controller-modules-intc IPRH 0xfc04c000
+no fields: ch17-interrupt-controller-modules-intc IMRH 0xfc04c008
+no fields: ch17-interrupt-controller-modules-intc INTFRCH 0xfc04c010
+no figure: ch17-interrupt-controller-modules-intc ICR1 0xfc04c041
+no figure: ch17-interrupt-controller-modules-intc ICR2 0xfc04c042
+no figure: ch17-interrupt-controller-modules-intc ICR3 0xfc04c043
+no figure: ch17-interrupt-controller-modules-intc ICR4 0xfc04c044
+no figure: ch17-interrupt-controller-modules-intc ICR5 0xfc04c045
+no figure: ch17-interrupt-controller-modules-intc ICR6 0xfc04c046
+no figure: ch17-interrupt-controller-modules-intc ICR7 0xfc04c047
+no figure: ch17-interrupt-controller-modules-intc ICR8 0xfc04c048
+no figure: ch17-interrupt-controller-modules-intc ICR9 0xfc04c049
+no figure: ch17-interrupt-controller-modules-intc ICR10 0xfc04c04a
+no figure: ch17-interrupt-controller-modules-intc ICR11 0xfc04c04b
+no figure: ch17-interrupt-controller-modules-intc ICR12 0xfc04c04c
+no figure: ch17-interrupt-controller-modules-intc ICR13 0xfc04c04d
+no figure: ch17-interrupt-controller-modules-intc ICR14 0xfc04c04e
+no figure: ch17-interrupt-controller-modules-intc ICR15 0xfc04c04f
+no figure: ch17-interrupt-controller-modules-intc ICR16 0xfc04c050
+no figure: ch17-interrupt-controller-modules-intc ICR17 0xfc04c051
+no figure: ch17-interrupt-controller-modules-intc ICR18 0xfc04c052
+no figure: ch17-interrupt-controller-modules-intc ICR19 0xfc04c053
+no figure: ch17-interrupt-controller-modules-intc ICR20 0xfc04c054
+no figure: ch17-interrupt-controller-modules-intc ICR21 0xfc04c055
+no figure: ch17-interrupt-controller-modules-intc ICR22 0xfc04c056
+no figure: ch17-interrupt-controller-modules-intc ICR23 0xfc04c057
+no figure: ch17-interrupt-controller-modules-intc ICR24 0xfc04c058
+no figure: ch17-interrupt-controller-modules-intc ICR25 0xfc04c059
+no figure: ch17-interrupt-controller-modules-intc ICR26 0xfc04c05a
+no figure: ch17-interrupt-controller-modules-intc ICR27 0xfc04c05b
+no figure: ch17-interrupt-controller-modules-intc ICR28 0xfc04c05c
+no figure: ch17-interrupt-controller-modules-intc ICR29 0xfc04c05d
+no figure: ch17-interrupt-controller-modules-intc ICR30 0xfc04c05e
+no figure: ch17-interrupt-controller-modules-intc ICR31 0xfc04c05f
+no figure: ch17-interrupt-controller-modules-intc ICR32 0xfc04c060
+no figure: ch17-interrupt-controller-modules-intc ICR33 0xfc04c061
+no figure: ch17-interrupt-controller-modules-intc ICR34 0xfc04c062
+no figure: ch17-interrupt-controller-modules-intc ICR35 0xfc04c063
+no figure: ch17-interrupt-controller-modules-intc ICR36 0xfc04c064
+no figure: ch17-interrupt-controller-modules-intc ICR37 0xfc04c065
+no figure: ch17-interrupt-controller-modules-intc ICR38 0xfc04c066
+no figure: ch17-interrupt-controller-modules-intc ICR39 0xfc04c067
+no figure: ch17-interrupt-controller-modules-intc ICR40 0xfc04c068
+no figure: ch17-interrupt-controller-modules-intc ICR41 0xfc04c069
+no figure: ch17-interrupt-controller-modules-intc ICR42 0xfc04c06a
+no figure: ch17-interrupt-controller-modules-intc ICR43 0xfc04c06b
+no figure: ch17-interrupt-controller-modules-intc ICR44 0xfc04c06c
+no figure: ch17-interrupt-controller-modules-intc ICR45 0xfc04c06d
+no figure: ch17-interrupt-controller-modules-intc ICR46 0xfc04c06e
+no figure: ch17-interrupt-controller-modules-intc ICR47 0xfc04c06f
+no figure: ch17-interrupt-controller-modules-intc ICR48 0xfc04c070
+no figure: ch17-interrupt-controller-modules-intc ICR49 0xfc04c071
+no figure: ch17-interrupt-controller-modules-intc ICR50 0xfc04c072
+no figure: ch17-interrupt-controller-modules-intc ICR51 0xfc04c073
+no figure: ch17-interrupt-controller-modules-intc ICR52 0xfc04c074
+no figure: ch17-interrupt-controller-modules-intc ICR53 0xfc04c075
+no figure: ch17-interrupt-controller-modules-intc ICR54 0xfc04c076
+no figure: ch17-interrupt-controller-modules-intc ICR55 0xfc04c077
+no figure: ch17-interrupt-controller-modules-intc ICR56 0xfc04c078
+no figure: ch17-interrupt-controller-modules-intc ICR57 0xfc04c079
+no figure: ch17-interrupt-controller-modules-intc ICR58 0xfc04c07a
+no figure: ch17-interrupt-controller-modules-intc ICR59 0xfc04c07b
+no figure: ch17-interrupt-controller-modules-intc ICR60 0xfc04c07c
+no figure: ch17-interrupt-controller-modules-intc ICR61 0xfc04c07d
+no figure: ch17-interrupt-controller-modules-intc ICR62 0xfc04c07e
+no figure: ch17-interrupt-controller-modules-intc ICR63 0xfc04c07f
+no figure: ch17-interrupt-controller-modules-intc L1IACK 0xfc04c0e4
+no figure: ch17-interrupt-controller-modules-intc L2IACK 0xfc04c0e8
+no figure: ch17-interrupt-controller-modules-intc L3IACK 0xfc04c0ec
+no figure: ch17-interrupt-controller-modules-intc L4IACK 0xfc04c0f0
+no figure: ch17-interrupt-controller-modules-intc L5IACK 0xfc04c0f4
+no figure: ch17-interrupt-controller-modules-intc L6IACK 0xfc04c0f8
+no figure: ch17-interrupt-controller-modules-intc L7IACK 0xfc04c0fc
+no fields: ch17-interrupt-controller-modules-intc IPRH 0xfc050000
+no fields: ch17-interrupt-controller-modules-intc IMRH 0xfc050008
+no fields: ch17-interrupt-controller-modules-intc INTFRCH 0xfc050010
+no figure: ch17-interrupt-controller-modules-intc ICR1 0xfc050041
+no figure: ch17-interrupt-controller-modules-intc ICR2 0xfc050042
+no figure: ch17-interrupt-controller-modules-intc ICR3 0xfc050043
+no figure: ch17-interrupt-controller-modules-intc ICR4 0xfc050044
+no figure: ch17-interrupt-controller-modules-intc ICR5 0xfc050045
+no figure: ch17-interrupt-controller-modules-intc ICR6 0xfc050046
+no figure: ch17-interrupt-controller-modules-intc ICR7 0xfc050047
+no figure: ch17-interrupt-controller-modules-intc ICR8 0xfc050048
+no figure: ch17-interrupt-controller-modules-intc ICR9 0xfc050049
+no figure: ch17-interrupt-controller-modules-intc ICR10 0xfc05004a
+no figure: ch17-interrupt-controller-modules-intc ICR11 0xfc05004b
+no figure: ch17-interrupt-controller-modules-intc ICR12 0xfc05004c
+no figure: ch17-interrupt-controller-modules-intc ICR13 0xfc05004d
+no figure: ch17-interrupt-controller-modules-intc ICR14 0xfc05004e
+no figure: ch17-interrupt-controller-modules-intc ICR15 0xfc05004f
+no figure: ch17-interrupt-controller-modules-intc ICR16 0xfc050050
+no figure: ch17-interrupt-controller-modules-intc ICR17 0xfc050051
+no figure: ch17-interrupt-controller-modules-intc ICR18 0xfc050052
+no figure: ch17-interrupt-controller-modules-intc ICR19 0xfc050053
+no figure: ch17-interrupt-controller-modules-intc ICR20 0xfc050054
+no figure: ch17-interrupt-controller-modules-intc ICR21 0xfc050055
+no figure: ch17-interrupt-controller-modules-intc ICR22 0xfc050056
+no figure: ch17-interrupt-controller-modules-intc ICR23 0xfc050057
+no figure: ch17-interrupt-controller-modules-intc ICR24 0xfc050058
+no figure: ch17-interrupt-controller-modules-intc ICR25 0xfc050059
+no figure: ch17-interrupt-controller-modules-intc ICR26 0xfc05005a
+no figure: ch17-interrupt-controller-modules-intc ICR27 0xfc05005b
+no figure: ch17-interrupt-controller-modules-intc ICR28 0xfc05005c
+no figure: ch17-interrupt-controller-modules-intc ICR29 0xfc05005d
+no figure: ch17-interrupt-controller-modules-intc ICR30 0xfc05005e
+no figure: ch17-interrupt-controller-modules-intc ICR31 0xfc05005f
+no figure: ch17-interrupt-controller-modules-intc ICR32 0xfc050060
+no figure: ch17-interrupt-controller-modules-intc ICR33 0xfc050061
+no figure: ch17-interrupt-controller-modules-intc ICR34 0xfc050062
+no figure: ch17-interrupt-controller-modules-intc ICR35 0xfc050063
+no figure: ch17-interrupt-controller-modules-intc ICR36 0xfc050064
+no figure: ch17-interrupt-controller-modules-intc ICR37 0xfc050065
+no figure: ch17-interrupt-controller-modules-intc ICR38 0xfc050066
+no figure: ch17-interrupt-controller-modules-intc ICR39 0xfc050067
+no figure: ch17-interrupt-controller-modules-intc ICR40 0xfc050068
+no figure: ch17-interrupt-controller-modules-intc ICR41 0xfc050069
+no figure: ch17-interrupt-controller-modules-intc ICR42 0xfc05006a
+no figure: ch17-interrupt-controller-modules-intc ICR43 0xfc05006b
+no figure: ch17-interrupt-controller-modules-intc ICR44 0xfc05006c
+no figure: ch17-interrupt-controller-modules-intc ICR45 0xfc05006d
+no figure: ch17-interrupt-controller-modules-intc ICR46 0xfc05006e
+no figure: ch17-interrupt-controller-modules-intc ICR47 0xfc05006f
+no figure: ch17-interrupt-controller-modules-intc ICR48 0xfc050070
+no figure: ch17-interrupt-controller-modules-intc ICR49 0xfc050071
+no figure: ch17-interrupt-controller-modules-intc ICR50 0xfc050072
+no figure: ch17-interrupt-controller-modules-intc ICR51 0xfc050073
+no figure: ch17-interrupt-controller-modules-intc ICR52 0xfc050074
+no figure: ch17-interrupt-controller-modules-intc ICR53 0xfc050075
+no figure: ch17-interrupt-controller-modules-intc ICR54 0xfc050076
+no figure: ch17-interrupt-controller-modules-intc ICR55 0xfc050077
+no figure: ch17-interrupt-controller-modules-intc ICR56 0xfc050078
+no figure: ch17-interrupt-controller-modules-intc ICR57 0xfc050079
+no figure: ch17-interrupt-controller-modules-intc ICR58 0xfc05007a
+no figure: ch17-interrupt-controller-modules-intc ICR59 0xfc05007b
+no figure: ch17-interrupt-controller-modules-intc ICR60 0xfc05007c
+no figure: ch17-interrupt-controller-modules-intc ICR61 0xfc05007d
+no figure: ch17-interrupt-controller-modules-intc ICR62 0xfc05007e
+no figure: ch17-interrupt-controller-modules-intc ICR63 0xfc05007f
+no figure: ch17-interrupt-controller-modules-intc SWIACK 0xfc0500e0
+no figure: ch17-interrupt-controller-modules-intc L1IACK 0xfc0500e4
+no figure: ch17-interrupt-controller-modules-intc L2IACK 0xfc0500e8
+no figure: ch17-interrupt-controller-modules-intc L3IACK 0xfc0500ec
+no figure: ch17-interrupt-controller-modules-intc L4IACK 0xfc0500f0
+no figure: ch17-interrupt-controller-modules-intc L5IACK 0xfc0500f4
+no figure: ch17-interrupt-controller-modules-intc L6IACK 0xfc0500f8
+no figure: ch17-interrupt-controller-modules-intc L7IACK 0xfc0500fc
+no figure: ch17-interrupt-controller-modules-intc GL1IACK 0xfc0540e4
+no figure: ch17-interrupt-controller-modules-intc GL2IACK 0xfc0540e8
+no figure: ch17-interrupt-controller-modules-intc GL3IACK 0xfc0540ec
+no figure: ch17-interrupt-controller-modules-intc GL4IACK 0xfc0540f0
+no figure: ch17-interrupt-controller-modules-intc GL5IACK 0xfc0540f4
+no figure: ch17-interrupt-controller-modules-intc GL6IACK 0xfc0540f8
+no figure: ch17-interrupt-controller-modules-intc GL7IACK 0xfc0540fc
+no fields: ch18-edge-port-module-eport EPPAR 0xfc090000
+no fields: ch19-enhanced-direct-memory-access-edma EDMA_ERQH 0xfc044008
+no fields: ch19-enhanced-direct-memory-access-edma EDMA_EEIH 0xfc044010
+no figure: ch19-enhanced-direct-memory-access-edma EDMA_EEIL 0xfc044014
+no fields: ch19-enhanced-direct-memory-access-edma EDMA_INTH 0xfc044020
+no fields: ch19-enhanced-direct-memory-access-edma EDMA_ERRH 0xfc044028
+no figure: ch19-enhanced-direct-memory-access-edma EDMA_RSH 0xfc044030
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI0 0xfc044100
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI1 0xfc044101
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI2 0xfc044102
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI3 0xfc044103
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI4 0xfc044104
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI5 0xfc044105
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI6 0xfc044106
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI7 0xfc044107
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI8 0xfc044108
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI9 0xfc044109
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI10 0xfc04410a
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI11 0xfc04410b
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI12 0xfc04410c
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI13 0xfc04410d
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI14 0xfc04410e
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI15 0xfc04410f
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI16 0xfc044110
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI17 0xfc044111
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI18 0xfc044112
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI19 0xfc044113
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI20 0xfc044114
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI21 0xfc044115
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI22 0xfc044116
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI23 0xfc044117
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI24 0xfc044118
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI25 0xfc044119
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI26 0xfc04411a
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI27 0xfc04411b
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI28 0xfc04411c
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI29 0xfc04411d
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI30 0xfc04411e
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI31 0xfc04411f
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI32 0xfc044120
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI33 0xfc044121
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI34 0xfc044122
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI35 0xfc044123
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI36 0xfc044124
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI37 0xfc044125
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI38 0xfc044126
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI39 0xfc044127
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI40 0xfc044128
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI41 0xfc044129
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI42 0xfc04412a
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI43 0xfc04412b
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI44 0xfc04412c
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI45 0xfc04412d
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI46 0xfc04412e
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI47 0xfc04412f
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI48 0xfc044130
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI49 0xfc044131
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI50 0xfc044132
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI51 0xfc044133
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI52 0xfc044134
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI53 0xfc044135
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI54 0xfc044136
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI55 0xfc044137
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI56 0xfc044138
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI57 0xfc044139
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI58 0xfc04413a
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI59 0xfc04413b
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI60 0xfc04413c
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI61 0xfc04413d
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI62 0xfc04413e
+no figure: ch19-enhanced-direct-memory-access-edma DCHPRI63 0xfc04413f
+width: ch19-enhanced-direct-memory-access-edma TCD 0xfc045000 is 256 bits; left out
+figure name differs: ch19-enhanced-direct-memory-access-edma EDMA_ERQ 0xfc04400c mapped as EDMA_ERQL; its field table names the register, fields taken
+figure name differs: ch19-enhanced-direct-memory-access-edma EDNA_EEIL 0xfc044014 mapped as EDMA_EEIL
+figure name differs: ch19-enhanced-direct-memory-access-edma EDNA_CEEI 0xfc04401b mapped as EDMA_CEEI; its field table names the register, fields taken
+figure name differs: ch19-enhanced-direct-memory-access-edma EDMA_HRSH 0xfc044030 mapped as EDMA_RSH
+figure name differs: ch19-enhanced-direct-memory-access-edma EDMA_HRSL 0xfc044034 mapped as EDMA_RSL; its field table names the register, fields taken
+no figure: ch21-ddr-sdram-memory-controller-ddrmc DDR_CR11 0xfc0b802c
+no fields: ch21-ddr-sdram-memory-controller-ddrmc DDR_CR25 0xfc0b8064
+no fields: ch21-ddr-sdram-memory-controller-ddrmc DDR_CR27 0xfc0b806c
+access: ch21-ddr-sdram-memory-controller-ddrmc DDR_CR44 0xfc0b80b0 figure's W row is blank; VERSION made read-only
+no fields: ch21-ddr-sdram-memory-controller-ddrmc DDR_CR53 0xfc0b80d4
+figure name differs: ch21-ddr-sdram-memory-controller-ddrmc DDR_CR 0xfc0b80f0 mapped as DDR_CR60; its field table names the register, fields taken
+unread map row: ch22-nand-flash-controller-nfc 0xfc0fc000 SRAM buffer
+no fields: ch22-nand-flash-controller-nfc NFC_RAI 0xfc0fff14
+no fields: ch22-nand-flash-controller-nfc NFC_DMA2 0xfc0fff34
+no fields: ch22-nand-flash-controller-nfc NFC_SWAP 0xfc0fff28
+no fields: ch22-nand-flash-controller-nfc NFC_SECSZ 0xfc0fff2c
+no figure: ch24-universal-serial-bus-interface-on-the-go-module ID 0xfc0b0000
+no fields: ch24-universal-serial-bus-interface-on-the-go-module HWHOST 0xfc0b0008
+no fields: ch24-universal-serial-bus-interface-on-the-go-module CAPLENGTH 0xfc0b0103
+no fields: ch24-universal-serial-bus-interface-on-the-go-module DCIVERSION 0xfc0b0122
+no fields: ch24-universal-serial-bus-interface-on-the-go-module CONFIGFLAG 0xfc0b0180
+no figure: ch24-universal-serial-bus-interface-on-the-go-module EPCR3 0xfc0b01cc
+figure name differs: ch24-universal-serial-bus-interface-on-the-go-module USBMODE 0xfc0b01a8 mapped as MODE; its field table names the register, fields taken
+no map row: ch24-universal-serial-bus-interface-on-the-go-module EPCR3 0xfc0b01ca
+no fields: ch25-enhanced-secure-digital-host-controller-esdhc CMDRSP0 0xfc0cc010
+no fields: ch25-enhanced-secure-digital-host-controller-esdhc CMDRSP1 0xfc0cc014
+no fields: ch25-enhanced-secure-digital-host-controller-esdhc CMDRSP2 0xfc0cc018
+no fields: ch25-enhanced-secure-digital-host-controller-esdhc CMDRSP3 0xfc0cc01c
+no figure: ch25-enhanced-secure-digital-host-controller-esdhc IRQSTATEN 0xfc0cc034
+no figure: ch25-enhanced-secure-digital-host-controller-esdhc AUTOC12ERR 0xfc0cc03c
+access: ch25-enhanced-secure-digital-host-controller-esdhc ADMAESR 0xfc0cc054 figure's W row is blank; ES, LME, DCE made read-only
+not memory-mapped: ch26-cryptographic-acceleration-unit-cau memory map has no absolute addresses
+no figure: ch27-random-number-generator-rng RNGVER 0xfc0c4000
+no figure: ch27-random-number-generator-rng RNGCMD 0xfc0c4004
+no figure: ch27-random-number-generator-rng RNGCR 0xfc0c4008
+no figure: ch27-random-number-generator-rng RNGSR 0xfc0c400c
+no figure: ch27-random-number-generator-rng RNGESR 0xfc0c4010
+no figure: ch27-random-number-generator-rng RNGOUT 0xfc0c4014
+no figure: ch27-random-number-generator-rng RNGER 0xfc0c4018
+no fields: ch28-subscriber-identification-module-sim SIM_TBUF1 0xfc0ac00c
+no figure: ch28-subscriber-identification-module-sim SIM_RSR 0xfc0ac02c
+no fields: ch28-subscriber-identification-module-sim SIM_TBUF0 0xfc0ac034
+figure name differs: ch28-subscriber-identification-module-sim INT_MASK 0xfc0ac030 mapped as SIM_IMR; its field table names the register, fields taken
+figure name differs: ch28-subscriber-identification-module-sim SIM_FORMAT 0xfc0ac040 mapped as SIM_FORMAT0; its field table names the register, fields taken
+figure name differs: ch28-subscriber-identification-module-sim SIM_BWTL 0xfc0ac060 mapped as SIM_BWT
+no figure: ch29-analog-digital-converter-adc ADC_CR1 0xfc094000
+no figure: ch29-analog-digital-converter-adc ADC_CR2 0xfc094002
+no figure: ch29-analog-digital-converter-adc ADC_ZCCR 0xfc094004
+no figure: ch29-analog-digital-converter-adc ADC_LST1 0xfc094006
+no figure: ch29-analog-digital-converter-adc ADC_LST2 0xfc094008
+no figure: ch29-analog-digital-converter-adc ADC_SDIS 0xfc09400a
+no figure: ch29-analog-digital-converter-adc ADC_SR 0xfc09400c
+no figure: ch29-analog-digital-converter-adc ADC_LSR 0xfc09400e
+no figure: ch29-analog-digital-converter-adc ADC_ZCSR 0xfc094010
+no fields: ch29-analog-digital-converter-adc ADC_LLMT0 0xfc094022
+no fields: ch29-analog-digital-converter-adc ADC_LLMT1 0xfc094024
+no fields: ch29-analog-digital-converter-adc ADC_LLMT2 0xfc094026
+no fields: ch29-analog-digital-converter-adc ADC_LLMT3 0xfc094028
+no fields: ch29-analog-digital-converter-adc ADC_LLMT4 0xfc09402a
+no fields: ch29-analog-digital-converter-adc ADC_LLMT5 0xfc09402c
+no fields: ch29-analog-digital-converter-adc ADC_LLMT6 0xfc09402e
+no fields: ch29-analog-digital-converter-adc ADC_LLMT7 0xfc094030
+no fields: ch29-analog-digital-converter-adc ADC_HLMT0 0xfc094032
+no fields: ch29-analog-digital-converter-adc ADC_HLMT1 0xfc094034
+no fields: ch29-analog-digital-converter-adc ADC_HLMT2 0xfc094036
+no fields: ch29-analog-digital-converter-adc ADC_HLMT3 0xfc094038
+no fields: ch29-analog-digital-converter-adc ADC_HLMT4 0xfc09403a
+no fields: ch29-analog-digital-converter-adc ADC_HLMT5 0xfc09403c
+no fields: ch29-analog-digital-converter-adc ADC_HLMT6 0xfc09403e
+no fields: ch29-analog-digital-converter-adc ADC_HLMT7 0xfc094040
+no fields: ch29-analog-digital-converter-adc ADC_PWR2 0xfc094056
+no fields: ch29-analog-digital-converter-adc ADC_DIV 0xfc094058
+no fields: ch29-analog-digital-converter-adc ADC_ASDIV 0xfc09405a
+no fields: ch30-digital-to-analog-converter-dac DAC_DATA 0xfc098002
+no fields: ch30-digital-to-analog-converter-dac DAC_STEP 0xfc098004
+no fields: ch30-digital-to-analog-converter-dac DAC_MIN 0xfc098006
+no fields: ch30-digital-to-analog-converter-dac DAC_MAX 0xfc098008
+no fields: ch30-digital-to-analog-converter-dac DAC_SR 0xfc09800a
+unread map row: ch31-10-100mbps-ethernet-mac-net-core 0xfc0d81c4 no register in the row
+unread map row: ch31-10-100mbps-ethernet-mac-net-core 0xfc0d8418 no register in the row
+name: ch31-10-100mbps-ethernet-mac-net-core title gives no identifier; named ENET from its registers
+field row unread: ch31-10-100mbps-ethernet-mac-net-core ENET_EIMR 30–15<br>See<br>Figure 31-3<br>andTable 31-6
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_EIMR 0xfc0d4008
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_PALR 0xfc0d40e4
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_OPD 0xfc0d40ec
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_IAUR 0xfc0d4118
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_IALR 0xfc0d411c
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_GAUR 0xfc0d4120
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_GALR 0xfc0d4124
+no figure: ch31-10-100mbps-ethernet-mac-net-core ENET_FRBR 0xfc0d414c
+no figure: ch31-10-100mbps-ethernet-mac-net-core ENET_FRSR 0xfc0d4150
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_RDSR 0xfc0d4180
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_TDSR 0xfc0d4184
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_ATPER 0xfc0d440c
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET_ATSTMP 0xfc0d4418
+no map row: ch31-10-100mbps-ethernet-mac-net-core ENET1_RACC 0xfc0d81c4
+no map row: ch31-10-100mbps-ethernet-mac-net-core ENET1_ATSTMP 0xfc0d8418
+no fields: ch31-10-100mbps-ethernet-mac-net-core ENET1_ATSTMP 0xfc0d8418
+unread map row: ch32-ethernet-switch 0xfc0dc09c Por 0 Backpressure Congestion Threshold
+unread map row: ch32-ethernet-switch 0xfc0dc0fc no register in the row
+unread map row: ch32-ethernet-switch 0xfc0dc108 no register in the row
+unread map row: ch32-ethernet-switch 0xfc0dc188 no register in the row
+unread map row: ch32-ethernet-switch 0xfc0dc2fc no register in the row
+unread map row: ch32-ethernet-switch 0xfc0e0000 MAC address lookup table
+address range without a letter range: ch32-ethernet-switch ESW_P_n_ID
+stride row without an index range: ch32-ethernet-switch ESW_P_n_OQC
+stride row without an index range: ch32-ethernet-switch ESW_P_n_MVID
+stride row without an index range: ch32-ethernet-switch ESW_P_n_MVTAG
+no fields: ch32-ethernet-switch ESW_REV 0xfc0dc000
+no fields: ch32-ethernet-switch ESW_SCR 0xfc0dc004
+no figure: ch32-ethernet-switch ESW_VRES2 0xfc0dc288
+no figure: ch32-ethernet-switch ESW_VRES3 0xfc0dc28c
+no figure: ch32-ethernet-switch ESW_VRES4 0xfc0dc290
+no figure: ch32-ethernet-switch ESW_VRES5 0xfc0dc294
+no figure: ch32-ethernet-switch ESW_VRES6 0xfc0dc298
+no figure: ch32-ethernet-switch ESW_VRES7 0xfc0dc29c
+no figure: ch32-ethernet-switch ESW_VRES8 0xfc0dc2a0
+no figure: ch32-ethernet-switch ESW_VRES9 0xfc0dc2a4
+no figure: ch32-ethernet-switch ESW_VRES10 0xfc0dc2a8
+no figure: ch32-ethernet-switch ESW_VRES11 0xfc0dc2ac
+no figure: ch32-ethernet-switch ESW_VRES12 0xfc0dc2b0
+no figure: ch32-ethernet-switch ESW_VRES13 0xfc0dc2b4
+no figure: ch32-ethernet-switch ESW_VRES14 0xfc0dc2b8
+no figure: ch32-ethernet-switch ESW_VRES15 0xfc0dc2bc
+no figure: ch32-ethernet-switch ESW_VRES16 0xfc0dc2c0
+no figure: ch32-ethernet-switch ESW_VRES17 0xfc0dc2c4
+no figure: ch32-ethernet-switch ESW_VRES18 0xfc0dc2c8
+no figure: ch32-ethernet-switch ESW_VRES19 0xfc0dc2cc
+no figure: ch32-ethernet-switch ESW_VRES20 0xfc0dc2d0
+no figure: ch32-ethernet-switch ESW_VRES21 0xfc0dc2d4
+no figure: ch32-ethernet-switch ESW_VRES22 0xfc0dc2d8
+no figure: ch32-ethernet-switch ESW_VRES23 0xfc0dc2dc
+no figure: ch32-ethernet-switch ESW_VRES24 0xfc0dc2e0
+no figure: ch32-ethernet-switch ESW_VRES25 0xfc0dc2e4
+no figure: ch32-ethernet-switch ESW_VRES26 0xfc0dc2e8
+no figure: ch32-ethernet-switch ESW_VRES27 0xfc0dc2ec
+no figure: ch32-ethernet-switch ESW_VRES28 0xfc0dc2f0
+no figure: ch32-ethernet-switch ESW_VRES29 0xfc0dc2f4
+no figure: ch32-ethernet-switch ESW_VRES30 0xfc0dc2f8
+no fields: ch32-ethernet-switch ESW_DISCN 0xfc0dc300
+no fields: ch32-ethernet-switch ESW_DISCB 0xfc0dc304
+no fields: ch32-ethernet-switch ESW_NDISCN 0xfc0dc308
+no fields: ch32-ethernet-switch ESW_NDISCB 0xfc0dc30c
+no figure: ch32-ethernet-switch ESW_PBL 0xfc0dc31c
+field row unread: ch32-ethernet-switch ESW_IMR 9–0<br>See<br>Figure 32-41
+no fields: ch32-ethernet-switch ESW_IMR 0xfc0dc404
+no figure: ch32-ethernet-switch ESW_RDSR 0xfc0dc408
+no figure: ch32-ethernet-switch ESW_TDSR 0xfc0dc40c
+field table names another register: ch32-ethernet-switch ESWTDAR 0xfc0dc418 table 'ENET _TDAR'; left out
+no fields: ch32-ethernet-switch ESWTDAR 0xfc0dc418
+access: ch32-ethernet-switch ESW_LREC0 0xfc0dc500 figure's W row is blank; MAC_ADDR0 made read-only
+access: ch32-ethernet-switch ESW_LREC1 0xfc0dc504 figure's W row is blank; MAC_ADDR1, HASH, SWPORT made read-only
+access: ch32-ethernet-switch ESWLSR 0xfc0dc508 figure's W row is blank; DA made read-only
+figure name differs: ch32-ethernet-switch ESW_VIMSEL 0xfc0dc030 mapped as ESW_VIMEN; its field table names the register, fields taken
+no map row: ch32-ethernet-switch ESW_P0BCT 0xfc0dc09c
+no width: ch32-ethernet-switch ESW_P0BCT 0xfc0dc09c figure has no bit numbering (32 assumed)
+no fields: ch32-ethernet-switch ESW_P0BCT 0xfc0dc09c
+figure name differs: ch32-ethernet-switch ESW_P0VRES 0xfc0dc100 mapped as ESW_PVRES; its field table names the register, fields taken
+no map row: ch32-ethernet-switch ESW_P1VRES 0xfc0dc104
+no map row: ch32-ethernet-switch ESW_P2VRES 0xfc0dc108
+figure name differs: ch32-ethernet-switch ESW_P0RES 0xfc0dc180 mapped as ESW_PRES; its field table names the register, fields taken
+no map row: ch32-ethernet-switch ESW_P1RES 0xfc0dc184
+no map row: ch32-ethernet-switch ESW_P2RES 0xfc0dc188
+no map row: ch32-ethernet-switch ESW_P0ID 0xfc0dc200
+no map row: ch32-ethernet-switch ESW_P1ID 0xfc0dc204
+no map row: ch32-ethernet-switch ESW_P2ID 0xfc0dc208
+no map row: ch32-ethernet-switch ESW_P0OQC 0xfc0dc310
+no fields: ch32-ethernet-switch ESW_P0OQC 0xfc0dc310
+no map row: ch32-ethernet-switch ESW_P1OQC 0xfc0dc320
+no fields: ch32-ethernet-switch ESW_P1OQC 0xfc0dc320
+no map row: ch32-ethernet-switch ESW_P2OQC 0xfc0dc330
+no fields: ch32-ethernet-switch ESW_P2OQC 0xfc0dc330
+no map row: ch32-ethernet-switch ESW_P0MVID 0xfc0dc314
+no fields: ch32-ethernet-switch ESW_P0MVID 0xfc0dc314
+no map row: ch32-ethernet-switch ESW_P1MVID 0xfc0dc324
+no fields: ch32-ethernet-switch ESW_P1MVID 0xfc0dc324
+no map row: ch32-ethernet-switch ESW_P2MVID 0xfc0dc334
+no fields: ch32-ethernet-switch ESW_P2MVID 0xfc0dc334
+no map row: ch32-ethernet-switch ESW_P0MVTAG 0xfc0dc338
+no fields: ch32-ethernet-switch ESW_P0MVTAG 0xfc0dc338
+figure name differs: ch32-ethernet-switch ESW_P0BL 0xfc0dc31c mapped as ESW_PBL
+no map row: ch32-ethernet-switch ESW_P1BL 0xfc0dc32c
+no fields: ch32-ethernet-switch ESW_P1BL 0xfc0dc32c
+no map row: ch32-ethernet-switch ESW_P2BL 0xfc0dc33c
+no fields: ch32-ethernet-switch ESW_P2BL 0xfc0dc33c
+figure name differs: ch32-ethernet-switch ESW_RDSR 0xfc0dc308 mapped as ESW_NDISCN
+figure name differs: ch32-ethernet-switch ESW_TSDR 0xfc0dc40c mapped as ESW_TDSR
+unread map row: ch33-flexcan 0xfc020000 FlexCAN Module Configuration
+unread map row: ch33-flexcan 0xfc024000 CANMCR_n_
+register range wider than a register: ch33-flexcan MB0–15 (2048 bits)
+register range wider than a register: ch33-flexcan RXIMR_n_0–15 (2048 bits)
+field row unread: ch33-flexcan RXGMASK MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXGMASK MI17–0 at bits 17-0
+no fields: ch33-flexcan RXGMASK 0xfc020010
+field row unread: ch33-flexcan RX14MASk MI28–18 at bits 28-18
+field row unread: ch33-flexcan RX14MASk MI17–0 at bits 17-0
+no fields: ch33-flexcan RX14MASk 0xfc020014
+field row unread: ch33-flexcan RX15MASK MI28–18 at bits 28-18
+field row unread: ch33-flexcan RX15MASK MI17–0 at bits 17-0
+no fields: ch33-flexcan RX15MASK 0xfc020018
+field row unread: ch33-flexcan IFLAG 15–8<br>BUF15I–<br>BUF8I
+field row unread: ch33-flexcan IFLAG 4–0<br>BUF4I–<br>BUF0I
+no map row: ch33-flexcan RXIMR00 0xfc020880
+field row unread: ch33-flexcan RXIMR0 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR0 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR00 0xfc020880
+no map row: ch33-flexcan RXIMR10 0xfc024880
+field row unread: ch33-flexcan RXIMR10 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR10 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR10 0xfc024880
+no map row: ch33-flexcan RXIMR01 0xfc020884
+field row unread: ch33-flexcan RXIMR01 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR01 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR01 0xfc020884
+no map row: ch33-flexcan RXIMR11 0xfc024884
+field row unread: ch33-flexcan RXIMR1 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR1 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR11 0xfc024884
+no map row: ch33-flexcan RXIMR014 0xfc0208b8
+field row unread: ch33-flexcan RXIMR014 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR014 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR014 0xfc0208b8
+no map row: ch33-flexcan RXIMR114 0xfc0248b8
+field row unread: ch33-flexcan RXIMR114 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR114 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR114 0xfc0248b8
+no map row: ch33-flexcan RXIMR015 0xfc0208bc
+field row unread: ch33-flexcan RXIMR015 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR015 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR015 0xfc0208bc
+no map row: ch33-flexcan RXIMR115 0xfc0248bc
+field row unread: ch33-flexcan RXIMR115 MI28–18 at bits 28-18
+field row unread: ch33-flexcan RXIMR115 MI17–0 at bits 17-0
+no fields: ch33-flexcan RXIMR115 0xfc0248bc
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CNT 0xec088000
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CNT 0xec088050
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CNT 0xec0880a0
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CNT 0xec0880f0
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0INIT 0xec088002
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1INIT 0xec088052
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2INIT 0xec0880a2
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3INIT 0xec0880f2
+no figure: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CR1 0xec088006
+no figure: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CR1 0xec088056
+no figure: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CR1 0xec0880a6
+no figure: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CR1 0xec0880f6
+no figure: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2IER 0xec0880bc
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0DISMAP 0xec088022
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1DISMAP 0xec088072
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2DISMAP 0xec0880c2
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3DISMAP 0xec088112
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CVAL0 0xec088034
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CVAL0 0xec088084
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CVAL0 0xec0880d4
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CVAL0 0xec088124
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CVAL1 0xec088038
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CVAL1 0xec088088
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CVAL1 0xec0880d8
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CVAL1 0xec088128
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CVAL2 0xec08803c
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CVAL2 0xec08808c
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CVAL2 0xec0880dc
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CVAL2 0xec08812c
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CVAL3 0xec088040
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CVAL3 0xec088090
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CVAL3 0xec0880e0
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CVAL3 0xec088130
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CVAL4 0xec088044
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CVAL4 0xec088094
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CVAL4 0xec0880e4
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CVAL4 0xec088134
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CVAL5 0xec088048
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CVAL5 0xec088098
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CVAL5 0xec0880e8
+no fields: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CVAL5 0xec088138
+no figure: ch34-motor-control-pulse-width-modulator-mcpwm PWM_FCR 0xec08814c
+no figure: ch34-motor-control-pulse-width-modulator-mcpwm PWM_FFILT 0xec088150
+figure name differs: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2IER 0xec0880ac mapped as PWM_SM2VAL2
+figure name differs: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM0CCYC5 0xec08804a mapped as PWM_SMCCYC5; its field table names the register, fields taken
+no map row: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM2CCYC5 0xec0880ea
+no map row: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM1CCYC5 0xec08809a
+no map row: ch34-motor-control-pulse-width-modulator-mcpwm PWM_SM3CCYC5 0xec08813a
+no fields: ch35-synchronous-serial-interface-ssi SSI_RX0 0xfc0bc008
+no fields: ch35-synchronous-serial-interface-ssi SSI_RX1 0xfc0bc00c
+field row unread: ch35-synchronous-serial-interface-ssi SSI_IER 24–23<br>RFRC<br>TFRC
+no figure: ch35-synchronous-serial-interface-ssi SSI_FCSR 0xfc0bc02c
+no fields: ch35-synchronous-serial-interface-ssi SSI_ATAG 0xfc0bc044
+access: ch35-synchronous-serial-interface-ssi SSI_ACCEN 0xfc0bc054 figure's W row has cells (AC C E N); register write-only, the memory map says read-only
+access: ch35-synchronous-serial-interface-ssi SSI_ACCDIS 0xfc0bc058 figure's W row has cells (ACCDIS); register write-only, the memory map says read-only
+no map row: ch35-synchronous-serial-interface-ssi SSI1_RMASK 0xfc0c804c
+name: ch36-1-wire-module title gives no identifier; named OW from its registers
+no fields: ch36-1-wire-module OW_DIV 0xec008004
+unread map row: ch37-robust-real-time-clock 0xfc0a8040 Standby RAM
+no fields: ch37-robust-real-time-clock RTC_YEARMON 0xfc0a8000
+field row unread: ch37-robust-real-time-clock RTC_DAYS 15–8<br>HOURS<br>…<br>**HOU**
+field row unread: ch37-robust-real-time-clock RTC_DAYS 7–0<br>MINUTES<br>…
+no fields: ch37-robust-real-time-clock RTC_DAYS 0xfc0a8002
+no figure: ch37-robust-real-time-clock RTC_HOURMIN 0xfc0a8004
+no fields: ch37-robust-real-time-clock RTC_SECONDS 0xfc0a8006
+no fields: ch37-robust-real-time-clock RTC_ALM_YRMON 0xfc0a8008
+no fields: ch37-robust-real-time-clock RTC_ALM_DAYS 0xfc0a800a
+no fields: ch37-robust-real-time-clock RTC_ALM_HM 0xfc0a800c
+no fields: ch37-robust-real-time-clock RTC_ALM_SEC 0xfc0a800e
+access: ch37-robust-real-time-clock RTC_SR 0xfc0a8012 figure's W row has cells (w1c w1c); register read-write, the memory map says read-only
+no fields: ch37-robust-real-time-clock RTC_UP_CNTRH 0xfc0a8032
+no fields: ch37-robust-real-time-clock RTC_UP_CNTRL 0xfc0a8034
+no fields: ch38-programmable-interrupt-timers-pit0-pit3 PCNTR 0xfc080004
+no fields: ch39-dma-timers-dtim0-dtim3 DTCR 0xfc070008
+access: ch39-dma-timers-dtim0-dtim3 DTCN 0xfc07000c figure's W row is blank; CNT made read-only
+no fields: ch41-uart-modules URB 0xfc06000c
+no fields: ch41-uart-modules UTB 0xfc06000c
+access: ch41-uart-modules UISR 0xfc060014 shares its address and figure with a write-only register; DB, COS made read-only
+access: ch41-uart-modules UIMR 0xfc060014 shares its address and figure with a read-only register; DB, COS made write-only
+no fields: ch41-uart-modules UBG1 0xfc060018
+no fields: ch41-uart-modules UBG2 0xfc06001c
+unread map row: ch42-i2c-interface 0xec020010 no register in the row
+not memory-mapped: ch43-debug-module 24 rows with offsets/BDM codes and no base address
+no figure: ch23-universal-serial-bus-interface-host-module ID 0xfc0b4000 (described in ch24)
+no figure: ch23-universal-serial-bus-interface-host-module HWHOST 0xfc0b4008 (described in ch24)
+no figure: ch23-universal-serial-bus-interface-host-module CAPLENGTH 0xfc0b4103 (described in ch24)
+no figure: ch23-universal-serial-bus-interface-host-module CONFIGFLAG 0xfc0b4180 (described in ch24)
+duplicate: MISCCR 0xec09000e in ch09 (kept in ch10)
+duplicate: CDRH 0xec090010 in ch09 (kept in ch10)
+duplicate: CDRL 0xec090012 in ch09 (kept in ch10)
+duplicate: WCR 0xfc040013 in ch13 (kept in ch09)
+duplicate: SBFSR 0xec090020 in ch10 (kept in ch11)
+duplicate: SBFCR 0xec090022 in ch10 (kept in ch11)
+duplicate: RGPIO.RGPIO_DATA at 0x6 (kept 0x2)
+duplicate: RGPIO.RGPIO_DIR at 0x8 (kept 0x0)
+duplicate: RGPIO.RGPIO_DATA at 0xa (kept 0x2)
+duplicate: RGPIO.RGPIO_DIR at 0xc (kept 0x0)
+duplicate: RGPIO.RGPIO_DATA at 0xe (kept 0x2)
+alternate: USBOTG.DEVICEADDR shares offset 0x154 with PERIODICLISTBASE
+alternate: USBOTG.EPLISTADDR shares offset 0x158 with ASYNCLISTADDR
+duplicate: USBOTG.EPCR3 at 0x1ca (kept 0x1cc)
+alternate: SSI1.SSI_RMASK shares offset 0x48 with SSI_TMASK
+alternate: UART0.UMR2 shares offset 0x0 with UMR1
+alternate: UART0.UCSR shares offset 0x4 with USR
+alternate: UART0.UTB shares offset 0xc with URB
+alternate: UART0.UACR shares offset 0x10 with UIPCR
+alternate: UART0.UIMR shares offset 0x14 with UISR
+alternate: UART1.UMR2 shares offset 0x0 with UMR1
+alternate: UART1.UCSR shares offset 0x4 with USR
+alternate: UART1.UTB shares offset 0xc with URB
+alternate: UART1.UACR shares offset 0x10 with UIPCR
+alternate: UART1.UIMR shares offset 0x14 with UISR
+alternate: UART2.UMR2 shares offset 0x0 with UMR1
+alternate: UART2.UCSR shares offset 0x4 with USR
+alternate: UART2.UTB shares offset 0xc with URB
+alternate: UART2.UACR shares offset 0x10 with UIPCR
+alternate: UART2.UIMR shares offset 0x14 with UISR
+alternate: UART3.UMR2 shares offset 0x0 with UMR1
+alternate: UART3.UCSR shares offset 0x4 with USR
+alternate: UART3.UTB shares offset 0xc with URB
+alternate: UART3.UACR shares offset 0x10 with UIPCR
+alternate: UART3.UIMR shares offset 0x14 with UISR
+alternate: UART4.UMR2 shares offset 0x0 with UMR1
+alternate: UART4.UCSR shares offset 0x4 with USR
+alternate: UART4.UTB shares offset 0xc with URB
+alternate: UART4.UACR shares offset 0x10 with UIPCR
+alternate: UART4.UIMR shares offset 0x14 with UISR
+alternate: UART5.UMR2 shares offset 0x0 with UMR1
+alternate: UART5.UCSR shares offset 0x4 with USR
+alternate: UART5.UTB shares offset 0xc with URB
+alternate: UART5.UACR shares offset 0x10 with UIPCR
+alternate: UART5.UIMR shares offset 0x14 with UISR
+alternate: UART6.UMR2 shares offset 0x0 with UMR1
+alternate: UART6.UCSR shares offset 0x4 with USR
+alternate: UART6.UTB shares offset 0xc with URB
+alternate: UART6.UACR shares offset 0x10 with UIPCR
+alternate: UART6.UIMR shares offset 0x14 with UISR
+alternate: UART7.UMR2 shares offset 0x0 with UMR1
+alternate: UART7.UCSR shares offset 0x4 with USR
+alternate: UART7.UTB shares offset 0xc with URB
+alternate: UART7.UACR shares offset 0x10 with UIPCR
+alternate: UART7.UIMR shares offset 0x14 with UISR
+alternate: UART8.UMR2 shares offset 0x0 with UMR1
+alternate: UART8.UCSR shares offset 0x4 with USR
+alternate: UART8.UTB shares offset 0xc with URB
+alternate: UART8.UACR shares offset 0x10 with UIPCR
+alternate: UART8.UIMR shares offset 0x14 with UISR
+alternate: UART9.UMR2 shares offset 0x0 with UMR1
+alternate: UART9.UCSR shares offset 0x4 with USR
+alternate: UART9.UTB shares offset 0xc with URB
+alternate: UART9.UACR shares offset 0x10 with UIPCR
+alternate: UART9.UIMR shares offset 0x14 with UISR
+shared block: 0xec090000 CCM, POWER0, RESET, SBF merged into CCM
+shared block: 0xfc040000 POWER1, SCM merged into SCM
+interrupt: INTC2 source 29 (vector 221): flag 'SIM_TSR or' has no name
+interrupt: INTC2 source 34 (vector 226): flag 'ADC_LSR or<br>ADC_ZCSR' has no name
+prefix kept: SSI1.SSI1_RMASK (RMASK exists)
+availability: Table 1-1 row 3: cells that aren't a count taken as present
+availability: Table 1-1 row 4: cells that aren't a count taken as present
+availability: Table 1-1 row 5: cells that aren't a count taken as present
+availability: Table 1-1 row 6: cells that aren't a count taken as present
+availability: Table 1-1 row 7: cells that aren't a count taken as present
+availability: Table 1-1 row 8: cells that aren't a count taken as present
+availability: Table 1-1 row 15: cells that aren't a count taken as present
+availability: Table 1-1 row 25: cells that aren't a count taken as present
+availability: Table 1-1 row 35: cells that aren't a count taken as present
+availability: Table 1-1 row 39: cells that aren't a count taken as present

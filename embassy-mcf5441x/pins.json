@@ -1,0 +1,754 @@
+{
+ "PA0": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_BE/BWE0",
+  "alt1": "FB_TSIZ0",
+  "alt2": null
+ },
+ "PA1": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_BE/BWE1",
+  "alt1": "FB_TSIZ1",
+  "alt2": null
+ },
+ "PA2": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_BE/BWE2",
+  "alt1": "FB_CS2",
+  "alt2": "FB_A0/NFC_CLE"
+ },
+ "PA3": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_BE/BWE3",
+  "alt1": "FB_CS3",
+  "alt2": "FB_A1/NFC_ALE"
+ },
+ "PA4": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_TA",
+  "alt1": null,
+  "alt2": "NFC_R/B"
+ },
+ "PA5": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_R/W/NFC_WE",
+  "alt1": null,
+  "alt2": null
+ },
+ "PA6": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_OE/NFC_RE",
+  "alt1": "FB_TBST/NFC_RE5",
+  "alt2": null
+ },
+ "PA7": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_ALE",
+  "alt1": "FB_TS",
+  "alt2": null
+ },
+ "PB0": {
+  "packages": [
+   "256"
+  ],
+  "primary": "CAN1_TX",
+  "alt1": "UART9_TXD",
+  "alt2": "I2C1_SCL"
+ },
+ "PB1": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "I2C0_SDA",
+  "alt1": "UART8_RXD",
+  "alt2": "CAN0_RX"
+ },
+ "PB2": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "I2C0_SCL",
+  "alt1": "UART8_TXD",
+  "alt2": "CAN0_TX"
+ },
+ "PB3": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_CS0",
+  "alt1": null,
+  "alt2": null
+ },
+ "PB4": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_CS1",
+  "alt1": null,
+  "alt2": "NFC_CE"
+ },
+ "PB5": {
+  "packages": [
+   "256"
+  ],
+  "primary": "FB_CS4",
+  "alt1": "DREQ1",
+  "alt2": null
+ },
+ "PB6": {
+  "packages": [
+   "256"
+  ],
+  "primary": "FB_CS5",
+  "alt1": "DACK1",
+  "alt2": null
+ },
+ "PB7": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "FB_CLK",
+  "alt1": null,
+  "alt2": null
+ },
+ "PC0": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "DSPI0_PCS1/SBF_CS",
+  "alt1": null,
+  "alt2": null
+ },
+ "PC1": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "IRQ1",
+  "alt1": null,
+  "alt2": null
+ },
+ "PC2": {
+  "packages": [
+   "256"
+  ],
+  "primary": "IRQ2",
+  "alt1": "DSPI0_PCS2",
+  "alt2": "USBH_VBUS_OC"
+ },
+ "PC3": {
+  "packages": [
+   "256"
+  ],
+  "primary": "IRQ3",
+  "alt1": "DSPI0_PCS3",
+  "alt2": "USBH_VBUS_EN"
+ },
+ "PC4": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "IRQ4",
+  "alt1": "DREQ0",
+  "alt2": null
+ },
+ "PC5": {
+  "packages": [
+   "256"
+  ],
+  "primary": "IRQ6",
+  "alt1": null,
+  "alt2": "USB_CLKIN"
+ },
+ "PC6": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "IRQ7",
+  "alt1": null,
+  "alt2": null
+ },
+ "PC7": {
+  "packages": [
+   "256"
+  ],
+  "primary": "CAN1_RX",
+  "alt1": "UART9_RXD",
+  "alt2": "I2C1_SDA"
+ },
+ "PD0": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "T1IN/PWM_EXTA1",
+  "alt1": "T1OUT",
+  "alt2": "SDHC_DAT1"
+ },
+ "PD1": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "T2IN/PWM_EXTA2",
+  "alt1": "T2OUT",
+  "alt2": "SDHC_DAT2"
+ },
+ "PD2": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "T3IN/PWM_EXTA3",
+  "alt1": "T3OUT",
+  "alt2": "USBO_VBUS_EN/ULPI_DIR"
+ },
+ "PD3": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "OW_DAT",
+  "alt1": "DACK0",
+  "alt2": null
+ },
+ "PD4": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "DSPI0_SOUT/SBF_DO",
+  "alt1": "UART3_TXD",
+  "alt2": "SDHC_DAT0"
+ },
+ "PD5": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "DSPI0_SIN/SBF_DI",
+  "alt1": "UART3_RXD",
+  "alt2": "SDHC_CMD"
+ },
+ "PD6": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "DSPI0_SCK/SBF_CK",
+  "alt1": "I2C3_SCL",
+  "alt2": "SDHC_CLK"
+ },
+ "PD7": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "DSPI0_PCS0/SS",
+  "alt1": "I2C3_SDA",
+  "alt2": "SDHC_DAT3"
+ },
+ "PE0": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART1_RXD",
+  "alt1": "I2C5_SDA",
+  "alt2": "DSPI3_SIN"
+ },
+ "PE1": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART1_RTS",
+  "alt1": "UART5_RXD",
+  "alt2": "DSPI3_PCS0"
+ },
+ "PE2": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART1_CTS",
+  "alt1": "UART5_TXD",
+  "alt2": "DSPI3_SCK"
+ },
+ "PE3": {
+  "packages": [
+   "256"
+  ],
+  "primary": "UART2_TXD",
+  "alt1": "PWM_B3",
+  "alt2": "SSI1_TXD"
+ },
+ "PE4": {
+  "packages": [
+   "256"
+  ],
+  "primary": "UART2_RXD",
+  "alt1": "PWM_A3",
+  "alt2": "SSI1_RXD"
+ },
+ "PE5": {
+  "packages": [
+   "256"
+  ],
+  "primary": "UART2_RTS",
+  "alt1": "UART6_RXD",
+  "alt2": "SSI1_FS"
+ },
+ "PE6": {
+  "packages": [
+   "256"
+  ],
+  "primary": "UART2_CTS",
+  "alt1": "UART6_TXD",
+  "alt2": "SSI1_BCLK"
+ },
+ "PE7": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "T0IN/PWM_EXTA0",
+  "alt1": "T0OUT",
+  "alt2": "USBO_VBUS_OC/ULPI_NXT"
+ },
+ "PF0": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SDHC_DAT1",
+  "alt1": "PWM_A2",
+  "alt2": "DSPI1_PCS1"
+ },
+ "PF1": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SDHC_DAT2",
+  "alt1": "PWM_B1",
+  "alt2": "DSPI1_PCS2"
+ },
+ "PF2": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SDHC_DAT3",
+  "alt1": "PWM_A1",
+  "alt2": "DSPI1_PCS0"
+ },
+ "PF3": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART0_TXD",
+  "alt1": "I2C4_SCL",
+  "alt2": "DSPI2_SOUT"
+ },
+ "PF4": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART0_RXD",
+  "alt1": "I2C4_SDA",
+  "alt2": "DSPI2_SIN"
+ },
+ "PF5": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART0_RTS",
+  "alt1": "UART4_RXD",
+  "alt2": "DSPI2_PCS0"
+ },
+ "PF6": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART0_CTS",
+  "alt1": "UART4_TXD",
+  "alt2": "DSPI2_SCK"
+ },
+ "PF7": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "UART1_TXD",
+  "alt1": "I2C5_SCL",
+  "alt2": "DSPI3_SOUT"
+ },
+ "PG0": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SIM0CLK",
+  "alt1": "PWMFAULT1",
+  "alt2": "SDHCDAT4"
+ },
+ "PG1": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SIM0_PD",
+  "alt1": "PWM_SYNC",
+  "alt2": "SDHC_DAT5"
+ },
+ "PG2": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SIM0_RST",
+  "alt1": "PWM_FORCE",
+  "alt2": "SDHC_DAT6"
+ },
+ "PG3": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SIM0_VEN",
+  "alt1": "PWM_FAULT0",
+  "alt2": null
+ },
+ "PG4": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SIM0_DATA",
+  "alt1": "PWM_FAULT2",
+  "alt2": "SDHC_DAT7"
+ },
+ "PG5": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SDHC_CLK",
+  "alt1": "PWM_A0",
+  "alt2": "DSPI1_SCK"
+ },
+ "PG6": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SDHC_CMD",
+  "alt1": "PWM_B0",
+  "alt2": "DSPI1_SIN"
+ },
+ "PG7": {
+  "packages": [
+   "256"
+  ],
+  "primary": "SDHC_DAT0",
+  "alt1": "PWM_B2",
+  "alt2": "DSPI1_SOUT"
+ },
+ "PH0": {
+  "packages": [
+   "256"
+  ],
+  "primary": "DDATA2",
+  "alt1": null,
+  "alt2": null
+ },
+ "PH1": {
+  "packages": [
+   "256"
+  ],
+  "primary": "DDATA3",
+  "alt1": null,
+  "alt2": null
+ },
+ "PH2": {
+  "packages": [
+   "196"
+  ],
+  "primary": "ALLPST",
+  "alt1": null,
+  "alt2": null
+ },
+ "PH3": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "SSI0_BCLK",
+  "alt1": "UART7_RXD",
+  "alt2": "SIM1_PD"
+ },
+ "PH4": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "SSI0_MCLK",
+  "alt1": "SSI_CLKIN",
+  "alt2": "SIM1_CLK"
+ },
+ "PH5": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "SSI0_FS",
+  "alt1": "UART7_TXD",
+  "alt2": "SIM1_RST"
+ },
+ "PH6": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "SSI0_TXD",
+  "alt1": "I2C2_SCL",
+  "alt2": "SIM1_DATA"
+ },
+ "PH7": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "SSI0_RXD",
+  "alt1": "I2C2_SDA",
+  "alt2": "SIM1_VEN"
+ },
+ "PI0": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_MDIO",
+  "alt1": "RMII0_MDIO",
+  "alt2": null
+ },
+ "PI1": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_MDC",
+  "alt1": "RMII0_MDC",
+  "alt2": null
+ },
+ "PI2": {
+  "packages": [
+   "256"
+  ],
+  "primary": "PST0",
+  "alt1": null,
+  "alt2": null
+ },
+ "PI3": {
+  "packages": [
+   "256"
+  ],
+  "primary": "PST1",
+  "alt1": null,
+  "alt2": null
+ },
+ "PI4": {
+  "packages": [
+   "256"
+  ],
+  "primary": "PST2",
+  "alt1": null,
+  "alt2": null
+ },
+ "PI5": {
+  "packages": [
+   "256"
+  ],
+  "primary": "PST3",
+  "alt1": null,
+  "alt2": null
+ },
+ "PI6": {
+  "packages": [
+   "256"
+  ],
+  "primary": "DDATA0",
+  "alt1": null,
+  "alt2": null
+ },
+ "PI7": {
+  "packages": [
+   "256"
+  ],
+  "primary": "DDATA1",
+  "alt1": null,
+  "alt2": null
+ },
+ "PJ0": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_COL",
+  "alt1": "RMII1_MDC",
+  "alt2": "ULPI_STP"
+ },
+ "PJ1": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_TXEN",
+  "alt1": "RMII0_TXEN",
+  "alt2": null
+ },
+ "PJ2": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_TXD0",
+  "alt1": "RMII0_TXD0",
+  "alt2": null
+ },
+ "PJ3": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_TXD1",
+  "alt1": "RMII0_TXD1",
+  "alt2": null
+ },
+ "PJ4": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_RXER",
+  "alt1": "RMII0_RXER",
+  "alt2": null
+ },
+ "PJ5": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_RXD0",
+  "alt1": "RMII0_RXD0",
+  "alt2": null
+ },
+ "PJ6": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_RXD1",
+  "alt1": "RMII0_RXD1",
+  "alt2": null
+ },
+ "PJ7": {
+  "packages": [
+   "196",
+   "256"
+  ],
+  "primary": "MII0_RXDV",
+  "alt1": "RMII0_CRS_DV",
+  "alt2": null
+ },
+ "PK0": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_TXCLK",
+  "alt1": "RMII1_TXEN",
+  "alt2": "ULPI_DATA7"
+ },
+ "PK1": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_TXD2",
+  "alt1": "RMII1_TXD0",
+  "alt2": "ULPI_DATA2"
+ },
+ "PK2": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_TXD3",
+  "alt1": "RMII1_TXD1",
+  "alt2": "ULPI_DATA3"
+ },
+ "PK3": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_RXCLK",
+  "alt1": "RMII1_RXER",
+  "alt2": "ULPI_DATA6"
+ },
+ "PK4": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_RXD2",
+  "alt1": "RMII1_RXD0",
+  "alt2": "ULPI_DATA0"
+ },
+ "PK5": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_RXD3",
+  "alt1": "RMII1_RXD1",
+  "alt2": "ULPI_DATA1"
+ },
+ "PK6": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_CRS",
+  "alt1": "RMII1_CRS_DV",
+  "alt2": "ULPI_DATA5"
+ },
+ "PK7": {
+  "packages": [
+   "256"
+  ],
+  "primary": "MII0_TXER",
+  "alt1": "RMII1_MDIO",
+  "alt2": "ULPI_DATA4"
+ }
+}

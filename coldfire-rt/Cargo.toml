@@ -1,0 +1,23 @@
+[package]
+name = "coldfire-rt"
+version.workspace = true
+edition = "2024"
+description = "Minimal runtime for ColdFire V4e: reset, RAM vector table, exception trampolines"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["coldfire", "m68k", "runtime", "startup"]
+categories = ["embedded", "no-std", "hardware-support"]
+
+[features]
+default = ["critical-section-single-core"]
+critical-section-single-core = ["coldfire/critical-section-single-core"]
+
+# the runtime is ColdFire assembly; a host build is the re-exports and the handler record only
+[dependencies]
+coldfire = { version = "0.1.0", path = "../coldfire" }
+coldfire-rt-macros = { version = "0.1.0", path = "../coldfire-rt-macros" }
+
+[package.metadata.docs.rs]
+# docs.rs builds on a host with --cfg docsrs: the public items document, the startup assembly compiles out
+rustdoc-args = ["--cfg", "docsrs"]

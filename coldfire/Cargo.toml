@@ -1,0 +1,22 @@
+[package]
+name = "coldfire"
+version.workspace = true
+edition = "2024"
+description = "Core support for ColdFire V4e: MMIO, status register, interrupts, critical section, EMAC"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["coldfire", "m68k", "emac", "mmio"]
+categories = ["embedded", "no-std", "hardware-support"]
+
+[features]
+critical-section-single-core = ["dep:critical-section", "critical-section/restore-state-u16"]
+emac = []
+
+# ColdFire-only: the critical-section implementation is compiled for m68k alone
+[target.'cfg(target_arch = "m68k")'.dependencies]
+critical-section = { workspace = true, optional = true }
+
+[package.metadata.docs.rs]
+# the EMAC is documented on any target; the rest of the ColdFire-only modules compile out on docs.rs's host
+features = ["emac"]
