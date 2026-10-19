@@ -48,6 +48,9 @@ pub struct Ddr {
 /// Where in the sequence an [`ExtraWrite`] runs.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Phase {
+    /// Inside the limp-mode window, after the PLL writes and before leaving limp mode (clock-source registers such
+    /// as MISCCR2 written whole). Opens the window under `Pll::Keep` too.
+    InLimpWindow,
     /// Right after the PLL is set (or checked) and locked.
     AfterPll,
     /// Right before the DDR controller's clock is ungated.

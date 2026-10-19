@@ -137,3 +137,12 @@ def test_nand_relocator_runs_in_place(elfs):
     assert head[0] <= sym["__coldfire_rt_reloc"] < head[0] + head[1]
     assert sym["__boot_lma"] == head[0] + head[1] and sym["__boot_vma"] == 0x8000_0000
     assert sym["__boot_size"] <= 3968
+
+
+def test_boot_part_register_reads_keep_their_width(elfs):
+    # a 32-bit register read folded into a byte-wide bit test on memory reads the wrong width (the NFC's registers
+    # answer 32-bit accesses only)
+    for s, elf in elfs.items():
+        out = subprocess.run(["m68k-elf-objdump", "-d", "-m", "m68k:cfv4e", "-j", ".boot.head", "-j", ".boot", str(elf)],
+                             capture_output=True, text=True, check=True).stdout
+        assert [l for l in out.splitlines() if re.search(r"\b(btst|bset|bclr|bchg)\s+#\d+,%a\d@", l)] == [], s

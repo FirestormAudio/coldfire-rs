@@ -131,7 +131,12 @@ impl Builder {
         let mut i = 0;
         while i < w.len() {
             let e = w[i];
-            if matches!((e.phase, phase), (Phase::AfterPll, Phase::AfterPll) | (Phase::BeforeDdrController, Phase::BeforeDdrController)) {
+            if matches!(
+                (e.phase, phase),
+                (Phase::InLimpWindow, Phase::InLimpWindow)
+                    | (Phase::AfterPll, Phase::AfterPll)
+                    | (Phase::BeforeDdrController, Phase::BeforeDdrController)
+            ) {
                 let width = match e.width {
                     Width::W8 => 1,
                     Width::W16 => 2,
@@ -170,7 +175,13 @@ pub const fn sequence(c: &BootConfig) -> OpList {
         dr_set |= dr_value(s);
     }
     let dr = dr_keep != !0u32;
-    if set || dr || c.ddr2clk.is_some() {
+    let mut in_limp = false;
+    let mut i = 0;
+    while i < c.extra.len() {
+        in_limp |= matches!(c.extra[i].phase, Phase::InLimpWindow);
+        i += 1;
+    }
+    if set || dr || c.ddr2clk.is_some() || in_limp {
         // RM 8.1.3.3: change the PLL in limp mode, running from SRAM or the boot flash; PLL_DR in one 32-bit write
         b = b.rmw(2, MISCCR, 0xFFFF, LIMP);
         if set {
@@ -182,6 +193,7 @@ pub const fn sequence(c: &BootConfig) -> OpList {
         if let Some(d) = c.ddr2clk {
             b = b.rmw(2, MISCCR2, 0xFFFF & !DDR2CLK, if matches!(d, Ddr2Clk::Vco) { DDR2CLK } else { 0 });
         }
+        b = b.extras(c.extra, Phase::InLimpWindow);
         b = b.rmw(2, MISCCR, 0xFFFF & !LIMP, 0).poll(PLL_SR, LOCK, LOCK, MARK_PLL_LOCK).push(op(KIND_DELAY, 0, 0, AFTER_LIMP, 0));
     }
     b = b.extras(c.extra, Phase::AfterPll).extras(c.extra, Phase::BeforeDdrController);
@@ -347,6 +359,16 @@ mod tests {
         assert!(lock < after_pll && after_pll < before && before < ppmcr && ppmcr < mscr && mscr < rcr[0]);
         assert!(rcr[1] < padcr && padcr < crs[0] && crs.windows(2).all(|w| w[0] < w[1]));
         assert!(*crs.last().unwrap() < start && start < done);
+    }
+
+    #[test]
+    fn in_limp_extras_run_inside_the_window() {
+        static W: [ExtraWrite; 1] = [ExtraWrite { phase: Phase::InLimpWindow, width: Width::W16, addr: MISCCR2, value: 0x409F }];
+        let o = list(&builder(Pll::Keep(MANUAL)).extra(&W).build());
+        let m = at(&o, KIND_RMW, MISCCR);
+        let w = first(&o, KIND_WRITE, MISCCR2);
+        assert_eq!((o[w].width, o[w].a), (2, 0x409F));
+        assert!(m.len() == 2 && m[0] < w && w < m[1] && m[1] < first(&o, KIND_POLL, PLL_SR));
     }
 
     #[test]
