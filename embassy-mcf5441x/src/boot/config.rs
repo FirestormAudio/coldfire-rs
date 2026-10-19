@@ -82,6 +82,7 @@ pub struct FlexBusCs0 {
 /// Where the image's bytes are once the boot part runs. `Mapped(base)` and `SpiFlash { offset }` name where image
 /// offset 0 (the initial SP) sits; the app part is found from there by its offset in the image. `Nand`: the pages
 /// after the four boot pages, in the boot-page format.
+#[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum AppSource {
     Mapped(u32),
