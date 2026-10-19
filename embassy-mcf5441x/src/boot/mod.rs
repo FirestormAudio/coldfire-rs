@@ -5,6 +5,7 @@ mod config;
 pub mod ops;
 pub mod fetch;
 pub mod spi;
+pub mod nand;
 #[cfg(target_arch = "m68k")]
 mod exec;
 pub use config::*;
@@ -50,10 +51,19 @@ extern "C" fn __coldfire_rt_boot() {
     }
 }
 
+// NAND: the reset PC. The NFC maps the boot pages at 0 (RM 22.4.4); copy the boot part from there to SRAM, where it
+// is linked, and run it. Runs in place at 0, before RAMBAR (the SRAM's backdoor at 0x80000000 takes the writes).
 #[cfg(all(target_arch = "m68k", feature = "boot-nand"))]
 core::arch::global_asm!(
     ".section .boot.reloc,\"ax\"",
     ".global __coldfire_rt_reloc",
     "__coldfire_rt_reloc:",
+    "lea __boot_lma,%a0",
+    "lea __boot_vma,%a1",
+    "move.l #__boot_vma_len,%d0",
+    "1:",
+    "move.l (%a0)+,(%a1)+",
+    "subq.l #4,%d0",
+    "bne.s 1b",
     "jmp _start",
 );

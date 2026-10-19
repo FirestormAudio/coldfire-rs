@@ -126,3 +126,14 @@ def test_overflow_is_a_link_error(tmp_path):
     assert "LENGTH = 16" in m.read_text()
     r = build("serial", memory_dir=tmp_path, check=False)
     assert r.returncode != 0 and "MEDIUM" in r.stderr, r.stderr[-3000:]
+
+
+def test_nand_relocator_runs_in_place(elfs):
+    # the reset PC runs out of the NFC buffer at its link address, before the boot part is in SRAM
+    elf = elfs["nand"]
+    sym = coldelf.symbols(elf)
+    head = {n: (a, sz) for n, a, sz in coldelf.sections(elf)}[".boot.head"]
+    assert sym["__image_start"] == 0 and head[0] == 8 and 8 < head[1]
+    assert head[0] <= sym["__coldfire_rt_reloc"] < head[0] + head[1]
+    assert sym["__boot_lma"] == head[0] + head[1] and sym["__boot_vma"] == 0x8000_0000
+    assert sym["__boot_size"] <= 3984

@@ -42,7 +42,7 @@ pub(crate) unsafe fn fetch(p: FetchPlan, dst: u32, len: u32) {
             }
         }
         FetchPlan::Spi { offset, ctar } => unsafe { super::spi::read(offset, ctar, dst, len) },
-        FetchPlan::Nand { .. } => super::exec::halt(super::ops::MARK_NAND_ECC),
+        FetchPlan::Nand { first_page, skip } => unsafe { super::nand::read(first_page, skip, dst, len) },
     }
 }
 
