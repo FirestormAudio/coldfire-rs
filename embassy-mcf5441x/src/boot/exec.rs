@@ -11,13 +11,22 @@ pub(crate) fn halt(marker: u32) -> ! {
     }
 }
 
+/// A 32-bit register read the compiler can't narrow: it folds `read_volatile() & CONSTANT` into a byte-wide `btst`
+/// on the register, and 32-bit-only registers (the NFC's) don't answer that.
+#[inline(always)]
+pub(crate) unsafe fn read32(addr: u32) -> u32 {
+    let v: u32;
+    unsafe { core::arch::asm!("move.l ({a}),{v}", a = in(reg_addr) addr, v = out(reg_data) v, options(nostack, readonly)) };
+    v
+}
+
 #[inline(always)]
 unsafe fn read(width: u8, addr: u32) -> u32 {
     unsafe {
         match width {
             1 => (addr as *const u8).read_volatile() as u32,
             2 => (addr as *const u16).read_volatile() as u32,
-            _ => (addr as *const u32).read_volatile(),
+            _ => read32(addr),
         }
     }
 }

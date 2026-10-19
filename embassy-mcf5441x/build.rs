@@ -21,11 +21,12 @@ __boot_stack_top = 0x80010000;
 __boot_budget = LENGTH(MEDIUM);
 __boot_entry = _start;
 ";
-/// NAND (RM 22.4.4): the NFC maps 3984 bytes of the four boot pages at 0. The relocator there copies the boot part
-/// to SRAM and runs it; the app part is the page stream after the boot pages, offset 0 at MEDIUM's origin (a
-/// numbering of the payload bytes, not an address the CPU reads).
+/// NAND (RM 22.4.4): the NFC maps 3984 bytes of the four boot pages at 0. The boot part keeps to the first 3968:
+/// whole 8-byte chunks of each page's 996 payload bytes, where the interleave is unambiguous. The relocator there
+/// copies the boot part to SRAM and runs it; the app part is the page stream after the boot pages, offset 0 at
+/// MEDIUM's origin (a numbering of the payload bytes, not an address the CPU reads).
 const NAND: &str = "MEMORY {
-  NFCBUF (rx) : ORIGIN = 0, LENGTH = 3984
+  NFCBUF (rx) : ORIGIN = 0, LENGTH = 3968
   BOOT (rwx) : ORIGIN = 0x80000000, LENGTH = 64K
   MEDIUM (r) : ORIGIN = 0x10000000, LENGTH = 256M
 }
@@ -33,7 +34,7 @@ REGION_ALIAS(\"HEAD\", NFCBUF);
 REGION_ALIAS(\"HEAD_LOAD\", NFCBUF);
 REGION_ALIAS(\"BOOT_LOAD\", NFCBUF);
 __boot_stack_top = 0x80010000;
-__boot_budget = 3984;
+__boot_budget = 3968;
 __boot_entry = __coldfire_rt_reloc;
 ";
 

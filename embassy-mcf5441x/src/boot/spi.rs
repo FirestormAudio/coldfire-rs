@@ -42,13 +42,13 @@ unsafe fn xfer(byte: u8, last: bool) -> u8 {
     unsafe {
         (PUSHR as *mut u32).write_volatile(frame(byte, last));
         let mut left = CAP;
-        while (SR as *const u32).read_volatile() & RXCTR == 0 {
+        while super::exec::read32(SR) & RXCTR == 0 {
             left -= 1;
             if left == 0 {
                 super::exec::halt(MARK_SPI);
             }
         }
-        (POPR as *const u32).read_volatile() as u8
+        super::exec::read32(POPR) as u8
     }
 }
 

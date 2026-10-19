@@ -56,7 +56,7 @@ pub(crate) unsafe fn read(first_page: u32, skip: u32, dst: u32, len: u32) {
     use super::ops::{MARK_NAND_BUSY, MARK_NAND_ECC};
     unsafe {
         let w = |a: u32, v: u32| (a as *mut u32).write_volatile(v);
-        let r = |a: u32| (a as *const u32).read_volatile();
+        let r = |a: u32| super::exec::read32(a);
         w(CFG, (r(CFG) & CFG_KEEP) | CFG_SET);
         w(SECSZ, PAGE);
         w(CMD1, CMD1_READ);

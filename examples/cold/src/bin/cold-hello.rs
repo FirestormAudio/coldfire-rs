@@ -27,8 +27,14 @@ const APP: AppSource = AppSource::Nand;
 /// The NOR flash (boot-nor): 16 MB, 16-bit port, auto-acknowledge after 4 wait states (CSCR0 WS 4, AA, PS 10).
 const CS0: FlexBusCs0 = FlexBusCs0 { cscr: 4 << 10 | 1 << 8 | 0b10 << 6, size: 16 << 20 };
 
+/// Program the PLL, or (feature `pll-keep`) check the one a serial-boot header's SBF_RCON already set.
+#[cfg(not(feature = "pll-keep"))]
+const MODE: Pll = Pll::Set(PLL);
+#[cfg(feature = "pll-keep")]
+const MODE: Pll = Pll::Keep(PLL);
+
 #[boot_config]
-static BOOT: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(PLL), DDR).app(APP).cs0(CS0).build();
+static BOOT: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), MODE, DDR).app(APP).cs0(CS0).build();
 
 #[entry]
 fn main() -> ! {

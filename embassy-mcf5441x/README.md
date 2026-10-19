@@ -84,7 +84,7 @@ has two parts, which coldfire-rt's cold layout links together:
 |---|---|---|---|
 | `boot-serial` | in SRAM at 0x80000000, where the serial boot facility copied it | 60 KB | the SBF header (BLDIV, BLL, SBF_RCON), then the image: SP/PC, boot part, app part |
 | `boot-nor` | in place from NOR on FlexBus CS0, at 0 | the flash | the image at 0 |
-| `boot-nand` | in the NFC's boot buffer at 0, then (relocated) in SRAM | 3984 bytes | four boot pages holding the image's boot part, interleaved 8 bytes at a time; then the app part in the same boot-page format (1056-byte pages: 996 payload bytes, 60 inverted 32-bit BCH bytes) |
+| `boot-nand` | in the NFC's boot buffer at 0, then (relocated) in SRAM | 3968 bytes (whole 8-byte chunks of the 3984 the NFC shows) | four boot pages holding the image's boot part, interleaved 8 bytes at a time; then the app part in the same boot-page format (1056-byte pages: 996 payload bytes, 60 inverted 32-bit BCH bytes) |
 
 Making that image (the SBF header, NAND's page split, interleave and ECC) is your board's tooling: the crates stop
 at the link layout. Your `memory.x` defines `MEDIUM`, the boot medium as the boot part sees it (serial: the image

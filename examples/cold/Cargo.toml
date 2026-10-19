@@ -16,6 +16,8 @@ mcf54418 = ["embassy-mcf5441x/mcf54418"]
 boot-serial = ["embassy-mcf5441x/boot-serial"]
 boot-nor = ["embassy-mcf5441x/boot-nor"]
 boot-nand = ["embassy-mcf5441x/boot-nand"]
+# the PLL as a serial-boot header set it: the boot part checks it rather than programming it
+pll-keep = []
 
 [dependencies]
 coldfire = { path = "../../coldfire" }

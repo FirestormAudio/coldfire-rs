@@ -136,4 +136,4 @@ def test_nand_relocator_runs_in_place(elfs):
     assert sym["__image_start"] == 0 and head[0] == 8 and 8 < head[1]
     assert head[0] <= sym["__coldfire_rt_reloc"] < head[0] + head[1]
     assert sym["__boot_lma"] == head[0] + head[1] and sym["__boot_vma"] == 0x8000_0000
-    assert sym["__boot_size"] <= 3984
+    assert sym["__boot_size"] <= 3968
