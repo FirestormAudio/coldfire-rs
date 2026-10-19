@@ -41,9 +41,18 @@ __stack_top = 0x48000000;
 The [repository README](https://github.com/FirestormAudio/coldfire-rs#your-boards-memoryx) covers the rest of the contract, including the sections the USB
 driver needs.
 
+## Cold boot
+
+The `cold` feature (the chip's HAL turns it on with its cold boot features) links the image so the boot hardware can
+start it from reset: SP and PC at image offset 0, then a boot part, then the app part, which runs in DDR and loads
+from the boot medium. Startup calls the HAL's boot part (`__coldfire_rt_boot`) on a stack in on-chip SRAM, then
+runs as usual in DDR. `#[boot_config]` links the board's description into the boot part. `memory.x` adds `MEDIUM`,
+the boot medium as the boot part sees it; the HAL's own linker fragment says where the boot part runs.
+
 ## Features
 
-`critical-section-single-core` (default): installs `coldfire`'s `critical-section` implementation.
+- `critical-section-single-core` (default): installs `coldfire`'s `critical-section` implementation.
+- `cold`: the cold-boot layout above.
 
 ## License
 

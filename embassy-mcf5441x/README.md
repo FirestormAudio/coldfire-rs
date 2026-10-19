@@ -72,10 +72,56 @@ The [repository](https://github.com/FirestormAudio/coldfire-rs/tree/main/example
 - **The time driver:** `time-driver-pit0` (the default), `time-driver-pit1`, `time-driver-pit2` or
   `time-driver-pit3`. The PIT it uses leaves `Peripherals`.
 
+## Cold boot
+
+With `boot-serial`, `boot-nor` or `boot-nand`, the app is one image the chip's boot hardware starts from reset. It
+has two parts, which coldfire-rt's cold layout links together:
+- **The boot part** runs where the boot source starts the core. It sets up the chip from your `BootConfig`, copies the
+  app part into DDR, and hands over to the usual startup.
+- **The app part** runs in DDR and loads from the boot medium, right after the boot part.
+
+| Feature | The boot part runs | Room | What the boot medium holds |
+|---|---|---|---|
+| `boot-serial` | in SRAM at 0x80000000, where the serial boot facility copied it | 60 KB | the SBF header (BLDIV, BLL, SBF_RCON), then the image: SP/PC, boot part, app part |
+| `boot-nor` | in place from NOR on FlexBus CS0, at 0 | the flash | the image at 0 |
+| `boot-nand` | in the NFC's boot buffer at 0, then (relocated) in SRAM | 3984 bytes | four boot pages holding the image's boot part, interleaved 8 bytes at a time; then the app part in the same boot-page format (1056-byte pages: 996 payload bytes, 60 inverted 32-bit BCH bytes) |
+
+Making that image (the SBF header, NAND's page split, interleave and ECC) is your board's tooling: the crates stop
+at the link layout. Your `memory.x` defines `MEDIUM`, the boot medium as the boot part sees it (serial: the image
+from 0x80000000 on; NOR: the flash at 0; NAND: leave it to the HAL).
+
+Describe the board with `#[boot_config]`:
+
+```rust,ignore
+use embassy_mcf5441x::boot::*;
+
+/// 25 MHz × 20: VCO 500 MHz, core 250 MHz, bus 125 MHz.
+const PLL: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };
+/// Your DRAM's controller words (RM 21.4), from its datasheet at your SD_CLK, START clear; DDR_PADCR; pad drive.
+const DDR: Ddr = Ddr { cr: &[/* (index, value), ... */], padcr: 1 << 9 | 1, full_strength: false };
+
+#[boot_config]
+static BOOT: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(PLL), DDR)
+    .app(AppSource::SpiFlash { offset: 0, ctar: 7 << 27 | 1 })
+    .build();
+```
+
+- **`Pll::Set`** programs the PLL in a limp-mode window (one 32-bit PLL_DR write, then the lock wait). **`Pll::Keep`**
+  is for a PLL the boot hardware already set, such as a serial-boot header's SBF_RCON: the settings say what it set,
+  and the boot part halts if PLL_CR/PLL_DR disagree. Either way the settings are checked.
+- **The checks are compile errors:** the reference manual's limits (reference 14–50 MHz, VCO 240–500 MHz, core at
+  most 250 MHz, bus exactly half the core, NFC at most 80 MHz), START clear, PADCR's mandatory bits, and an app
+  source the boot feature can use. `.out_of_spec(OutOfSpec::IKnowWhatImDoing)` lifts the frequency limits only.
+- **Optional parts:** `.ddr2clk(...)`, `.outdiv3(...)` and `.outdiv4(...)` (set in the limp window); `.extra(...)`
+  for board register writes at a named point (after the PLL, or before the DDR controller); `.cs0(...)` for
+  `boot-nor`'s flash timing (it stays at 0).
+- **A failure halts** with a marker in D0: `0xB007_0001` PLL mismatch, `_0002` PLL lock, `_0003` DDR init, `_0004`
+  SPI, `_0005` uncorrectable NAND page, `_0006` NAND busy.
+
 ## What it assumes
 
-- **A bootloader has set up the PLL, the DDR controller and the boot pin mux.** The HAL reads the clocks; it doesn't
-  program them.
+- **Under `bootloader`, a bootloader has set up the PLL, the DDR controller and the boot pin mux.** The HAL reads
+  the clocks; it doesn't program them. Under cold boot, the boot part did that.
 - **Pads with an uncertain pin-mux layout are left alone by GPIO.** That covers PAR_CS, PAR_IRQ0H and PAR_DSPIOWL's
   OWDAT field, the serial-boot flash chip select (PC0), and the PAR_FEC group-mode pads.
 - **Data cache:** the DMA drivers assume it is off.

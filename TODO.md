@@ -1,11 +1,13 @@
 # TODO
 
-## Full bring-up from reset (embassy-mcf5441x)
+## Cold boot (embassy-mcf5441x)
 
-The HAL assumes a bootloader has already set the PLL, the DDR controller and the boot pin mux. Add an opt-in
-bring-up path so a board without a bootloader can boot a HAL app: PLL programming (PLL_CR/PLL_DR, lock wait),
-DDR controller init (timings from the board, the DDR_CR registers; one board's boot code is a proven reference),
-and the boot pin mux. Needs hardware checks of every setting.
+- The serial path's SPI fetch run on hardware, and the NOR and NAND paths on a board that boots from them (so far they
+  are checked on the host and in an emulator).
+- NFC_CFG[ECCAD]'s unit: the NAND fetch takes it in 8-byte units (the manual says "byte address" with 9 bits).
+- Typed DDR geometry and timing helpers that produce the CR words, once the timing units (SD_CLK or controller
+  cycles) are confirmed on hardware.
+- Image tooling (SBF header, NAND page split, interleave and BCH), if the crates should ever carry it.
 - Settle the PAR layouts pinmux.json marks unverified: PAR_CS, PAR_IRQ0H and PAR_DSPIOWL's OWDAT by the reserved-bit
   readback on hardware.
 - DSPI: an interrupt/eDMA-driven async driver when something needs one. Vectors: DSPI0_SR 95, DSPI1–3_SR 182–184.

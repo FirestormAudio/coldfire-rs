@@ -54,15 +54,16 @@ from reset (see below). [TODO.md](TODO.md) has the list.
 3. **Load one** the way your board loads code, for example over BDM: load the ELF and start it at its entry
    point.
 
-### What the HAL assumes
+### How an app starts
 
-The HAL doesn't bring the chip up from reset. It expects a bootloader to have:
-- set up the PLL;
-- set up the DDR controller;
-- set the boot pin mux;
-- set RAMBAR1, if you use the on-chip SRAM.
+`embassy-mcf5441x` needs exactly one boot feature:
+- **Cold boot** (`boot-serial`, `boot-nor` or `boot-nand`): the image starts from reset. Its boot part sets up the
+  PLL and DDR from your board's `BootConfig`, copies the app part into DDR from the boot medium, and runs `main`.
+  See [Cold boot](embassy-mcf5441x/README.md#cold-boot) in the HAL's README.
+- **`bootloader`:** something earlier has set up the PLL, the DDR controller and the boot pin mux (and RAMBAR1, if
+  you use the on-chip SRAM), and loaded the app into DDR. The HAL reads the PLL to learn its clocks.
 
-The HAL reads the PLL to learn its clocks. Bring-up from reset is on the list in [TODO.md](TODO.md).
+Either way, `init` never retunes the PLL: code running from DDR can't, since the DDR clock comes from it.
 
 ## Using the crates in a board project
 
@@ -70,7 +71,7 @@ Depend on the HAL and the runtime, and pick your part:
 
 ```toml
 [dependencies]
-embassy-mcf5441x = { version = "0.1", features = ["mcf54415", "bootloader", "executor-thread"] }
+embassy-mcf5441x = { version = "0.1", features = ["mcf54415", "bootloader", "executor-thread"] }   # or a cold boot feature
 coldfire-rt = "0.1"
 ```
 

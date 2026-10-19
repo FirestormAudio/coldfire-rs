@@ -21,5 +21,13 @@ They assume a bootloader has set up the PLL and DDR, as the HAL does. Before run
 
 Then load an ELF the way your board loads code, for example over BDM: load it and start it at its entry point.
 
+`cold/` boots from reset instead, with no bootloader: `cold-hello` sets up the PLL and DDR from its `BootConfig`.
+Build it once per boot source, with that source's `memory.x`:
+
+    CF_MEMORY_DIR=$PWD/examples/cold/memory/serial \
+        toolchain/cargo-cf examples/cold --no-default-features --features boot-serial,mcf54415
+
+Its DDR description is empty: put your DRAM's controller words in it before running it on a board.
+
 The `usb-cdc` example uses crates.io's `embassy-usb`, which doesn't yet describe a high-speed device in its
 descriptors. The device still runs at high speed.
