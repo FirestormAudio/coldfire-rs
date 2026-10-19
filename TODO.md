@@ -20,18 +20,3 @@ and the boot pin mux. Needs hardware checks of every setting.
 - USB: the on-chip SRAM base (0x80000000, RAMBAR1) is assumed in `usb::desc::in_sram`; RAMBAR1 can't be read back, so a
   board with SRAM elsewhere needs it passed in. Not supported: host mode, VBUS sensing (power is reported once, at
   start), remote wakeup, isochronous endpoints, more than one dTD per endpoint direction.
-
-## Before the first publish
-
-The crates pass `cargo publish --dry-run --workspace` (`toolchain/tests/test_publish.py`). Each step below needs the
-owner's go-ahead at the time:
-
-1. The legal and trademark look: the PAC's SVD is derived from NXP's reference manual (names, offsets and encodings
-   only, no manual prose).
-2. Create the GitHub repository https://github.com/FirestormAudio/coldfire-rs (the crates already name it as their `repository`).
-3. The first push: branch `main`, one squashed root commit of the reviewed tree. The development history stays
-   private.
-4. `cargo login`, then publish in dependency order, with the part feature that verification needs:
-   `cargo publish -p coldfire`, `-p coldfire-rt-macros`, `-p coldfire-rt`, `-p mcf5441x-pac --features mcf54418`,
-   `-p embassy-mcf5441x --features mcf54418`.
-
