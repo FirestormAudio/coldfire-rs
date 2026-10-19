@@ -6,6 +6,14 @@
 #[cfg(not(any(feature = "mcf54410", feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418")))]
 compile_error!("embassy-mcf5441x: choose a part feature (mcf54410, mcf54415, mcf54416, mcf54417 or mcf54418)");
 
+#[cfg(any(
+    not(any(feature = "boot-serial", feature = "boot-nor", feature = "boot-nand", feature = "bootloader")),
+    all(feature = "boot-serial", any(feature = "boot-nor", feature = "boot-nand", feature = "bootloader")),
+    all(feature = "boot-nor", any(feature = "boot-nand", feature = "bootloader")),
+    all(feature = "boot-nand", feature = "bootloader"),
+))]
+compile_error!("embassy-mcf5441x: enable exactly one of the features boot-serial, boot-nor, boot-nand (cold boot from reset) or bootloader (a bootloader has set up the PLL and DDR)");
+
 pub use embassy_hal_internal::{Peri, PeripheralType};
 pub use mcf5441x_pac as pac;
 #[cfg(target_arch = "m68k")]

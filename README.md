@@ -70,7 +70,7 @@ Depend on the HAL and the runtime, and pick your part:
 
 ```toml
 [dependencies]
-embassy-mcf5441x = { version = "0.1", features = ["mcf54415", "executor-thread"] }
+embassy-mcf5441x = { version = "0.1", features = ["mcf54415", "bootloader", "executor-thread"] }
 coldfire-rt = "0.1"
 ```
 
@@ -180,11 +180,11 @@ has the details.
 
 - **The HAL's host tests:**
 
-      cargo test -p embassy-mcf5441x --features mcf54418 --lib
+      cargo test -p embassy-mcf5441x --features mcf54418,bootloader --lib
 
 - **A ColdFire build of the HAL:**
 
-      toolchain/cargo-cf embassy-mcf5441x --features mcf54415,executor-thread,executor-interrupt
+      toolchain/cargo-cf embassy-mcf5441x --features mcf54415,bootloader,executor-thread,executor-interrupt
 
 The PAC needs a part feature, so a plain `cargo build` or `cargo test` leaves it out (`default-members`). Workspace
 commands take `--features mcf5441x-pac/<part>`.

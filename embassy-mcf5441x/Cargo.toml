@@ -24,6 +24,13 @@ time-driver-pit1 = ["_time-driver"]
 time-driver-pit2 = ["_time-driver"]
 time-driver-pit3 = ["_time-driver"]
 _time-driver = ["dep:embassy-time-driver", "dep:embassy-time-queue-utils"]
+# how the chip gets from reset to the app: exactly one. Cold boot from one of the three boot sources (the HAL's
+# boot part sets up the PLL and DDR from the board's BootConfig and fetches the app), or a bootloader that has done it
+boot-serial = ["_cold"]
+boot-nor = ["_cold"]
+boot-nand = ["_cold"]
+bootloader = []
+_cold = []
 executor-thread = ["dep:embassy-executor"]
 executor-interrupt = ["dep:embassy-executor"]
 
@@ -53,4 +60,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("defmt"))'
 
 [package.metadata.docs.rs]
 # documented for the full part; the executors are ColdFire-only and compile out on docs.rs's host target
-features = ["mcf54418", "executor-thread", "executor-interrupt"]
+features = ["mcf54418", "bootloader", "executor-thread", "executor-interrupt"]

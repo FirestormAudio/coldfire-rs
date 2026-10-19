@@ -19,7 +19,7 @@ mcf54418 = ["embassy-mcf5441x/mcf54418"]
 [dependencies]
 coldfire = { path = "../coldfire" }
 coldfire-rt = { path = "../coldfire-rt" }
-embassy-mcf5441x = { path = "../embassy-mcf5441x", default-features = false, features = ["time-driver-pit0", "executor-thread"] }
+embassy-mcf5441x = { path = "../embassy-mcf5441x", default-features = false, features = ["time-driver-pit0", "executor-thread", "bootloader"] }
 embassy-executor = "0.10.0"
 embassy-time = { version = "0.5.1", features = ["tick-hz-1_000"] }
 embassy-usb = { version = "0.6.0", default-features = false }

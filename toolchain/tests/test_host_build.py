@@ -19,11 +19,11 @@ def test_plain_cargo_build_skips_the_pac_and_is_warning_free():
 
 
 def test_workspace_check_with_a_part_feature_succeeds():
-    r = subprocess.run(["cargo", "check", "--workspace", "--features", "mcf5441x-pac/mcf54418,embassy-mcf5441x/mcf54418"], cwd=ROOT,
+    r = subprocess.run(["cargo", "check", "--workspace", "--features", "mcf5441x-pac/mcf54418,embassy-mcf5441x/mcf54418,embassy-mcf5441x/bootloader"], cwd=ROOT,
                        capture_output=True, text=True)
     assert r.returncode == 0 and "warning" not in r.stderr, r.stderr
 
 
 def test_hal_check_on_mcf54410_succeeds():
-    r = subprocess.run(["cargo", "check", "-p", "embassy-mcf5441x", "--features", "mcf54410"], cwd=ROOT, capture_output=True, text=True)
+    r = subprocess.run(["cargo", "check", "-p", "embassy-mcf5441x", "--features", "mcf54410,bootloader"], cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0 and "warning" not in r.stderr, r.stderr

@@ -66,6 +66,8 @@ The [repository](https://github.com/FirestormAudio/coldfire-rs/tree/main/example
 ## Features
 
 - **The part:** exactly one of `mcf54410`, `mcf54415`, `mcf54416`, `mcf54417`, `mcf54418`.
+- **How it boots:** exactly one of `bootloader` (a bootloader has set up the PLL and DDR), or cold boot from reset
+  through `boot-serial`, `boot-nor` or `boot-nand`.
 - **Executors:** `executor-thread` and `executor-interrupt`.
 - **The time driver:** `time-driver-pit0` (the default), `time-driver-pit1`, `time-driver-pit2` or
   `time-driver-pit3`. The PIT it uses leaves `Peripherals`.

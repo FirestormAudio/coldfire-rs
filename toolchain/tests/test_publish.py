@@ -149,7 +149,7 @@ def test_publish_dry_run_of_the_workspace_passes():
     # uploads nothing; the PAC and HAL refuse to build without a part, so verification needs one (as the real publish
     # will). --workspace handles crates whose siblings aren't on crates.io yet
     r = run(["cargo", "publish", "--dry-run", "--workspace", "--allow-dirty",
-             "--features", "mcf5441x-pac/mcf54418,embassy-mcf5441x/mcf54418"])
+             "--features", "mcf5441x-pac/mcf54418,embassy-mcf5441x/mcf54418,embassy-mcf5441x/bootloader"])
     assert r.returncode == 0, r.stderr[-3000:]
     assert r.stderr.count("aborting upload due to dry run") == len(CRATES), r.stderr[-3000:]
 

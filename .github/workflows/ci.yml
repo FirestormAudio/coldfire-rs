@@ -42,7 +42,7 @@ jobs:
           key: host-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
 
       - name: HAL host tests
-        run: cargo test -p embassy-mcf5441x --features mcf54418 --lib
+        run: cargo test -p embassy-mcf5441x --features mcf54418,bootloader --lib
 
       - name: Generator and toolchain tests (the reference manual's tests skip; so does the ColdFire build)
         run: python -m pytest -q pac-gen/tests toolchain/tests
@@ -88,7 +88,7 @@ jobs:
       - run: pip install pytest
 
       - name: The HAL for ColdFire, through the instruction gate
-        run: toolchain/cargo-cf embassy-mcf5441x --features mcf54415,executor-thread,executor-interrupt
+        run: toolchain/cargo-cf embassy-mcf5441x --features mcf54415,bootloader,executor-thread,executor-interrupt
 
       - name: The examples, through the instruction gate
         run: python -m pytest -q toolchain/tests/test_publish.py -k examples
