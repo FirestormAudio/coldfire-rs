@@ -30,7 +30,7 @@ boot-serial = ["_cold"]
 boot-nor = ["_cold"]
 boot-nand = ["_cold"]
 bootloader = []
-_cold = []
+_cold = ["coldfire-rt/cold"]
 executor-thread = ["dep:embassy-executor"]
 executor-interrupt = ["dep:embassy-executor"]
 

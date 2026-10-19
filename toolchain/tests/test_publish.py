@@ -147,8 +147,22 @@ def test_examples_build_for_coldfire_warning_free():
 
 def test_publish_dry_run_of_the_workspace_passes():
     # uploads nothing; the PAC and HAL refuse to build without a part, so verification needs one (as the real publish
-    # will). --workspace handles crates whose siblings aren't on crates.io yet
-    r = run(["cargo", "publish", "--dry-run", "--workspace", "--allow-dirty",
+    # will). --workspace handles crates whose siblings aren't on crates.io yet, through a temporary local registry
+    # whose crates cargo extracts under ~/.cargo/registry/src/-<hash>/ and never refreshes while the version stays
+    # 0.1.0, and whose builds it treats as immutable: drop those extractions and builds of our crates first, or the
+    # check verifies against an old copy
+    import os
+    import shutil
+    src = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "registry/src"
+    for d in src.glob("-*/*-0.1.0"):
+        if d.name.removesuffix("-0.1.0") in CRATES:
+            shutil.rmtree(d)
+    target = ROOT / "target/publish-check"
+    names = {c.replace("-", "_") for c in CRATES} | set(CRATES)
+    for d in target.glob("debug/*/*"):
+        if d.name.split("-")[0].removeprefix("lib") in names or "-".join(d.name.split("-")[:-1]).removeprefix("lib") in names:
+            shutil.rmtree(d) if d.is_dir() else d.unlink()
+    r = run(["cargo", "publish", "--dry-run", "--workspace", "--allow-dirty", "--target-dir", str(target),
              "--features", "mcf5441x-pac/mcf54418,embassy-mcf5441x/mcf54418,embassy-mcf5441x/bootloader"])
     assert r.returncode == 0, r.stderr[-3000:]
     assert r.stderr.count("aborting upload due to dry run") == len(CRATES), r.stderr[-3000:]

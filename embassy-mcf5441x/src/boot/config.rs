@@ -109,7 +109,6 @@ pub struct BootConfig {
     pub(crate) outdiv4: Option<u8>,
     pub(crate) extra: &'static [ExtraWrite],
     pub(crate) cs0: Option<FlexBusCs0>,
-    #[allow(dead_code)] // read by the fetch
     pub(crate) app: AppSource,
 }
 

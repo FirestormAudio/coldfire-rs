@@ -12,6 +12,9 @@ categories = ["embedded", "no-std", "hardware-support"]
 [features]
 default = ["critical-section-single-core"]
 critical-section-single-core = ["coldfire/critical-section-single-core"]
+# the image starts from reset: SP/PC at offset 0, a boot part (from the chip's HAL) that brings up DDR and copies the
+# app part there (link-cold.x)
+cold = []
 
 # the runtime is ColdFire assembly; a host build is the re-exports and the handler record only
 [dependencies]

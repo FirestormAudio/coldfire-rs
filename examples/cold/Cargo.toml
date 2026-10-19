@@ -1,0 +1,27 @@
+[package]
+name = "mcf5441x-cold-examples"
+version = "0.0.0"
+edition = "2024"
+description = "An MCF5441x app that boots from reset on embassy-mcf5441x's cold boot: build with toolchain/cargo-cf, one boot feature"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# standalone: ColdFire binaries, one boot feature per build
+[workspace]
+
+[features]
+default = ["mcf54415", "boot-serial"]
+mcf54415 = ["embassy-mcf5441x/mcf54415"]
+mcf54418 = ["embassy-mcf5441x/mcf54418"]
+boot-serial = ["embassy-mcf5441x/boot-serial"]
+boot-nor = ["embassy-mcf5441x/boot-nor"]
+boot-nand = ["embassy-mcf5441x/boot-nand"]
+
+[dependencies]
+coldfire = { path = "../../coldfire" }
+coldfire-rt = { path = "../../coldfire-rt" }
+embassy-mcf5441x = { path = "../../embassy-mcf5441x", default-features = false }
+
+[profile.release]
+opt-level = "s"
+debug = true

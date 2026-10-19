@@ -146,3 +146,41 @@ mod tests {
         assert_eq!(exception_vector("PIT0"), None);
     }
 }
+
+/// The board's cold-boot description: `#[boot_config] static BOOT: Config = expr;`, where `Config` implements
+/// `coldfire_rt::BootConfig`. The value is evaluated at compile time (a failed check is a compile error), its boot
+/// sequence and fetch description are linked into the boot part (`.boot.rodata`), and `BOOT` stays an ordinary
+/// static for the app.
+#[proc_macro_attribute]
+pub fn boot_config(args: TokenStream, input: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        return error(Span::call_site(), "#[boot_config] takes no arguments");
+    }
+    let s = parse_macro_input!(input as syn::ItemStatic);
+    if !matches!(s.mutability, syn::StaticMutability::None) {
+        return error(Span::call_site(), "#[boot_config] needs an immutable static");
+    }
+    let (attrs, vis, name, ty, expr) = (&s.attrs, &s.vis, &s.ident, &s.ty, &s.expr);
+    quote! {
+        #(#attrs)*
+        #vis static #name: #ty = {
+            const fn __coldfire_rt_is_boot_config<C: ::coldfire_rt::BootConfig>() {}
+            const _: () = __coldfire_rt_is_boot_config::<#ty>();
+            const C: #ty = #expr;
+            #[unsafe(no_mangle)]
+            #[unsafe(link_section = ".boot.rodata.coldfire_rt.ops")]
+            #[used]
+            static __coldfire_rt_boot_ops: [<#ty as ::coldfire_rt::BootConfig>::Op; C.ops_len()] = C.ops::<{ C.ops_len() }>();
+            #[unsafe(no_mangle)]
+            #[unsafe(link_section = ".boot.rodata.coldfire_rt.ops_len")]
+            #[used]
+            static __coldfire_rt_boot_ops_len: usize = C.ops_len();
+            #[unsafe(no_mangle)]
+            #[unsafe(link_section = ".boot.rodata.coldfire_rt.fetch")]
+            #[used]
+            static __coldfire_rt_boot_fetch: <#ty as ::coldfire_rt::BootConfig>::Fetch = C.fetch();
+            C
+        };
+    }
+    .into()
+}

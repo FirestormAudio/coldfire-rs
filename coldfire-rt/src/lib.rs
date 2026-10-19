@@ -11,7 +11,7 @@
 use core::arch::global_asm;
 
 pub use coldfire; // re-exported, and linked: its libcalls and critical section are needed
-pub use coldfire_rt_macros::{entry, exception, interrupt};
+pub use coldfire_rt_macros::{boot_config, entry, exception, interrupt};
 
 /// One `#[exception]`/`#[interrupt]` handler: the linker gathers these from `.coldfire_rt.handlers` (link.x
 /// brackets them with `__shandlers`/`__ehandlers`) and startup installs each into the RAM vector table.
@@ -21,7 +21,7 @@ pub struct Handler {
     pub entry: unsafe extern "C" fn(),
 }
 
-#[cfg(target_arch = "m68k")]
+#[cfg(all(target_arch = "m68k", not(feature = "cold")))]
 global_asm!(
     ".section .text._start,\"ax\"",
     ".global _start",
@@ -30,6 +30,34 @@ global_asm!(
     "lea __stack_top,%sp",
     "jmp coldfire_rt_start",
 );
+
+// Cold: the reset vector (offset 0) and a _start in the boot part. The HAL's __coldfire_rt_boot sets up the chip and
+// copies the app part into DDR; then the usual startup runs there.
+#[cfg(all(target_arch = "m68k", feature = "cold"))]
+global_asm!(
+    ".section .boot.vectors,\"a\"",
+    ".long __boot_stack_top, __boot_entry",
+    ".section .boot.text._start,\"ax\"",
+    ".global _start",
+    "_start:",
+    "move.w #0x2700,%sr",
+    "lea __boot_stack_top,%sp",
+    "jsr __coldfire_rt_boot",
+    "lea __stack_top,%sp",
+    "jmp coldfire_rt_start",
+);
+
+/// A cold-boot description for `#[boot_config]`. The chip's HAL implements it for its config type, which also has
+/// the inherent `const fn`s `ops_len(&self) -> usize`, `ops::<N>(&self) -> [Self::Op; N]` and
+/// `fetch(&self) -> Self::Fetch`; `#[boot_config]` links their results into the boot part.
+///
+/// # Safety
+/// The boot part reads `__coldfire_rt_boot_ops` as `[Op; __coldfire_rt_boot_ops_len]` and `__coldfire_rt_boot_fetch`
+/// as `Fetch`: the implementing HAL must read them as exactly these types.
+pub unsafe trait BootConfig {
+    type Op: Copy + 'static;
+    type Fetch: Copy + 'static;
+}
 
 #[cfg(any(target_arch = "m68k", docsrs))]
 #[unsafe(link_section = ".vectors")]
