@@ -32,8 +32,12 @@ SECTIONS {
 
   .vectors ORIGIN(REGION_RAM) (NOLOAD) : { KEEP(*(.vectors)) } > REGION_RAM
   .text ORIGIN(REGION_RAM) + 0x400 : { __app_vma = .; *(.text .text.*) } > REGION_RAM AT> MEDIUM
-  .rodata : { *(.rodata .rodata.*) . = ALIGN(4); __shandlers = .; KEEP(*(.coldfire_rt.handlers)) __ehandlers = .; } > REGION_RAM AT> MEDIUM
-  .data : { *(.data .data.*) . = ALIGN(4); __app_vma_end = .; } > REGION_RAM AT> MEDIUM
+  /* the boot part copies the app part as one block: each section loads at the same offset from .text as it runs,
+     alignment gaps included (AT> alone would pack the load addresses) */
+  .rodata : AT(LOADADDR(.text) + (ADDR(.rodata) - ADDR(.text))) {
+    *(.rodata .rodata.*) . = ALIGN(4); __shandlers = .; KEEP(*(.coldfire_rt.handlers)) __ehandlers = .;
+  } > REGION_RAM
+  .data : AT(LOADADDR(.text) + (ADDR(.data) - ADDR(.text))) { *(.data .data.*) . = ALIGN(4); __app_vma_end = .; } > REGION_RAM
   __app_lma = LOADADDR(.text);
   __app_len = __app_vma_end - __app_vma;
   __app_offset = __app_lma - ORIGIN(MEDIUM);
@@ -43,5 +47,6 @@ SECTIONS {
 ASSERT(DEFINED(coldfire_rt_start), "coldfire-rt is not linked: add `use coldfire_rt as _;` to the binary")
 ASSERT(DEFINED(__coldfire_rt_boot), "cold layout without a boot part: enable a boot feature of the chip's HAL")
 ASSERT(SIZEOF(.boot.forbidden) == 0, "coldfire-rt: the boot part has .data or .bss; it runs before DDR and keeps no writable statics")
+ASSERT(__app_lma + __app_len <= ORIGIN(MEDIUM) + LENGTH(MEDIUM), "coldfire-rt: the app part doesn't fit in MEDIUM, the boot medium")
 ASSERT(__boot_size <= __boot_budget, "coldfire-rt: the boot part is larger than the boot source allows")
 ASSERT((ADDR(.vectors) & 0xFFFFF) == 0, "coldfire-rt: the vector table (ORIGIN(REGION_RAM)) must be 1 MB aligned (VBR bits 19..0 are not implemented)")

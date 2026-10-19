@@ -146,3 +146,12 @@ def test_boot_part_register_reads_keep_their_width(elfs):
         out = subprocess.run(["m68k-elf-objdump", "-d", "-m", "m68k:cfv4e", "-j", ".boot.head", "-j", ".boot", str(elf)],
                              capture_output=True, text=True, check=True).stdout
         assert [l for l in out.splitlines() if re.search(r"\b(btst|bset|bclr|bchg)\s+#\d+,%a\d@", l)] == [], s
+
+
+def test_app_part_is_one_block(elfs):
+    # the boot part copies __app_len bytes from __app_lma to __app_vma: every loaded app section must sit at the same
+    # load-to-run offset, alignment gaps included
+    for s, elf in elfs.items():
+        sym = coldelf.symbols(elf)
+        offsets = {p - v for v, p, f, _ in coldelf.segments(elf) if 0x4000_0000 <= v < 0x8000_0000 and f}
+        assert offsets == {sym["__app_lma"] - sym["__app_vma"]}, (s, [hex(o) for o in offsets])
