@@ -4,6 +4,7 @@
 mod config;
 pub mod ops;
 pub mod fetch;
+pub mod spi;
 #[cfg(target_arch = "m68k")]
 mod exec;
 pub use config::*;

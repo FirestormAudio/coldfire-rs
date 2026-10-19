@@ -92,10 +92,15 @@ def boot_references(elf):
         m = re.match(r"\s*[0-9a-f]+:\s+(?:[0-9a-f]{4} )+\s*(\S+)\s*(.*)", line)
         if not m:
             continue
-        for v in re.findall(r"(?:0x|\b)([0-9a-f]{8})\b", m.group(2)):
-            a = int(v, 16)
+        operands = re.sub(r"<[^>]*>", "", m.group(2))                         # objdump's symbol annotations
+        imms = [int(v, 0) & 0xFFFF_FFFF for v in re.findall(r"#(-?(?:0x[0-9a-f]+|\d+))", operands)]
+        addrs = [int(v, 16) for v in re.findall(r"\b([0-9a-f]{4,8})\b", re.sub(r"#-?(?:0x[0-9a-f]+|\d+)", "", operands))]
+        for a, is_imm in [(a, False) for a in addrs] + [(a, True) for a in imms]:
             inside = lo <= a < hi or head_lo <= a < head_hi
-            if not inside and 0x1000 <= a and not (by_addr.get(a, set()) & EXITS) and not (0xE000_0000 <= a or 0x8000_0000 <= a < 0x8001_0000):
+            exit_ = bool(by_addr.get(a, set()) & EXITS)
+            sram, peripheral, ddr = 0x8000_0000 <= a <= 0x8001_0000, a >= 0xE000_0000, 0x4000_0000 <= a < 0x8000_0000
+            # an immediate is a value unless it points into DDR; an absolute address must be the boot part's own
+            if not (inside or exit_ or sram or peripheral) and (ddr if is_imm else a >= 0x1000):
                 bad.append((line.strip(), hex(a), sorted(by_addr.get(a, []))))
     return bad
 
