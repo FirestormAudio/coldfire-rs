@@ -122,6 +122,17 @@ def test_docs_build_on_the_host_with_the_docs_rs_features():
         assert (doc / page).exists(), page
 
 
+def _toolchain():
+    """The rust-coldfire backend toolchain/setup.sh builds (RCF, default build/rust-coldfire), if it is there."""
+    import os
+    rcf = Path(os.environ.get("RCF", ROOT / "build/rust-coldfire"))
+    return (rcf / "rustc_codegen_gcc/target/debug/librustc_codegen_gcc.so").exists()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.skipif(not _toolchain(), reason="no ColdFire toolchain (toolchain/setup.sh; RCF=)")
 def test_examples_build_for_coldfire_warning_free():
     # the chip-generic starting points: a standalone package (its binaries can't build on a host, so it stays out of
     # the workspace), built for ColdFire and gated by cfgate

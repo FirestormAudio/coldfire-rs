@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # the nightly toolchain/setup.sh pins: the crates use it on the host too (docs build under --cfg docsrs)
+  RUSTUP_TOOLCHAIN: nightly-2026-09-29
+  CARGO_TERM_COLOR: always
+
+jobs:
+  host:
+    name: Host tests, docs and packaging
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GNU binutils and GCC for m68k (as m68k-elf-*)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq binutils-m68k-linux-gnu gcc-m68k-linux-gnu
+          for t in as ld objdump readelf gcc; do sudo ln -sf "$(command -v m68k-linux-gnu-$t)" /usr/local/bin/m68k-elf-$t; done
+
+      - name: Rust nightly
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal -c rust-src
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pytest
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: host-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: HAL host tests
+        run: cargo test -p embassy-mcf5441x --features mcf54418 --lib
+
+      - name: Generator and toolchain tests (the reference manual's tests skip; so does the ColdFire build)
+        run: python -m pytest -q pac-gen/tests toolchain/tests
+
+  coldfire:
+    name: ColdFire builds (cached toolchain)
+    # an uncached toolchain build takes up to an hour: on main and by hand, not on every pull request
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GNU binutils and GCC's build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq binutils-m68k-linux-gnu gcc-m68k-linux-gnu libgmp-dev libmpfr-dev libmpc-dev flex bison
+          for t in as ld ar nm objcopy ranlib objdump readelf gcc; do sudo ln -sf "$(command -v m68k-linux-gnu-$t)" /usr/local/bin/m68k-elf-$t; done
+
+      # setup.sh skips what is already built for its pins: libgccjit (gcc-install) and the backend (rustc_codegen_gcc)
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build/rust-coldfire/gcc-install
+            build/rust-coldfire/rustc_codegen_gcc
+            build/rust-coldfire/.backend-stamp
+          key: rust-coldfire-${{ runner.os }}-${{ hashFiles('toolchain/setup.sh') }}
+
+      - name: Toolchain (toolchain/setup.sh)
+        run: toolchain/setup.sh
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install pytest
+
+      - name: The HAL for ColdFire, through the instruction gate
+        run: toolchain/cargo-cf embassy-mcf5441x --features mcf54415,executor-thread,executor-interrupt
+
+      - name: The examples, through the instruction gate
+        run: python -m pytest -q toolchain/tests/test_publish.py -k examples
