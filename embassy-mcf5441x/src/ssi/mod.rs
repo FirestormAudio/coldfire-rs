@@ -1,7 +1,9 @@
 //! SSI (synchronous serial interface, RM ch. 35): I2S or network-mode audio, streamed by eDMA in both directions.
 use embassy_hal_internal::PeripheralType;
 
+mod config;
 mod pins;
+pub use config::*;
 
 pub(crate) mod sealed {
     use crate::pinmux::{Function, ParField};
