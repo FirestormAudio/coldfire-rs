@@ -12,8 +12,8 @@ pub enum Mode {
     Network,
 }
 
-/// The SSI baud clock's source (MISCCR SSInSRC, RM 10.3.4): the SSI_CLKIN pin, or the PLL divided by `div` (CDRH
-/// SSInDIV, 2..=255; RM 10.3.6).
+/// The SSI baud clock's source (MISCCR SSInSRC, RM 10.3.4): the SSI_CLKIN pin, or the PLL: fsys / (`div` / 2) (CDRH
+/// SSInDIV, RM 10.3.5), 4..=255 so it never passes the bus clock (fsys / 2), which the RM forbids.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ClockSource {
     Clkin,
@@ -55,6 +55,7 @@ pub struct Config {
     /// Words per frame (CCR DC + 1): 2 for I2S, 2..=32 in network mode (2..=15 to stream: a frame must fit the FIFO).
     pub slots: u8,
     /// The bit-clock dividers (CCR PM, PSR, DIV2): bit clock = baud clock / ((DIV2 + 1) × (7 × PSR + 1) × (PM + 1) × 2).
+    /// PM 0 needs PSR or DIV2 set (RM 35.4.3).
     pub pm: u8,
     pub psr: bool,
     pub div2: bool,
@@ -66,7 +67,8 @@ pub struct Config {
     pub rx_watermark: u8,
     /// Sign-extend received words to 32 bits (RCR RXEXT).
     pub rx_sign_extend: bool,
-    /// Receive on the bit clock's falling edge (RCR RSCKP).
+    /// Receive on the bit clock's falling edge (RCR RSCKP). Transmit's edge is fixed: data out on the falling edge
+    /// (TCR TSCKP set), the I2S convention, in every mode.
     pub rx_falling: bool,
 }
 
@@ -119,9 +121,12 @@ pub(crate) const fn words(c: &Config) -> Words {
         panic!("ssi: FIFO watermarks are 1 to 15");
     }
     if let ClockSource::Pll { div } = c.clock {
-        if div < 2 {
-            panic!("ssi: ClockSource::Pll div must be 2 to 255 (0 and 1 mean divide by 254)");
+        if div < 4 {
+            panic!("ssi: ClockSource::Pll div must be 4 to 255 (below 4 the baud clock passes the bus clock)");
         }
+    }
+    if c.pm == 0 && !c.psr && !c.div2 {
+        panic!("ssi: PM 0 needs PSR or DIV2 (they must not all be clear)");
     }
     let master = !matches!(c.mode, Mode::I2sSlave);
     let mut cr = regs::Cr(0);
@@ -234,5 +239,22 @@ mod tests {
             assert!(refusal(c).contains("I2S"), "{n}");                         // I2S frames are two words (RM 35.4.1.4)
         }
         assert!(refusal(Config::i2s_master(WordLength::W16, ClockSource::Pll { div: 1 }, 3)).contains("div"));
+    }
+
+    #[test]
+    fn pll_divider_keeps_the_baud_clock_at_most_the_bus_clock() {
+        // baud = fsys / (div / 2) (RM Eqn. 10-2) must not pass fsys / 2: div 4 or more
+        for div in [2u8, 3] {
+            assert!(refusal(Config::i2s_master(WordLength::W16, ClockSource::Pll { div }, 3)).contains("div"), "{div}");
+        }
+        words(&Config::i2s_master(WordLength::W16, ClockSource::Pll { div: 4 }, 3));
+    }
+
+    #[test]
+    fn bit_clock_dividers_not_all_clear() {
+        // RM 35.4.3: DIV2, PSR and PM must not all be cleared
+        assert!(refusal(Config::i2s_master(WordLength::W16, CLK, 0)).contains("PM"));
+        words(&Config { psr: true, ..Config::i2s_master(WordLength::W16, CLK, 0) });
+        words(&Config { div2: true, ..Config::i2s_master(WordLength::W16, CLK, 0) });
     }
 }

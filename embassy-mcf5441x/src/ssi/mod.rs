@@ -114,6 +114,13 @@ instance!(#[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54
 pub(crate) const CR_SSI_EN: u32 = 1 << 0;
 pub(crate) const CR_TE: u32 = 1 << 1;
 pub(crate) const CR_RE: u32 = 1 << 2;
+/// CR MCE: the oversampling clock out on SSI_MCLK.
+pub(crate) const CR_MCE: u32 = 1 << 7;
+
+/// `cr` with the master clock out.
+pub(crate) const fn with_mce(cr: u32) -> u32 {
+    cr | CR_MCE
+}
 /// Depth of each FIFO, in words (RM 35.1.2).
 pub(crate) const FIFO_DEPTH: usize = 15;
 
@@ -196,6 +203,14 @@ impl<'d, T: Instance> Ssi<'d, T> {
         self
     }
 
+    /// Put the oversampling clock out on `T`'s MCLK pad (CR MCE), for a codec that takes its master clock from the
+    /// SSI (I2S master or network mode with internal clocks).
+    pub fn with_mclk<M: MclkPin<T>>(mut self, _mclk: crate::Peri<'d, M>) -> Self {
+        set_function(<M as sealed::MclkPin<T>>::PAR, <M as sealed::MclkPin<T>>::FUNCTION);
+        self.cr = with_mce(self.cr); // written when the SSI starts
+        self
+    }
+
     /// Run the bit clock and frame sync with silence going out, without streaming: for a codec that needs its clocks
     /// before it is configured. `stream` keeps them running.
     pub fn start_clocks(&mut self) {
@@ -261,6 +276,13 @@ mod tests {
         assert_eq!(seq[0], (Reg::Cr, cr | CR_SSI_EN));
         assert!(seq[1..1 + n].iter().all(|&w| w == (Reg::Tx0, 0)));
         assert_eq!(seq[1 + n], (Reg::Cr, cr | CR_SSI_EN | CR_TE));
+    }
+
+    #[test]
+    fn mclk_out_sets_cr_mce() {
+        // RM 35.3: CR MCE (bit 7) puts the oversampling clock on SSI_MCLK in I2S master mode
+        let cr = 1 << 4 | 0b01 << 5;
+        assert_eq!(with_mce(cr), cr | 1 << 7);
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Full-duplex streaming: TX and RX rings of two blocks each, run by eDMA in lockstep off one frame sync. Each TX
 //! half or full transfer pends a software interrupt at the app's level; there the newest `FRAMES` received frames are
 //! copied out and handed to `render` with the TX half the DMA isn't reading.
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicUsize, Ordering::Relaxed};
+use core::ptr::NonNull;
+use core::sync::atomic::{compiler_fence, AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicUsize, Ordering::{Relaxed, SeqCst}};
 
 use super::{Instance, Ssi, CR_RE, CR_SSI_EN, CR_TE};
 use crate::dma::{self, attr, csr, Channel, ChannelInstance, Size, Tcd};
@@ -117,6 +118,14 @@ impl Default for State {
 
 const NONE: u8 = 0xFF;
 
+/// The render vector each instance's stream holds (0: none), so two streams can't share one.
+static CLAIMED: [AtomicU16; 2] = [AtomicU16::new(0), AtomicU16::new(0)];
+
+/// `vector` is held by another instance's stream than `index`.
+pub(crate) fn claimed_elsewhere(claimed: &[u16; 2], index: usize, vector: u16) -> bool {
+    claimed.iter().enumerate().any(|(i, &v)| i != index && v == vector)
+}
+
 /// Streaming moves a frame (`S` words) per DMA request: it needs the `Config`'s slot count, room for a frame in the
 /// FIFO, and watermarks of at least a frame (or TX writes past a full FIFO and RX reads an empty one, and the slots
 /// rotate).
@@ -191,10 +200,15 @@ pub(crate) fn note(prev: Option<usize>, fill: usize, reading_after: usize) -> (b
     (reading_after == fill, prev == Some(fill))
 }
 
-/// Copy `out.len()` frames from `ring` starting at frame `start`, wrapping.
-pub(crate) fn copy_window<const S: usize>(ring: &[[u32; S]], start: usize, out: &mut [[u32; S]]) {
+/// Copy `out.len()` frames from the `len`-frame ring at `ring` starting at frame `start`, wrapping. Volatile: the
+/// DMA writes the ring meanwhile (never the frames in the window).
+///
+/// # Safety
+/// `ring` must point to `len` readable frames.
+pub(crate) unsafe fn copy_window<const S: usize>(ring: *const [u32; S], len: usize, start: usize, out: &mut [[u32; S]]) {
     for (i, f) in out.iter_mut().enumerate() {
-        *f = ring[(start + i) % ring.len()];
+        // SAFETY: the index is below `len`
+        *f = unsafe { ring.add((start + i) % len).read_volatile() };
     }
 }
 
@@ -216,20 +230,24 @@ impl<T: Instance> Handler<<T::TxDma as ChannelInstance>::Interrupt> for TxDmaInt
 fn render_isr<T: Instance, const F: usize, const S: usize>() {
     let st = T::state();
     st.soft_irq().unpend();
-    // SAFETY: `stream` stored these for this monomorphisation and keeps them valid while streaming
-    let rings = unsafe { &mut *(st.rings.load(Relaxed) as *mut Rings<F, S>) };
+    // Raw pointers only: the DMA reads one TX half and writes the RX ring throughout, so no reference to a whole ring
+    // is formed. SAFETY: `stream` stored these for this monomorphisation and keeps them valid while streaming
+    let rings = st.rings.load(Relaxed) as *mut Rings<F, S>;
     let render: fn(&Block<F, S>, &mut Block<F, S>) = unsafe { core::mem::transmute(st.render.load(Relaxed)) };
-    let tx_base = rings.tx.as_ptr() as u32;
+    let tx = unsafe { core::ptr::addr_of_mut!((*rings).tx) } as *mut Block<F, S>;
+    let rx = unsafe { core::ptr::addr_of!((*rings).rx) } as *const [u32; S];
+    let tx_base = tx as u32;
     let half = (F * S * 4) as u32;
     let tx_ch = st.tx_ch.load(Relaxed);
     let fill = tx_fill_half(dma::saddr(tx_ch), tx_base, half);
     let prev = st.last_half.swap(fill as u8, Relaxed);
-    let (start, _) = rx_newest(dma::daddr(st.rx_ch.load(Relaxed)), rings.rx.as_ptr() as u32, F, S);
+    let (start, _) = rx_newest(dma::daddr(st.rx_ch.load(Relaxed)), rx as u32, F, S);
     let mut input: Block<F, S> = [[0; S]; F];
     // SAFETY: the two RX blocks are 2 × F contiguous frames
-    let rx = unsafe { core::slice::from_raw_parts(rings.rx.as_ptr() as *const [u32; S], 2 * F) };
-    copy_window(rx, start, &mut input);
-    render(&input, &mut rings.tx[fill]);
+    unsafe { copy_window(rx, 2 * F, start, &mut input) };
+    // SAFETY: the half the DMA isn't reading; only this interrupt writes it
+    render(&input, unsafe { &mut *tx.add(fill) });
+    compiler_fence(SeqCst); // the block is written before the DMA's position is read again
     let reading_after = tx_fill_half(dma::saddr(tx_ch), tx_base, half) ^ 1;
     let (late, skipped) = note(if prev == NONE { None } else { Some(prev as usize) }, fill, reading_after);
     if late {
@@ -241,17 +259,20 @@ fn render_isr<T: Instance, const F: usize, const S: usize>() {
     st.blocks.fetch_add(1, Relaxed);
 }
 
-/// A running stream; `stop` gives the `Ssi` back.
+/// A running stream; `stop` gives the `Ssi` and the rings back, and dropping it stops it too.
+#[must_use = "dropping the stream stops it"]
 pub struct Stream<'d, T: Instance, const FRAMES: usize, const SLOTS: usize> {
     ssi: Ssi<'d, T>,
     tx: Channel<'d>,
     rx: Channel<'d>,
+    rings: NonNull<Rings<FRAMES, SLOTS>>,
 }
 
 impl<'d, T: Instance> Ssi<'d, T> {
     /// Stream both directions. `render(input, output)` runs in `render_irq` at `render_level` after each TX half or
     /// full transfer (whose DMA interrupt runs at `dma_level`): `input` holds the newest `FRAMES` received frames,
-    /// `output` the TX half to fill. Panics if `T` is already streaming.
+    /// `output` the TX half to fill. `render_irq`'s vector becomes this stream's: nothing else may use that source.
+    /// Panics if `T` is already streaming or another SSI's stream holds `render_irq`.
     #[allow(clippy::too_many_arguments)]
     pub fn stream<const F: usize, const S: usize>(
         self,
@@ -266,7 +287,14 @@ impl<'d, T: Instance> Ssi<'d, T> {
     ) -> Stream<'d, T, F, S> {
         check_geometry(self.slots, self.tx_watermark, self.rx_watermark, S);
         let st = T::state();
-        assert!(!st.streaming.swap(true, Relaxed), "ssi: this SSI is already streaming");
+        assert!(!st.streaming.swap(true, Relaxed), "ssi: SSI{} is already streaming", T::INDEX);
+        let index = T::INDEX as usize;
+        let claimed = [CLAIMED[0].load(Relaxed), CLAIMED[1].load(Relaxed)];
+        if claimed_elsewhere(&claimed, index, render_irq.vector()) {
+            st.streaming.store(false, Relaxed);
+            panic!("ssi: another SSI's stream renders on this SoftIrq");
+        }
+        CLAIMED[index].store(render_irq.vector(), Relaxed);
         *rings = Rings::new();
         st.isr.store(render_isr::<T, F, S> as fn() as usize, Relaxed);
         st.render.store(render as usize, Relaxed);
@@ -293,6 +321,7 @@ impl<'d, T: Instance> Ssi<'d, T> {
         unsafe {
             coldfire_rt::set_vector(render_irq.vector() as usize, <T as super::sealed::Instance>::render_entry());
         }
+        compiler_fence(SeqCst); // the state above is in place before either interrupt can run
         render_irq.set_priority(render_level);
         <T::TxDma as ChannelInstance>::Interrupt::set_priority(dma_level);
         // SAFETY: both handlers are in place (the TX DMA's through the app's binding)
@@ -322,7 +351,7 @@ impl<'d, T: Instance> Ssi<'d, T> {
         txc.enable_request();
         r.cr().write_value(regs::Cr(ssi.cr | CR_SSI_EN | CR_TE | CR_RE));
         ssi.cr &= !(CR_SSI_EN | CR_TE | CR_RE);
-        Stream { ssi, tx: txc, rx: rxc }
+        Stream { ssi, tx: txc, rx: rxc, rings: NonNull::from(rings) }
     }
 }
 
@@ -337,17 +366,41 @@ impl<'d, T: Instance, const F: usize, const S: usize> Stream<'d, T, F, S> {
         }
     }
 
-    /// Stop both directions and the SSI, mask the render interrupt, and give the `Ssi` back (`stream` can run again).
-    pub fn stop(mut self) -> Ssi<'d, T> {
+    /// Stop both directions and the SSI, mask and clear both interrupts, and give the `Ssi` and the rings back
+    /// (`stream` can run again).
+    pub fn stop(self) -> (Ssi<'d, T>, &'static mut Rings<F, S>) {
+        let mut s = core::mem::ManuallyDrop::new(self);
+        s.halt();
+        // SAFETY: `s` is never dropped or used again: its fields move out once. The rings came in as `&'static mut`
+        // and nothing else refers to them now that the DMA and the render interrupt are off.
+        unsafe {
+            let ssi = core::ptr::read(&s.ssi);
+            core::ptr::drop_in_place(&mut s.tx);
+            core::ptr::drop_in_place(&mut s.rx);
+            (ssi, &mut *s.rings.as_ptr())
+        }
+    }
+
+    fn halt(&mut self) {
         let st = T::state();
         self.tx.disable_request();
         self.rx.disable_request();
         <T::TxDma as ChannelInstance>::Interrupt::disable();
         st.soft_irq().disable();
         self.ssi.stop();
+        // a half or end that landed during the above stays pending: clear it, or a restart takes a stray block
+        self.tx.clear_interrupt();
+        st.soft_irq().unpend();
         st.isr.store(0, Relaxed);
+        CLAIMED[T::INDEX as usize].store(0, Relaxed);
+        compiler_fence(SeqCst);
         st.streaming.store(false, Relaxed);
-        self.ssi
+    }
+}
+
+impl<'d, T: Instance, const F: usize, const S: usize> Drop for Stream<'d, T, F, S> {
+    fn drop(&mut self) {
+        self.halt();
     }
 }
 
@@ -380,6 +433,14 @@ mod tests {
     fn geometry_refusal(slots: usize, tx_wm: u8, rx_wm: u8, s: usize) -> std::string::String {
         let r = std::panic::catch_unwind(|| check_geometry(slots, tx_wm, rx_wm, s));
         std::string::String::from(*r.unwrap_err().downcast::<&str>().unwrap())
+    }
+
+    #[test]
+    fn a_render_vector_is_held_by_one_stream() {
+        assert!(!claimed_elsewhere(&[0, 0], 1, 64 + 63));
+        assert!(!claimed_elsewhere(&[64 + 63, 0], 0, 64 + 63));               // its own earlier claim (a restart)
+        assert!(claimed_elsewhere(&[64 + 63, 0], 1, 64 + 63));                // SSI0 holds it
+        assert!(!claimed_elsewhere(&[64 + 62, 0], 1, 64 + 63));
     }
 
     #[test]
@@ -430,7 +491,8 @@ mod tests {
             *f = [i as u32, 100 + i as u32];
         }
         let mut out = [[0u32; 2]; 32];
-        copy_window(&ring, 42, &mut out);
+        // SAFETY: the ring is 64 frames
+        unsafe { copy_window(ring.as_ptr(), ring.len(), 42, &mut out) };
         assert_eq!(out[0], [42, 142]);
         assert_eq!(out[21], [63, 163]);
         assert_eq!(out[22], [0, 100]);

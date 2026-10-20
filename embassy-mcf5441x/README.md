@@ -1,7 +1,7 @@
 # embassy-mcf5441x
 
 An [Embassy](https://embassy.dev) HAL for the NXP MCF5441x (ColdFire V4e: MCF54410, MCF54415–MCF54418). Part of
-[coldfire-rs](https://github.com/FirestormAudio/coldfire-rs). Every driver runs on hardware, on an MCF54415 board.
+[coldfire-rs](https://github.com/FirestormAudio/coldfire-rs). The drivers run on hardware, on an MCF54415 board, except SSI (emulation-tested; its hardware run is pending).
 
 ## Drivers
 
