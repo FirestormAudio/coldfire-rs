@@ -138,3 +138,13 @@ def test_cargo_cf_refuses_a_boot_part_that_reaches_ddr():
                         "--target-dir", str(COLD / "target/serial-o0")], env=env, capture_output=True, text=True)
     out = r.stdout + r.stderr
     assert r.returncode != 0 and "reaches outside the boot part" in out, out[-3000:]
+
+
+def test_an_app_part_past_its_limit_is_a_link_error(tmp_path):
+    # NAND's MEDIUM is a numbering, not the device: a board says how many app bytes its NAND holds (__app_part_max)
+    m = tmp_path / "memory.x"
+    m.write_text((COLD / "memory/nand/memory.x").read_text() + "__app_part_max = 16;\n")
+    env = {**os.environ, "RCF": str(RCF), "CF_MEMORY_DIR": str(tmp_path)}
+    r = subprocess.run([str(ROOT / "toolchain/cargo-cf"), str(COLD), "--no-default-features", "--features", "boot-nand,mcf54415",
+                        "--target-dir", str(COLD / "target/nand-alt")], env=env, capture_output=True, text=True)
+    assert r.returncode != 0 and "__app_part_max" in r.stderr, r.stderr[-3000:]

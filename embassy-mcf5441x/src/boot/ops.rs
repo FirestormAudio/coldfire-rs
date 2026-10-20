@@ -34,7 +34,8 @@ pub const KIND_VBR: u8 = 7;
 /// `movec a, CACR`.
 pub const KIND_CACR: u8 = 8;
 
-/// Halt markers (in D0 and after the `halt`, as `.short 0x51FB; .long marker`).
+/// Halt markers, in D0 at the `halt` (a debugger reads them there). A CPU exception while the boot part runs is not
+/// caught: VBR points at the image start (it must be 1 MB aligned), so a fault vectors through the image's own bytes.
 pub const MARK_PLL_MISMATCH: u32 = 0xB007_0001;
 pub const MARK_PLL_LOCK: u32 = 0xB007_0002;
 pub const MARK_DDR_INIT: u32 = 0xB007_0003;
@@ -81,7 +82,10 @@ const DDR_SLOT: u32 = 46;
 const RCR_RST: u32 = 1 << 30;
 /// CR27 INTSTATUS bit 3: DRAM initialisation complete.
 const INIT_DONE: u32 = 1 << 3;
-/// RM 9.3: after leaving limp mode, wait 256 clocks before touching the DDR controller.
+/// RM 9.3: after leaving limp mode, wait 256 clocks before touching the DDR controller (here 256 `nop`s, each at
+/// least one core clock, so at least 256 reference clocks too). The lock poll before it reads PLL_SR[LOCK], which
+/// is only a fresh lock indication when PLL_CR[LOLEN] is set (RM 8.3.3): a board that needs it sets LOLEN through
+/// an extra write in the limp window.
 const AFTER_LIMP: u32 = 256;
 const CAP: u8 = 20;
 

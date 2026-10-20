@@ -4,7 +4,8 @@
 
 - The serial path's SPI fetch run on hardware, and the NOR and NAND paths on a board that boots from them (so far they
   are checked on the host and in an emulator).
-- NFC_CFG[ECCAD]'s unit: the NAND fetch takes it in 8-byte units (the manual says "byte address" with 9 bits).
+- The NAND ECC status: NFC_CFG[ECCAD]'s unit (taken in 8-byte units; the manual says "byte address" with 9 bits),
+  which byte of the slot holds CORFAIL, and whether every read rewrites it.
 - Typed DDR geometry and timing helpers that produce the CR words, once the timing units (SD_CLK or controller
   cycles) are confirmed on hardware.
 - Image tooling (SBF header, NAND page split, interleave and BCH), if the crates should ever carry it.

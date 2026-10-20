@@ -77,6 +77,7 @@ coldfire-rt = "0.1"
 
 The HAL's features:
 - **The part:** exactly one of `mcf54410`, `mcf54415`, `mcf54416`, `mcf54417`, `mcf54418`.
+- **How it boots:** exactly one of `bootloader`, `boot-serial`, `boot-nor` or `boot-nand` (see above).
 - **Executors:** `executor-thread` and `executor-interrupt`.
 - **The time driver's PIT:** `time-driver-pit0` (the default), `time-driver-pit1`, `-pit2` or `-pit3`.
 

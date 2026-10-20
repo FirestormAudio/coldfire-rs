@@ -2,7 +2,8 @@
    REGION_ALIAS("REGION_RAM", …), __stack_top and MEDIUM, the boot medium as the boot part sees it (serial: the image
    from 0x80000000; NOR: the flash at 0; NAND: none, the HAL supplies it). The HAL's boot-region.x, chosen by its boot
    feature, defines BOOT (where the boot part runs), HEAD/HEAD_LOAD/BOOT_LOAD, __boot_stack_top, __boot_budget and
-   __boot_entry. Image offset 0 holds the initial SP and PC; the app part runs in DDR and loads from MEDIUM. */
+   __boot_entry. Image offset 0 holds the initial SP and PC; the app part runs in DDR and loads from MEDIUM. memory.x
+   may also set __app_part_max, the most app-part bytes the medium holds. */
 INCLUDE memory.x
 INCLUDE boot-region.x
 ENTRY(_start)
@@ -48,5 +49,8 @@ ASSERT(DEFINED(coldfire_rt_start), "coldfire-rt is not linked: add `use coldfire
 ASSERT(DEFINED(__coldfire_rt_boot), "cold layout without a boot part: enable a boot feature of the chip's HAL")
 ASSERT(SIZEOF(.boot.forbidden) == 0, "coldfire-rt: the boot part has .data or .bss; it runs before DDR and keeps no writable statics")
 ASSERT(__app_lma + __app_len <= ORIGIN(MEDIUM) + LENGTH(MEDIUM), "coldfire-rt: the app part doesn't fit in MEDIUM, the boot medium")
+/* optional, from memory.x: how many app-part bytes the boot medium holds (NAND's MEDIUM numbers payload bytes, it
+   doesn't know the device) */
+ASSERT(__app_len <= (DEFINED(__app_part_max) ? __app_part_max : __app_len), "coldfire-rt: the app part is larger than memory.x's __app_part_max")
 ASSERT(__boot_size <= __boot_budget, "coldfire-rt: the boot part is larger than the boot source allows")
 ASSERT((ADDR(.vectors) & 0xFFFFF) == 0, "coldfire-rt: the vector table (ORIGIN(REGION_RAM)) must be 1 MB aligned (VBR bits 19..0 are not implemented)")

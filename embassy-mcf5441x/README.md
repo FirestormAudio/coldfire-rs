@@ -116,7 +116,12 @@ static BOOT: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll
   for board register writes at a named point (after the PLL, or before the DDR controller); `.cs0(...)` for
   `boot-nor`'s flash timing (it stays at 0).
 - **A failure halts** with a marker in D0: `0xB007_0001` PLL mismatch, `_0002` PLL lock, `_0003` DDR init, `_0004`
-  SPI, `_0005` uncorrectable NAND page, `_0006` NAND busy.
+  SPI, `_0005` uncorrectable NAND page, `_0006` NAND busy. A CPU exception during the boot part isn't caught.
+- **Limits to keep in `memory.x`:** with `boot-serial` and `AppSource::Mapped` in SRAM, the whole image must fit below
+  the boot part's 4 KB stack at the top of SRAM (and within what your SBF header's BLL loads); NAND boards set
+  `__app_part_max` to what their NAND holds for the app part.
+- **`#[boot_config]` is coldfire-rt's attribute** (re-exported here): the app depends on `coldfire-rt` directly, as
+  every app does for its startup.
 
 ## What it assumes
 

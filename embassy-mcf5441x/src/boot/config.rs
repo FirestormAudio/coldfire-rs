@@ -75,7 +75,7 @@ pub struct ExtraWrite {
 }
 
 /// The NOR flash on FlexBus CS0 (`boot-nor`): its chip-select control word (wait states, port size, ...) and its
-/// size in bytes. It stays at address 0 (CSAR0 = 0).
+/// size in bytes, a power of two of at least 64 KB. It stays at address 0 (CSAR0 = 0).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct FlexBusCs0 {
     pub cscr: u32,
@@ -463,6 +463,11 @@ impl BootConfigBuilder {
         if cfg!(feature = "boot-nor") && self.cs0.is_none() {
             panic!("BootConfig: boot-nor needs the NOR flash's chip select with .cs0(...)");
         }
+        if let Some(cs) = self.cs0 {
+            if cs.size < 0x1_0000 || !cs.size.is_power_of_two() {
+                panic!("BootConfig: FlexBusCs0's size must be a power of two of at least 64 KB (CSMR0[BAM], RM 20.3.2)");
+            }
+        }
         BootConfig {
             ref_clock: self.ref_clock,
             pll: self.pll,
@@ -543,6 +548,21 @@ mod tests {
             BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(MANUAL), DDR).app(AppSource::SpiFlash { offset: 0, ctar: 0 }).build()
         });
         assert!(r.unwrap_err().downcast::<&str>().unwrap().contains("header"));
+    }
+
+    #[cfg(feature = "boot-nor")]
+    #[test]
+    fn cs0_size_is_a_power_of_two_of_at_least_64_kb() {
+        // CSMR0[BAM] masks whole 64 KB blocks (RM 20.3.2): the chip select covers a power-of-two size of at least 64 KB
+        let b = |size| BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(MANUAL), DDR)
+            .app(AppSource::Mapped(0))
+            .cs0(FlexBusCs0 { cscr: 0, size })
+            .build();
+        b(0x1_0000);
+        for bad in [0x8000, 0x30_0000] {
+            let r = std::panic::catch_unwind(|| b(bad));
+            assert!(r.unwrap_err().downcast::<&str>().unwrap().contains("64 KB"), "{bad:#x}");
+        }
     }
 
     #[test]

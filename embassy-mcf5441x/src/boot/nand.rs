@@ -23,8 +23,10 @@ pub const PAGE: u32 = 1056;
 /// NFC_CFG: keep FAST, IDCNT, TIMEOUT and 16BIT; set ECC mode 7 (32-error BCH), write the ECC status to the buffer at
 /// `ECCAD`, one page per command, no auto-increments, and leave boot mode (BTMD clear).
 const CFG_KEEP: u32 = 1 << 16 | 0xFF << 8 | 1 << 7;
-/// Where the ECC status lands: right after the page. Open question: RM 22.3.14 calls ECCAD a byte address but gives
-/// it 9 bits; this takes it in 8-byte units.
+/// Where the ECC status lands: right after the page. Open questions, all for a board that boots from NAND: RM 22.3.14
+/// calls ECCAD a byte address but gives it 9 bits (this takes it in 8-byte units, as other drivers for this NFC do);
+/// which byte of the status slot holds CORFAIL (this reads the first); and whether every read rewrites the status
+/// (this assumes so, so a stale status from the previous page can't pass).
 const ECCAD: u32 = PAGE / 8;
 const CFG_SET: u32 = ECCAD << 22 | 1 << 21 | 0b111 << 17 | 1;
 const ISR_IDLE: u32 = 1 << 29;
