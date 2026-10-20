@@ -1,5 +1,12 @@
 # TODO
 
+## Drivers not written yet (embassy-mcf5441x)
+
+- I2C (I2C0–I2C5), SSI (SSI0/SSI1), Ethernet (MACNET0/MACNET1 and the switch), FlexCAN (FLEXCAN0/FLEXCAN1), ADC and
+  DAC, PWM (MCPWM), RTC, and a NAND flash driver (the cold-boot part only reads boot-format pages). The PAC has their
+  registers; some (I2C) already have peripheral tokens.
+- eSDHC writes and USB host mode: under "Existing drivers" below.
+
 ## Cold boot (embassy-mcf5441x)
 
 - The serial path's SPI fetch run on hardware, and the NOR and NAND paths on a board that boots from them (so far they
@@ -9,6 +16,9 @@
 - Typed DDR geometry and timing helpers that produce the CR words, once the timing units (SD_CLK or controller
   cycles) are confirmed on hardware.
 - Image tooling (SBF header, NAND page split, interleave and BCH), if the crates should ever carry it.
+
+## Existing drivers (embassy-mcf5441x)
+
 - Settle the PAR layouts pinmux.json marks unverified: PAR_CS, PAR_IRQ0H and PAR_DSPIOWL's OWDAT by the reserved-bit
   readback on hardware.
 - DSPI: an interrupt/eDMA-driven async driver when something needs one. Vectors: DSPI0_SR 95, DSPI1–3_SR 182–184.
