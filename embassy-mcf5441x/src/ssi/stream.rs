@@ -117,6 +117,24 @@ impl Default for State {
 
 const NONE: u8 = 0xFF;
 
+/// Streaming moves a frame (`S` words) per DMA request: it needs the `Config`'s slot count, room for a frame in the
+/// FIFO, and watermarks of at least a frame (or TX writes past a full FIFO and RX reads an empty one, and the slots
+/// rotate).
+pub(crate) const fn check_geometry(slots: usize, tx_watermark: u8, rx_watermark: u8, s: usize) {
+    if s != slots {
+        panic!("ssi: the Block's slots differ from the Config's");
+    }
+    if s > super::FIFO_DEPTH {
+        panic!("ssi: a frame of more than 15 words doesn't fit the FIFO");
+    }
+    if (tx_watermark as usize) < s || (rx_watermark as usize) < s {
+        panic!("ssi: FIFO watermarks must be at least a frame (slots) to stream");
+    }
+}
+/// The end-of-frame wait when the stream takes over running clocks: well over a frame at any rate the SSI's clocks
+/// reach (the wait only bounds a stalled external clock).
+const TFRC_SPINS: u32 = 1_000_000;
+
 /// The TX descriptor: the ring into the transmit FIFO, one frame per request, interrupts at half and end.
 pub(crate) const fn tx_tcd(ring: u32, fifo: u32, frames: usize, slots: usize) -> Tcd {
     let bytes = (2 * frames * slots * 4) as i32;
@@ -246,6 +264,7 @@ impl<'d, T: Instance> Ssi<'d, T> {
         render_level: Priority,
         render: fn(&Block<F, S>, &mut Block<F, S>),
     ) -> Stream<'d, T, F, S> {
+        check_geometry(self.slots, self.tx_watermark, self.rx_watermark, S);
         let st = T::state();
         assert!(!st.streaming.swap(true, Relaxed), "ssi: this SSI is already streaming");
         *rings = Rings::new();
@@ -282,11 +301,22 @@ impl<'d, T: Instance> Ssi<'d, T> {
             <T::TxDma as ChannelInstance>::Interrupt::enable();
         }
         let mut ssi = self;
-        if r.cr().read().0 & CR_SSI_EN == 0 {
+        let cr = r.cr().read().0;
+        if cr & CR_SSI_EN == 0 {
             r.cr().write_value(regs::Cr(ssi.cr | CR_SSI_EN));
-            for _ in 0..super::prime_words(S) {
-                r.tx0().write_value(regs::Tx0(0));
+        } else if cr & CR_TE != 0 {
+            // The clocks are running (`start_clocks`) and the transmitter has long run dry. Its FIFO has no slot tags,
+            // so frames fed to it now would start in whichever slot comes next: stop it at the end of this frame (the
+            // clocks keep running with TCD clear) and let TE start it again on a frame boundary.
+            r.cr().write_value(regs::Cr(ssi.cr | CR_SSI_EN));
+            let mut spins = 0;
+            while !r.isr().read().tfrc() && spins < TFRC_SPINS {
+                spins += 1;
             }
+        }
+        let queued = r.fcsr().read().tfcnt0() as usize;
+        for _ in queued..super::prime_words(S) {
+            r.tx0().write_value(regs::Tx0(0));
         }
         rxc.enable_request();
         txc.enable_request();
@@ -323,27 +353,43 @@ impl<'d, T: Instance, const F: usize, const S: usize> Stream<'d, T, F, S> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
     use crate::dma::csr;
 
-    const RING: u32 = 0x8000_1000;
+    const RING: u32 = 0x4010_0000;
     const FIFO: u32 = 0xFC0C_8000;
 
     #[test]
-    fn tx_tcd_for_32_frames_2_slots() {
-        let t = tx_tcd(RING, FIFO, 32, 2);
-        assert_eq!((t.saddr, t.soff, t.nbytes, t.slast), (RING, 4, 8, -512));
+    fn tx_tcd_for_48_frames_2_slots() {
+        let t = tx_tcd(RING, FIFO, 48, 2);
+        assert_eq!((t.saddr, t.soff, t.nbytes, t.slast), (RING, 4, 8, -768));
         assert_eq!((t.daddr, t.doff, t.dlast_sga), (FIFO, 0, 0));
-        assert_eq!((t.citer, t.biter), (64, 64));
+        assert_eq!((t.citer, t.biter), (96, 96));
         assert_eq!(t.csr, csr::INT_HALF | csr::INT_MAJOR);
     }
 
     #[test]
     fn rx_tcd_mirrors_tx_without_interrupts() {
-        let t = rx_tcd(FIFO + 8, RING, 32, 2);
+        let t = rx_tcd(FIFO + 8, RING, 48, 2);
         assert_eq!((t.saddr, t.soff, t.slast), (FIFO + 8, 0, 0));
-        assert_eq!((t.daddr, t.doff, t.dlast_sga, t.nbytes), (RING, 4, -512, 8));
-        assert_eq!((t.citer, t.biter, t.csr), (64, 64, 0));
+        assert_eq!((t.daddr, t.doff, t.dlast_sga, t.nbytes), (RING, 4, -768, 8));
+        assert_eq!((t.citer, t.biter, t.csr), (96, 96, 0));
+    }
+
+    fn geometry_refusal(slots: usize, tx_wm: u8, rx_wm: u8, s: usize) -> std::string::String {
+        let r = std::panic::catch_unwind(|| check_geometry(slots, tx_wm, rx_wm, s));
+        std::string::String::from(*r.unwrap_err().downcast::<&str>().unwrap())
+    }
+
+    #[test]
+    fn stream_geometry_must_fit_a_frame_per_request() {
+        check_geometry(2, 2, 2, 2);
+        check_geometry(4, 6, 4, 4);                                            // more room than a frame is fine
+        assert!(geometry_refusal(2, 2, 2, 4).contains("slots"));              // Block's S against the Config
+        assert!(geometry_refusal(4, 2, 4, 4).contains("watermark"));          // TX: 4 words into 2 free
+        assert!(geometry_refusal(4, 4, 2, 4).contains("watermark"));          // RX: 4 words out of 2
+        assert!(geometry_refusal(16, 15, 15, 16).contains("FIFO"));
     }
 
     #[test]

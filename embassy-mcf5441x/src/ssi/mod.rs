@@ -144,6 +144,8 @@ pub(crate) fn start_sequence(cr: u32, slots: usize) -> ([(Reg, u32); FIFO_DEPTH 
 pub struct Ssi<'d, T: Instance> {
     pub(crate) cr: u32,
     pub(crate) slots: usize,
+    pub(crate) tx_watermark: u8,
+    pub(crate) rx_watermark: u8,
     _p: core::marker::PhantomData<&'d mut T>,
 }
 
@@ -179,7 +181,13 @@ impl<'d, T: Instance> Ssi<'d, T> {
         r.ccr().write_value(regs::Ccr(w.ccr));
         r.fcsr().write_value(regs::Fcsr(w.fcsr));
         r.ier().write_value(regs::Ier(w.ier));
-        Self { cr: w.cr, slots: config.slots as usize, _p: core::marker::PhantomData }
+        Self {
+            cr: w.cr,
+            slots: config.slots as usize,
+            tx_watermark: config.tx_watermark,
+            rx_watermark: config.rx_watermark,
+            _p: core::marker::PhantomData,
+        }
     }
 
     /// Put SSI_CLKIN (the external audio clock) on its pad, for `ClockSource::Clkin`.

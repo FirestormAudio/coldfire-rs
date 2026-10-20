@@ -52,7 +52,7 @@ impl WordLength {
 pub struct Config {
     pub mode: Mode,
     pub word: WordLength,
-    /// Words per frame (CCR DC + 1): 2 for I2S, 1..=32 in network mode.
+    /// Words per frame (CCR DC + 1): 2 for I2S, 2..=32 in network mode (2..=15 to stream: a frame must fit the FIFO).
     pub slots: u8,
     /// The bit-clock dividers (CCR PM, PSR, DIV2): bit clock = baud clock / ((DIV2 + 1) × (7 × PSR + 1) × (PM + 1) × 2).
     pub pm: u8,
@@ -60,7 +60,8 @@ pub struct Config {
     pub div2: bool,
     pub clock: ClockSource,
     /// FIFO watermarks (FCSR TFWM0/RFWM0, 1..=15): DMA requests while the TX FIFO has this many free slots, or the RX
-    /// FIFO this many words.
+    /// FIFO this many words. Each request moves a whole frame, so streaming needs both at least `slots` (the
+    /// constructors set them to `slots`).
     pub tx_watermark: u8,
     pub rx_watermark: u8,
     /// Sign-extend received words to 32 bits (RCR RXEXT).
@@ -70,21 +71,29 @@ pub struct Config {
 }
 
 impl Config {
-    /// I2S master, `slots` words of `word` bits, PM 1, from SSI_CLKIN, watermarks 2, RX sign-extended.
-    pub const fn i2s_master(word: WordLength, slots: u8) -> Self {
+    /// I2S master: two words of `word` bits per frame, the bit clock from `clock` divided by PM `pm` (PSR and DIV2
+    /// clear, as at reset), watermarks of one frame, received words not sign-extended and sampled on the rising edge
+    /// (RCR's reset values).
+    pub const fn i2s_master(word: WordLength, clock: ClockSource, pm: u8) -> Self {
         Self {
             mode: Mode::I2sMaster,
             word,
-            slots,
-            pm: 1,
+            slots: 2,
+            pm,
             psr: false,
             div2: false,
-            clock: ClockSource::Clkin,
+            clock,
             tx_watermark: 2,
             rx_watermark: 2,
-            rx_sign_extend: true,
+            rx_sign_extend: false,
             rx_falling: false,
         }
+    }
+
+    /// Network mode (TDM), the SSI driving the clocks: `slots` words of `word` bits per frame, otherwise as
+    /// `i2s_master`.
+    pub const fn network(word: WordLength, slots: u8, clock: ClockSource, pm: u8) -> Self {
+        Self { mode: Mode::Network, slots, tx_watermark: slots, rx_watermark: slots, ..Self::i2s_master(word, clock, pm) }
     }
 }
 
@@ -100,8 +109,11 @@ pub(crate) struct Words {
 }
 
 pub(crate) const fn words(c: &Config) -> Words {
-    if c.slots == 0 || c.slots > 32 {
-        panic!("ssi: slots must be 1 to 32 (CCR DC)");
+    if !matches!(c.mode, Mode::Network) && c.slots != 2 {
+        panic!("ssi: I2S frames are two words (slots 2)");
+    }
+    if c.slots < 2 || c.slots > 32 {
+        panic!("ssi: slots must be 2 to 32 (CCR DC in network mode)");
     }
     if c.tx_watermark == 0 || c.tx_watermark > 15 || c.rx_watermark == 0 || c.rx_watermark > 15 {
         panic!("ssi: FIFO watermarks are 1 to 15");
@@ -161,14 +173,21 @@ mod tests {
     extern crate std;
     use super::*;
 
+    const CLK: ClockSource = ClockSource::Pll { div: 4 };
+
+    fn refusal(c: Config) -> std::string::String {
+        let r = std::panic::catch_unwind(|| words(&c));
+        std::string::String::from(*r.unwrap_err().downcast::<&str>().unwrap())
+    }
+
     #[test]
-    fn i2s_master_24_bit_stereo_words() {
-        let w = words(&Config::i2s_master(WordLength::W24, 2));
+    fn i2s_master_24_bit_words() {
+        let w = words(&Config::i2s_master(WordLength::W24, CLK, 3));
         assert_eq!(w.cr, 1 << 4 | 0b01 << 5);                                  // SYN, I2S master; SSI_EN off
         assert_eq!(w.tcr, 1 << 7 | 1 << 6 | 1 << 5 | 1 << 3);                  // TFEN0, TFDIR, TXDIR, TSCKP
-        assert_eq!(w.rcr, 1 << 7 | 1 << 10);                                    // RFEN0, RXEXT
-        assert_eq!(w.ccr, 11 << 13 | 1 << 8 | 1);                              // WL 24 bits (2 × (11 + 1)), DC 2 slots, PM 1
-        assert_eq!(w.fcsr, 2 | 2 << 4);                                         // TFWM0 2, RFWM0 2
+        assert_eq!(w.rcr, 1 << 7);                                              // RFEN0; RXEXT off (its reset value)
+        assert_eq!(w.ccr, 11 << 13 | 1 << 8 | 3);                              // WL 24 bits (2 × (11 + 1)), DC 2 slots, PM 3
+        assert_eq!(w.fcsr, 2 | 2 << 4);                                         // TFWM0, RFWM0: one frame
         assert_eq!(w.ier, 1 << 20 | 1 << 22);                                   // TDMAE, RDMAE
     }
 
@@ -177,21 +196,21 @@ mod tests {
         let bits = [(WordLength::W8, 8), (WordLength::W10, 10), (WordLength::W12, 12), (WordLength::W16, 16),
                     (WordLength::W18, 18), (WordLength::W20, 20), (WordLength::W22, 22), (WordLength::W24, 24)];
         for (w, n) in bits {
-            assert_eq!(words(&Config::i2s_master(w, 2)).ccr >> 13 & 0xF, n / 2 - 1, "{n}");
+            assert_eq!(words(&Config::i2s_master(w, CLK, 3)).ccr >> 13 & 0xF, n / 2 - 1, "{n}");
         }
     }
 
     #[test]
-    fn network_mode_sets_net_and_slot_count() {
-        let c = Config { mode: Mode::Network, ..Config::i2s_master(WordLength::W16, 4) };
-        let w = words(&c);
+    fn network_mode_sets_net_slot_count_and_frame_watermarks() {
+        let w = words(&Config::network(WordLength::W16, 4, CLK, 3));
         assert_eq!(w.cr & (1 << 3 | 0b11 << 5), 1 << 3);                       // NET, I2S off
         assert_eq!(w.ccr >> 8 & 0x1F, 3);
+        assert_eq!(w.fcsr, 4 | 4 << 4);                                         // a DMA request moves a whole frame
     }
 
     #[test]
     fn slave_clears_the_direction_bits() {
-        let c = Config { mode: Mode::I2sSlave, ..Config::i2s_master(WordLength::W24, 2) };
+        let c = Config { mode: Mode::I2sSlave, ..Config::i2s_master(WordLength::W24, CLK, 3) };
         let w = words(&c);
         assert_eq!(w.cr >> 5 & 0b11, 0b10);
         assert_eq!(w.tcr & (1 << 6 | 1 << 5), 0);                               // TFDIR, TXDIR: clocks come in
@@ -206,12 +225,14 @@ mod tests {
     }
 
     #[test]
-    fn slots_out_of_range_is_refused() {
-        for n in [0u8, 33] {
-            let r = std::panic::catch_unwind(|| words(&Config::i2s_master(WordLength::W16, n)));
-            assert!(r.unwrap_err().downcast::<&str>().unwrap().contains("slots"), "{n}");
+    fn slots_out_of_range_are_refused() {
+        for n in [0u8, 1, 33] {
+            assert!(refusal(Config::network(WordLength::W16, n, CLK, 3)).contains("slots"), "{n}");
         }
-        let r = std::panic::catch_unwind(|| words(&Config { clock: ClockSource::Pll { div: 1 }, ..Config::i2s_master(WordLength::W16, 2) }));
-        assert!(r.unwrap_err().downcast::<&str>().unwrap().contains("div"));
+        for n in [1u8, 3, 4] {
+            let c = Config { slots: n, ..Config::i2s_master(WordLength::W16, CLK, 3) };
+            assert!(refusal(c).contains("I2S"), "{n}");                         // I2S frames are two words (RM 35.4.1.4)
+        }
+        assert!(refusal(Config::i2s_master(WordLength::W16, ClockSource::Pll { div: 1 }, 3)).contains("div"));
     }
 }
