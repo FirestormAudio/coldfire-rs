@@ -13,10 +13,10 @@ const PLL: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv
 /// the controller at its reset values. PADCR: bit 9 set, SPARE_DLY_CTRL 01.
 const DDR: Ddr = Ddr { cr: &[], padcr: 1 << 9 | 0b01, full_strength: false };
 
-/// Where the app part is. Serial: the SPI flash holds the image (after the SBF header) from offset 0; DSPI0 reads it
-/// in 8-bit frames at bus / 2 / 4 (CTAR FMSZ 7, BR 1).
+/// Where the app part is. Serial: the SPI flash holds the 7-byte SBF header, then the image from flash byte 7; DSPI0
+/// reads it in 8-bit frames at bus / 2 / 4 (CTAR FMSZ 7, BR 1).
 #[cfg(feature = "boot-serial")]
-const APP: AppSource = AppSource::SpiFlash { offset: 0, ctar: 7 << 27 | 1 };
+const APP: AppSource = AppSource::SpiFlash { offset: 7, ctar: 7 << 27 | 1 };
 /// NOR: the flash at address 0 holds the image.
 #[cfg(feature = "boot-nor")]
 const APP: AppSource = AppSource::Mapped(0);

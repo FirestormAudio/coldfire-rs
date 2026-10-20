@@ -163,6 +163,7 @@ const fn ref_hz(r: RefClock) -> u32 {
     }
 }
 
+#[inline(always)]
 pub(crate) const fn settings(p: Pll) -> PllSettings {
     match p {
         Pll::Keep(s) | Pll::Set(s) => s,
@@ -188,12 +189,14 @@ impl BootConfigBuilder {
         self.ddr2clk = Some(c);
         self
     }
-    /// Set `PLL_DR[OUTDIV3]` (the eSDHC clock), which a serial-boot header can't.
+    /// Set `PLL_DR[OUTDIV3]` (the eSDHC clock, at most 250 MHz), which a serial-boot header can't. Under `Pll::Set`
+    /// it is 0 (off) unless given.
     pub const fn outdiv3(mut self, v: u8) -> Self {
         self.outdiv3 = Some(v);
         self
     }
-    /// Set `PLL_DR[OUTDIV4]` (the USB clock), which a serial-boot header can't.
+    /// Set `PLL_DR[OUTDIV4]` (the USB clock, exactly 60 MHz), which a serial-boot header can't. Under `Pll::Set` it
+    /// is 0 (off) unless given.
     pub const fn outdiv4(mut self, v: u8) -> Self {
         self.outdiv4 = Some(v);
         self
@@ -408,10 +411,16 @@ impl BootConfigBuilder {
             if v > 31 {
                 panic!("BootConfig: OUTDIV3 is 5 bits wide");
             }
+            if strict && v != 0 && vco / (v as u64 + 1) > 250 * MHZ {
+                panic!("BootConfig: the eSDHC clock (OUTDIV3) must not exceed 250 MHz (RM 8.2.2)");
+            }
         }
         if let Some(v) = self.outdiv4 {
             if v > 31 {
                 panic!("BootConfig: OUTDIV4 is 5 bits wide");
+            }
+            if strict && v != 0 && (vco % (v as u64 + 1) != 0 || vco / (v as u64 + 1) != 60 * MHZ) {
+                panic!("BootConfig: the USB clock (OUTDIV4) must be exactly 60 MHz (RM 8.2.2)");
             }
         }
         let mut i = 0;
@@ -437,9 +446,12 @@ impl BootConfigBuilder {
         };
         match app {
             AppSource::Mapped(_) => {}
-            AppSource::SpiFlash { .. } => {
+            AppSource::SpiFlash { offset, .. } => {
                 if !cfg!(feature = "boot-serial") {
                     panic!("BootConfig: AppSource::SpiFlash needs boot-serial");
+                }
+                if offset < 7 {
+                    panic!("BootConfig: AppSource::SpiFlash's offset is where image offset 0 sits, after the 7-byte SBF header (RM Table 11-5)");
                 }
             }
             AppSource::Nand => {
@@ -467,7 +479,7 @@ impl BootConfigBuilder {
 
 /// Sources the enabled boot feature can't use are compile errors too.
 #[cfg_attr(feature = "boot-serial", doc = "```compile_fail\nuse embassy_mcf5441x::boot::*;\nconst DDR: Ddr = Ddr { cr: &[], padcr: 1 << 9 | 1, full_strength: false };\nconst S: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };\nconst C: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(S), DDR).app(AppSource::Nand).build();\n```")]
-#[cfg_attr(feature = "boot-nor", doc = "```compile_fail\nuse embassy_mcf5441x::boot::*;\nconst DDR: Ddr = Ddr { cr: &[], padcr: 1 << 9 | 1, full_strength: false };\nconst S: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };\nconst C: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(S), DDR).cs0(FlexBusCs0 { cscr: 0, size: 0x100_0000 }).app(AppSource::SpiFlash { offset: 0, ctar: 0 }).build();\n```")]
+#[cfg_attr(feature = "boot-nor", doc = "```compile_fail\nuse embassy_mcf5441x::boot::*;\nconst DDR: Ddr = Ddr { cr: &[], padcr: 1 << 9 | 1, full_strength: false };\nconst S: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };\nconst C: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(S), DDR).cs0(FlexBusCs0 { cscr: 0, size: 0x100_0000 }).app(AppSource::SpiFlash { offset: 7, ctar: 0 }).build();\n```")]
 #[cfg_attr(feature = "boot-nor", doc = "```compile_fail\nuse embassy_mcf5441x::boot::*;\nconst DDR: Ddr = Ddr { cr: &[], padcr: 1 << 9 | 1, full_strength: false };\nconst S: PllSettings = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };\nconst C: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(S), DDR).app(AppSource::Mapped(0)).build();\n```")]
 pub mod checks {}
 
@@ -511,6 +523,26 @@ mod tests {
     fn outdiv5_zero_means_nfc_off() {
         let s = PllSettings { outdiv5: 0, ..MANUAL };
         builder(RefClock::Crystal(25_000_000), Pll::Set(s)).build();
+    }
+
+    #[test]
+    fn usb_from_outdiv4_must_be_60_mhz() {
+        // 24 MHz × 20 = 480 MHz, OUTDIV4 7: 60 MHz
+        let s = PllSettings { refdiv: 0, fbkdiv: 19, outdiv1: 1, outdiv2: 3, outdiv5: 7 };
+        builder(RefClock::Crystal(24_000_000), Pll::Set(s)).outdiv4(7).build();
+        let r = std::panic::catch_unwind(|| builder(RefClock::Crystal(25_000_000), Pll::Set(MANUAL)).outdiv4(7).build());
+        assert!(r.unwrap_err().downcast::<&str>().unwrap().contains("60 MHz"));
+    }
+
+    #[cfg(feature = "boot-serial")]
+    #[test]
+    fn spi_offset_must_clear_the_sbf_header() {
+        // RM Table 11-5: the 7-byte header is flash bytes 0..6; image offset 0 (the SP) is at 7 or later
+        BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(MANUAL), DDR).app(AppSource::SpiFlash { offset: 7, ctar: 0 }).build();
+        let r = std::panic::catch_unwind(|| {
+            BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(MANUAL), DDR).app(AppSource::SpiFlash { offset: 0, ctar: 0 }).build()
+        });
+        assert!(r.unwrap_err().downcast::<&str>().unwrap().contains("header"));
     }
 
     #[test]

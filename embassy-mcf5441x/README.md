@@ -102,7 +102,7 @@ const DDR: Ddr = Ddr { cr: &[/* (index, value), ... */], padcr: 1 << 9 | 1, full
 
 #[boot_config]
 static BOOT: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll::Set(PLL), DDR)
-    .app(AppSource::SpiFlash { offset: 0, ctar: 7 << 27 | 1 })
+    .app(AppSource::SpiFlash { offset: 7, ctar: 7 << 27 | 1 })   // the image starts after the 7-byte SBF header
     .build();
 ```
 

@@ -171,7 +171,8 @@ pub const fn sequence(c: &BootConfig) -> OpList {
         b = b.check(PLL_CR, CR_MASK, cr_value(s)).check(PLL_DR, DR_OUT1 | DR_OUT2 | DR_OUT5, dr_value(s));
     }
     if set {
-        dr_keep &= !(DR_OUT1 | DR_OUT2 | DR_OUT5);
+        // every divider explicitly: OUTDIV3/OUTDIV4 off (0) unless the board sets them (their reset values are unsure)
+        dr_keep &= !(DR_OUT1 | DR_OUT2 | DR_OUT3 | DR_OUT4 | DR_OUT5);
         dr_set |= dr_value(s);
     }
     let dr = dr_keep != !0u32;
@@ -310,6 +311,17 @@ mod tests {
         assert_eq!((o[limp_off].a & LIMP, o[limp_off].b), (0, 0));
         let lock = first(&o, KIND_POLL, PLL_SR);
         assert!(limp_on < cr && cr < dr_at && dr_at < ddr2 && ddr2 < limp_off && limp_off < lock);
+    }
+
+    #[test]
+    fn set_writes_outdiv3_and_outdiv4_explicitly() {
+        // RM 8.2.2: 0 turns the eSDHC (OUTDIV3) and USB (OUTDIV4) clocks off; Set writes both, off unless given
+        let o = list(&builder(Pll::Set(MANUAL)).build());
+        let dr = at(&o, KIND_RMW, PLL_DR)[0];
+        assert_eq!(o[dr].a & (0x1F << 10 | 0x1F << 16), 0);
+        assert_eq!(o[dr].b & (0x1F << 10 | 0x1F << 16), 0);
+        let o = list(&builder(Pll::Set(MANUAL)).outdiv3(3).build());
+        assert_eq!(o[at(&o, KIND_RMW, PLL_DR)[0]].b & 0x1F << 10, 3 << 10);
     }
 
     #[test]

@@ -26,11 +26,13 @@ const RXCTR: u32 = 0xF << 4;
 const CAP: u32 = 1 << 16;
 
 /// READ (0x03) and a 24-bit big-endian address.
+#[inline(always)]
 pub const fn read_cmd(offset: u32) -> [u8; 4] {
     [0x03, (offset >> 16) as u8, (offset >> 8) as u8, offset as u8]
 }
 
 /// A PUSHR word: PCS1, CTAR0, and CONT (keep PCS1 asserted) on every frame but the last.
+#[inline(always)]
 pub const fn frame(byte: u8, last: bool) -> u32 {
     (!last as u32) << 31 | 1 << 17 | byte as u32
 }

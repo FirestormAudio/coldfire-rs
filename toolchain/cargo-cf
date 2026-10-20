@@ -32,3 +32,5 @@ if [ -z "$exes" ]; then
 fi
 mapfile -t elfs <<<"$exes"
 "${CF_PYTHON:-python3}" "$TOOLCHAIN/cfgate.py" "${elfs[@]}"
+# a cold image's boot part must not reach into DDR before DDR is up
+"${CF_PYTHON:-python3}" "$TOOLCHAIN/bootcheck.py" "${elfs[@]}"

@@ -12,12 +12,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 import coldelf  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from bootcheck import boot_references  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 COLD = ROOT / "examples/cold"
 RCF = Path(os.environ.get("RCF", ROOT / "build/rust-coldfire"))
 SOURCES = ("serial", "nor", "nand")
-# what the boot part may name outside itself: where it hands over, and the app part it copies
-EXITS = {"coldfire_rt_start", "__stack_top", "__boot_stack_top", "__app_vma", "__app_lma", "__app_len", "__app_offset", "__sbss", "__ebss"}
 
 pytestmark = pytest.mark.skipif(not (RCF / "rustc_codegen_gcc/target/debug/librustc_codegen_gcc.so").exists(),
                                 reason="ColdFire toolchain not built (toolchain/setup.sh)")
@@ -77,34 +78,6 @@ def test_app_lma_follows_boot_vma_in_ddr(elfs):
         assert sum(f for _, _, f, _ in loads) <= sym["__app_len"], s
 
 
-def boot_references(elf):
-    """(instruction, address) of every address the boot part's code names outside [boot start, boot end)."""
-    sym = coldelf.symbols(elf)
-    by_addr = {}
-    for n, a in sym.items():
-        by_addr.setdefault(a, set()).add(n)
-    lo, hi = min(sym["__image_start"], sym["__boot_vma"]), sym["__boot_vma"] + sym["__boot_vma_len"]
-    head_lo, head_hi = sym["__image_start"], sym["__image_start"] + sym["__head_size"]
-    out = subprocess.run(["m68k-elf-objdump", "-d", "-m", "m68k:cfv4e", "-j", ".boot.head", "-j", ".boot", str(elf)],
-                         capture_output=True, text=True, check=True).stdout
-    bad = []
-    for line in out.splitlines():
-        m = re.match(r"\s*[0-9a-f]+:\s+(?:[0-9a-f]{4} )+\s*(\S+)\s*(.*)", line)
-        if not m:
-            continue
-        operands = re.sub(r"<[^>]*>", "", m.group(2))                         # objdump's symbol annotations
-        imms = [int(v, 0) & 0xFFFF_FFFF for v in re.findall(r"#(-?(?:0x[0-9a-f]+|\d+))", operands)]
-        addrs = [int(v, 16) for v in re.findall(r"\b([0-9a-f]{4,8})\b", re.sub(r"#-?(?:0x[0-9a-f]+|\d+)", "", operands))]
-        for a, is_imm in [(a, False) for a in addrs] + [(a, True) for a in imms]:
-            inside = lo <= a < hi or head_lo <= a < head_hi
-            exit_ = bool(by_addr.get(a, set()) & EXITS)
-            sram, peripheral, ddr = 0x8000_0000 <= a <= 0x8001_0000, a >= 0xE000_0000, 0x4000_0000 <= a < 0x8000_0000
-            # an immediate is a value unless it points into DDR; an absolute address must be the boot part's own
-            if not (inside or exit_ or sram or peripheral) and (ddr if is_imm else a >= 0x1000):
-                bad.append((line.strip(), hex(a), sorted(by_addr.get(a, []))))
-    return bad
-
-
 def test_boot_part_references_nothing_outside(elfs):
     for s, elf in elfs.items():
         assert boot_references(elf) == [], s
@@ -155,3 +128,13 @@ def test_app_part_is_one_block(elfs):
         sym = coldelf.symbols(elf)
         offsets = {p - v for v, p, f, _ in coldelf.segments(elf) if 0x4000_0000 <= v < 0x8000_0000 and f}
         assert offsets == {sym["__app_lma"] - sym["__app_vma"]}, (s, [hex(o) for o in offsets])
+
+
+def test_cargo_cf_refuses_a_boot_part_that_reaches_ddr():
+    # unoptimised, the boot part's helpers are outlined into .text (DDR): the image must not link quietly and die at
+    # reset; cargo-cf's post-link check names what the boot part reaches
+    env = {**os.environ, "RCF": str(RCF), "CF_MEMORY_DIR": str(COLD / "memory/serial"), "CF_RUSTFLAGS": "-C opt-level=0"}
+    r = subprocess.run([str(ROOT / "toolchain/cargo-cf"), str(COLD), "--no-default-features", "--features", "boot-serial,mcf54415",
+                        "--target-dir", str(COLD / "target/serial-o0")], env=env, capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0 and "reaches outside the boot part" in out, out[-3000:]

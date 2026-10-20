@@ -19,6 +19,7 @@ pub const BOOT_PAGES: u32 = 4;
 pub const PAYLOAD: u32 = 996;
 
 /// `app_offset`: the app part's offset from image offset 0 (serial, NOR) or in the NAND payload stream.
+#[inline(always)]
 pub const fn plan(src: &AppSource, app_offset: u32) -> FetchPlan {
     match *src {
         AppSource::Mapped(base) => FetchPlan::Copy { src: base + app_offset },

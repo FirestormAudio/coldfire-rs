@@ -34,12 +34,14 @@ const CORFAIL: u8 = 1 << 7;
 const CAP: u32 = 1 << 20;
 
 /// NFC_RAR for a row: bits 28 and 24 must be set (RM 22.3.4).
+#[inline(always)]
 pub const fn rar(row: u32) -> u32 {
     1 << 28 | 1 << 24 | (row & 0xFF_FFFF)
 }
 
 /// After `done` of `len` bytes, starting `skip` bytes into the first page: (page index from the first page, offset in
 /// its payload, bytes to take from it).
+#[inline(always)]
 pub const fn chunk(skip: u32, len: u32, done: u32) -> (u32, u32, u32) {
     let pos = skip + done;
     let from = pos % PAYLOAD;
