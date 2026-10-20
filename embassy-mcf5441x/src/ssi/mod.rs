@@ -7,6 +7,8 @@ use crate::pinmux::set_function;
 
 mod config;
 mod pins;
+mod stream;
+pub use stream::*;
 pub use config::*;
 
 pub(crate) mod sealed {
@@ -17,6 +19,10 @@ pub(crate) mod sealed {
         const GATE: crate::clocks::Gate;
         /// 0 for SSI0, 1 for SSI1 (MISCCR's clock-source field).
         const INDEX: u8;
+        fn state() -> &'static super::stream::State;
+        /// The render interrupt's entry (an exception trampoline into `State::run_isr`).
+        #[cfg(target_arch = "m68k")]
+        fn render_entry() -> unsafe extern "C" fn();
     }
     pub trait BclkPin<T> {
         const PAR: ParField;
@@ -70,12 +76,29 @@ pub trait MclkPin<T: Instance>: sealed::MclkPin<T> + PeripheralType {}
 pub trait ClkinPin: sealed::ClkinPin + PeripheralType {}
 
 macro_rules! instance {
-    ($(#[$m:meta])* $name:ident, $gate:ident, $index:expr, $tx:ident, $rx:ident) => {
+    ($(#[$m:meta])* $name:ident, $gate:ident, $index:expr, $tx:ident, $rx:ident, $entry:ident, $isr:ident) => {
+        #[cfg(target_arch = "m68k")]
+        $(#[$m])*
+        coldfire_rt::exception_entry!($entry, $isr);
+        #[cfg(target_arch = "m68k")]
+        $(#[$m])*
+        #[unsafe(no_mangle)]
+        extern "C" fn $isr(_frame: u32) {
+            <crate::peripherals::$name as sealed::Instance>::state().run_isr();
+        }
         $(#[$m])*
         impl sealed::Instance for crate::peripherals::$name {
             const REGS: crate::pac::ssi0::Ssi0 = crate::pac::$name;
             const GATE: crate::clocks::Gate = crate::clocks::Gate::$gate;
             const INDEX: u8 = $index;
+            fn state() -> &'static stream::State {
+                static STATE: stream::State = stream::State::new();
+                &STATE
+            }
+            #[cfg(target_arch = "m68k")]
+            fn render_entry() -> unsafe extern "C" fn() {
+                $entry
+            }
         }
         $(#[$m])*
         impl Instance for crate::peripherals::$name {
@@ -85,8 +108,8 @@ macro_rules! instance {
     };
 }
 
-instance!(SSI0, Ssi0, 0, DMA_CH50, DMA_CH48);
-instance!(#[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] SSI1, Ssi1, 1, DMA_CH54, DMA_CH52);
+instance!(SSI0, Ssi0, 0, DMA_CH50, DMA_CH48, ssi0_render_entry, embassy_mcf5441x_ssi0_render);
+instance!(#[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] SSI1, Ssi1, 1, DMA_CH54, DMA_CH52, ssi1_render_entry, embassy_mcf5441x_ssi1_render);
 
 pub(crate) const CR_SSI_EN: u32 = 1 << 0;
 pub(crate) const CR_TE: u32 = 1 << 1;

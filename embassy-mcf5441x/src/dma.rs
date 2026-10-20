@@ -151,6 +151,11 @@ pub(crate) fn daddr(n: u8) -> u32 {
     pac::EDMA.tcd(n as usize).daddr().read().0
 }
 
+/// Channel `n`'s current source address.
+pub(crate) fn saddr(n: u8) -> u32 {
+    pac::EDMA.tcd(n as usize).saddr().read().0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
