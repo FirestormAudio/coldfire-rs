@@ -118,7 +118,7 @@ def test_docs_build_on_the_host_with_the_docs_rs_features():
     for page in ("coldfire_rt/fn.set_vector.html", "coldfire_rt/struct.Handler.html", "coldfire_rt/macro.exception_entry.html",
                  "coldfire_rt/attr.entry.html", "coldfire/emac/index.html", "coldfire/mmio/index.html",
                  "mcf5441x_pac/constant.UART0.html", "embassy_mcf5441x/usb/struct.Driver.html",
-                 "embassy_mcf5441x/fn.init.html", "embassy_mcf5441x/boot/struct.BootConfig.html"):
+                 "embassy_mcf5441x/fn.init.html", "embassy_mcf5441x/boot/struct.BootConfig.html", "embassy_mcf5441x/ssi/struct.Ssi.html"):
         assert (doc / page).exists(), page
 
 
@@ -141,7 +141,7 @@ def test_examples_build_for_coldfire_warning_free():
     # the known noise: the toolchain's 'retain' note, the RWX-segment linker note, and cargo's per-binary count of it
     known = re.compile(r"'retain' attribute ignored|has a LOAD segment with RWX permissions$|generated 1 warning$")
     assert [l for l in r.stderr.splitlines() if l.startswith("warning") and not known.search(l)] == []
-    for name in ("uart-echo", "ticker", "usb-cdc"):
+    for name in ("uart-echo", "ticker", "usb-cdc", "ssi-loop"):
         assert (ROOT / "examples/target/m68k-coldfire-none-elf/release" / name).exists(), name
 
 

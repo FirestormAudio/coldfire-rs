@@ -4,6 +4,7 @@ Starting points for an MCF5441x board on `embassy-mcf5441x`:
 
 | Example | What it does |
 |---|---|
+| `ssi-loop` | SSI0 as an I2S master, 16-bit stereo: each received block is sent straight back (not run on hardware). |
 | `uart-echo` | Blocking UART0 (TX PF3, RX PF4) at 115,200 baud, echoing every byte. |
 | `ticker` | The thread executor and embassy-time: a line on UART0 every second. |
 | `usb-cdc` | A USB CDC-ACM device on the OTG port and its ULPI PHY, echoing what the host sends. |

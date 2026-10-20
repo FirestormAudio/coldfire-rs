@@ -18,7 +18,7 @@ Every driver in the HAL runs on hardware, on an MCF54415 board. The API is young
 | [`coldfire-rt`](coldfire-rt) | Runtime: reset, the stack and `.bss`, a RAM vector table, exception trampolines, and the linker script. |
 | [`coldfire-rt-macros`](coldfire-rt-macros) | The `#[entry]`, `#[exception]` and `#[interrupt]` attributes. Use them through `coldfire-rt`. |
 | [`mcf5441x-pac`](mcf5441x-pac) | The MCF5441x PAC: register blocks, typed fields and the `Interrupt` enum, generated from an SVD with chiptool. |
-| [`embassy-mcf5441x`](embassy-mcf5441x) | The Embassy HAL: `init`, clocks, interrupts and executors, an embassy-time driver, GPIO and pin mux, and drivers for eDMA, UART, DSPI, eSDHC and USB. |
+| [`embassy-mcf5441x`](embassy-mcf5441x) | The Embassy HAL: `init`, clocks, interrupts and executors, an embassy-time driver, GPIO and pin mux, and drivers for eDMA, UART, DSPI, SSI, eSDHC and USB. |
 
 `examples/` has three small programs to start a board from (see [examples/README.md](examples/README.md)).
 
@@ -33,9 +33,10 @@ Every driver in the HAL runs on hardware, on an MCF54415 board. The API is young
 | UART | Blocking `Uart`/`UartTx`/`UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
 | DSPI | Blocking SPI: `SpiBus` and `SpiDevice` with hardware chip selects (`embedded-hal` 1.0). |
 | eSDHC | eMMC block reads (read-only) through eDMA, async. |
+| SSI | I2S or network-mode audio: full-duplex eDMA rings, a `render(input, output)` callback in a software interrupt at the level you pick. |
 | USB OTG | Device mode at high speed through a ULPI PHY (`embassy-usb-driver`). MCF54415–MCF54418 only. |
 
-Not there yet: SSI, eSDHC writes, EPORT, DMA timers, I2C, RTC, PWM, ADC/DAC, FlexCAN, Ethernet, NAND flash and
+Not there yet: eSDHC writes, EPORT, DMA timers, I2C, RTC, PWM, ADC/DAC, FlexCAN, Ethernet, NAND flash and
 USB host.
 [TODO.md](TODO.md) has the list.
 
