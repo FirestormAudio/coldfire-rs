@@ -35,7 +35,8 @@ Every driver in the HAL runs on hardware, on an MCF54415 board. The API is young
 | eSDHC | eMMC block reads (read-only) through eDMA, async. |
 | USB OTG | Device mode at high speed through a ULPI PHY (`embassy-usb-driver`). MCF54415–MCF54418 only. |
 
-Not there yet: I2C, SSI, Ethernet, FlexCAN, ADC/DAC, PWM, RTC, NAND flash, eSDHC writes and USB host.
+Not there yet: SSI, eSDHC writes, EPORT, DMA timers, I2C, RTC, PWM, ADC/DAC, FlexCAN, Ethernet, NAND flash and
+USB host.
 [TODO.md](TODO.md) has the list.
 
 ## Quick start

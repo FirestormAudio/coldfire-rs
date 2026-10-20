@@ -1,11 +1,16 @@
 # TODO
 
-## Drivers not written yet (embassy-mcf5441x)
+## Drivers not written yet (embassy-mcf5441x), in priority order
 
-- I2C (I2C0–I2C5), SSI (SSI0/SSI1), Ethernet (MACNET0/MACNET1 and the switch), FlexCAN (FLEXCAN0/FLEXCAN1), ADC and
-  DAC, PWM (MCPWM), RTC, and a NAND flash driver (the cold-boot part only reads boot-format pages). The PAC has their
-  registers; some (I2C) already have peripheral tokens.
-- eSDHC writes and USB host mode: under "Existing drivers" below.
+Peripherals a known board uses come first; the rest wait for hardware to test them on.
+
+1. SSI: I2S with eDMA (a known board's audio drives SSI1 through the PAC today).
+2. eSDHC writes and erase (CMD24/25, CMD35/36/38): see "Existing drivers" below.
+3. EPORT: edge-port external interrupts, as an embassy `Wait`.
+4. DMA timers (DTIM0–3): a free-running timestamp counter, or a second time-driver option.
+5. Waiting for a board to test on: I2C (I2C0–I2C5); RTC; PWM (MCPWM); ADC and DAC; FlexCAN (FLEXCAN0/1);
+   Ethernet (MACNET0/1 and the switch, through embassy-net); a NAND flash driver (the cold-boot part only reads
+   boot-format pages); USB host mode.
 
 ## Cold boot (embassy-mcf5441x)
 
