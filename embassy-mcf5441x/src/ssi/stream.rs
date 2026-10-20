@@ -3,7 +3,7 @@
 //! copied out and handed to `render` with the TX half the DMA isn't reading.
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicUsize, Ordering::Relaxed};
 
-use super::{Instance, Ssi, CR_RE, CR_SSI_EN, CR_TE, FIFO_DEPTH};
+use super::{Instance, Ssi, CR_RE, CR_SSI_EN, CR_TE};
 use crate::dma::{self, attr, csr, Channel, ChannelInstance, Size, Tcd};
 use crate::interrupt::typelevel::{Binding, Handler, Interrupt as _};
 use crate::interrupt::{InterruptExt, Priority, SoftIrq};
@@ -284,7 +284,7 @@ impl<'d, T: Instance> Ssi<'d, T> {
         let mut ssi = self;
         if r.cr().read().0 & CR_SSI_EN == 0 {
             r.cr().write_value(regs::Cr(ssi.cr | CR_SSI_EN));
-            for _ in 0..FIFO_DEPTH {
+            for _ in 0..super::prime_words(S) {
                 r.tx0().write_value(regs::Tx0(0));
             }
         }

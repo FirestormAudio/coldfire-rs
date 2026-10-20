@@ -124,18 +124,26 @@ pub(crate) enum Reg {
     Tx0,
 }
 
-/// The clocks-only start, in order: enable, prime the transmit FIFO with silence, then transmit (the bit clock and
-/// frame sync run while TE is set; RM 35.4.1).
-pub(crate) fn start_sequence(cr: u32) -> [(Reg, u32); FIFO_DEPTH + 2] {
+/// How many zero words to prime the transmit FIFO with: whole frames only, or every later frame would start a slot
+/// late (left and right swapped).
+pub(crate) const fn prime_words(slots: usize) -> usize {
+    if slots > FIFO_DEPTH { 0 } else { FIFO_DEPTH - FIFO_DEPTH % slots }
+}
+
+/// The clocks-only start, in order: enable, prime the transmit FIFO with silent frames, then transmit (the bit clock
+/// and frame sync run while TE is set; RM 35.4.1). The first `n + 2` entries are the sequence.
+pub(crate) fn start_sequence(cr: u32, slots: usize) -> ([(Reg, u32); FIFO_DEPTH + 2], usize) {
+    let n = prime_words(slots);
     let mut seq = [(Reg::Tx0, 0); FIFO_DEPTH + 2];
     seq[0] = (Reg::Cr, cr | CR_SSI_EN);
-    seq[FIFO_DEPTH + 1] = (Reg::Cr, cr | CR_SSI_EN | CR_TE);
-    seq
+    seq[n + 1] = (Reg::Cr, cr | CR_SSI_EN | CR_TE);
+    (seq, n)
 }
 
 /// An SSI, configured but not yet streaming.
 pub struct Ssi<'d, T: Instance> {
     pub(crate) cr: u32,
+    pub(crate) slots: usize,
     _p: core::marker::PhantomData<&'d mut T>,
 }
 
@@ -171,7 +179,7 @@ impl<'d, T: Instance> Ssi<'d, T> {
         r.ccr().write_value(regs::Ccr(w.ccr));
         r.fcsr().write_value(regs::Fcsr(w.fcsr));
         r.ier().write_value(regs::Ier(w.ier));
-        Self { cr: w.cr, _p: core::marker::PhantomData }
+        Self { cr: w.cr, slots: config.slots as usize, _p: core::marker::PhantomData }
     }
 
     /// Put SSI_CLKIN (the external audio clock) on its pad, for `ClockSource::Clkin`.
@@ -184,7 +192,8 @@ impl<'d, T: Instance> Ssi<'d, T> {
     /// before it is configured. `stream` keeps them running.
     pub fn start_clocks(&mut self) {
         let r = T::REGS;
-        for (reg, v) in start_sequence(self.cr) {
+        let (seq, n) = start_sequence(self.cr, self.slots);
+        for &(reg, v) in &seq[..n + 2] {
             match reg {
                 Reg::Cr => r.cr().write_value(regs::Cr(v)),
                 Reg::Tx0 => r.tx0().write_value(regs::Tx0(v)),
@@ -240,11 +249,21 @@ mod tests {
     #[test]
     fn start_clocks_sets_en_and_te_and_primes_silence() {
         let cr = 1 << 4 | 0b01 << 5;
-        let seq = start_sequence(cr);
+        let (seq, n) = start_sequence(cr, 2);
         assert_eq!(seq[0], (Reg::Cr, cr | CR_SSI_EN));
-        assert!(seq[1..1 + FIFO_DEPTH].iter().all(|&w| w == (Reg::Tx0, 0)));
-        assert_eq!(seq[1 + FIFO_DEPTH], (Reg::Cr, cr | CR_SSI_EN | CR_TE));
-        assert_eq!(seq.len(), FIFO_DEPTH + 2);
+        assert!(seq[1..1 + n].iter().all(|&w| w == (Reg::Tx0, 0)));
+        assert_eq!(seq[1 + n], (Reg::Cr, cr | CR_SSI_EN | CR_TE));
+    }
+
+    #[test]
+    fn priming_fills_whole_frames_only() {
+        // an odd word count would shift every later frame by a slot (left and right swapped)
+        assert_eq!(prime_words(2), 14);
+        assert_eq!(prime_words(4), 12);
+        assert_eq!(prime_words(1), 15);
+        assert_eq!(prime_words(16), 0);
+        let (_, n) = start_sequence(0, 2);
+        assert_eq!(n, 14);
     }
 
     #[test]
