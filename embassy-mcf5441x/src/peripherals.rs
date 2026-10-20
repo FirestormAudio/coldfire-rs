@@ -24,6 +24,8 @@ embassy_hal_internal::peripherals! {
     I2C3,
     I2C4,
     I2C5,
+    SSI0,
+    #[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] SSI1,
     ESDHC,
     USBOTG,
     DMA_CH0,
@@ -203,6 +205,8 @@ impl_regs!(I2C2, i2c0::I2c0);
 impl_regs!(I2C3, i2c0::I2c0);
 impl_regs!(I2C4, i2c0::I2c0);
 impl_regs!(I2C5, i2c0::I2c0);
+impl_regs!(SSI0, ssi0::Ssi0);
+#[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] impl_regs!(SSI1, ssi0::Ssi0);
 impl_regs!(ESDHC, esdhc::Esdhc);
 impl_regs!(USBOTG, usbotg::Usbotg);
 impl_dma_channel!(DMA_CH0, 0, EDMA_INTR_INT00);

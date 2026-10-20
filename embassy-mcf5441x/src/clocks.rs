@@ -74,6 +74,8 @@ pub enum Gate {
     Pit2 = 34,
     Pit3 = 35,
     UsbOtg = 44,
+    Ssi0 = 47,
+    Ssi1 = 50,
     Esdhc = 51,
     Dspi2 = BANK1 | 14,
     Dspi3 = BANK1 | 15,

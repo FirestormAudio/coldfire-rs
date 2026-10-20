@@ -239,3 +239,24 @@ def test_esdhc_pins_are_gated_by_package_and_dat4_7_left_out():
 def test_uart_and_spi_tables_are_unchanged_by_instance_less_signals():
     assert (HAL / "src/uart/pins.rs").read_text() == render_uart()
     assert (HAL / "src/spi/pins.rs").read_text() == render_spi()
+
+
+def render_ssi():
+    return halgen.render_ssi_pins(json.loads((HAL / "pins.json").read_text()),
+                                  json.loads((ROOT / "pac-gen/parts_map.json").read_text()),
+                                  json.loads((HAL / "pinmux.json").read_text()))
+
+
+def test_ssi_pins_output_is_committed():
+    assert (HAL / "src/ssi/pins.rs").read_text() == render_ssi()
+
+
+def test_ssi_tokens_and_pins():
+    assert "impl_regs!(SSI0, ssi0::Ssi0);" in render()
+    assert f"#[cfg({P256})] impl_regs!(SSI1, ssi0::Ssi0);" in render()          # SSI1 isn't on the MCF54410
+    s = render_ssi()
+    for pin, kind in (("PE6", "BclkPin"), ("PE5", "FsPin"), ("PE3", "TxdPin"), ("PE4", "RxdPin")):
+        assert re.search(rf"pin!\((#\[[^\]]*\]\s*)?SSI1, {kind}, {pin}, PAR_UART2, \d, 2, Alt2\);", s), (pin, kind)
+    for pin, kind in (("PH3", "BclkPin"), ("PH5", "FsPin"), ("PH6", "TxdPin"), ("PH7", "RxdPin"), ("PH4", "MclkPin")):
+        assert re.search(rf"pin!\((#\[[^\]]*\]\s*)?SSI0, {kind}, {pin}, PAR_SSI0[HL], \d, 2, Primary\);", s), (pin, kind)
+    assert re.search(r"clkin!\((#\[[^\]]*\]\s*)?PH4, PAR_SSI0H, 0, 2, Alt1\);", s)

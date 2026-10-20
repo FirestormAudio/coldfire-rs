@@ -29,6 +29,7 @@ pub mod executor;
 pub mod gpio;
 pub mod pinmux;
 pub mod spi;
+pub mod ssi;
 pub mod uart;
 #[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))]
 pub mod usb;
