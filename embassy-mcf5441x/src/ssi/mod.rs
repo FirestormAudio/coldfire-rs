@@ -1,6 +1,10 @@
 //! SSI (synchronous serial interface, RM ch. 35): I2S or network-mode audio, streamed by eDMA in both directions.
 use embassy_hal_internal::PeripheralType;
 
+use crate::pac;
+use crate::pac::ssi0::regs;
+use crate::pinmux::set_function;
+
 mod config;
 mod pins;
 pub use config::*;
@@ -84,6 +88,98 @@ macro_rules! instance {
 instance!(SSI0, Ssi0, 0, DMA_CH50, DMA_CH48);
 instance!(#[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] SSI1, Ssi1, 1, DMA_CH54, DMA_CH52);
 
+pub(crate) const CR_SSI_EN: u32 = 1 << 0;
+pub(crate) const CR_TE: u32 = 1 << 1;
+pub(crate) const CR_RE: u32 = 1 << 2;
+/// Depth of each FIFO, in words (RM 35.1.2).
+pub(crate) const FIFO_DEPTH: usize = 15;
+
+/// A register the start sequence writes.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Reg {
+    Cr,
+    Tx0,
+}
+
+/// The clocks-only start, in order: enable, prime the transmit FIFO with silence, then transmit (the bit clock and
+/// frame sync run while TE is set; RM 35.4.1).
+pub(crate) fn start_sequence(cr: u32) -> [(Reg, u32); FIFO_DEPTH + 2] {
+    let mut seq = [(Reg::Tx0, 0); FIFO_DEPTH + 2];
+    seq[0] = (Reg::Cr, cr | CR_SSI_EN);
+    seq[FIFO_DEPTH + 1] = (Reg::Cr, cr | CR_SSI_EN | CR_TE);
+    seq
+}
+
+/// An SSI, configured but not yet streaming.
+pub struct Ssi<'d, T: Instance> {
+    pub(crate) cr: u32,
+    _p: core::marker::PhantomData<&'d mut T>,
+}
+
+impl<'d, T: Instance> Ssi<'d, T> {
+    /// Ungate `T`, mux its pins, select its clock source and write its configuration (transmit, receive and the
+    /// SSI itself stay off).
+    pub fn new<B: BclkPin<T>, F: FsPin<T>, X: TxdPin<T>, R: RxdPin<T>>(
+        _ssi: crate::Peri<'d, T>,
+        _bclk: crate::Peri<'d, B>,
+        _fs: crate::Peri<'d, F>,
+        _txd: crate::Peri<'d, X>,
+        _rxd: crate::Peri<'d, R>,
+        config: Config,
+    ) -> Self {
+        let w = words(&config);
+        crate::clocks::ungate(T::GATE);
+        set_function(<B as sealed::BclkPin<T>>::PAR, <B as sealed::BclkPin<T>>::FUNCTION);
+        set_function(<F as sealed::FsPin<T>>::PAR, <F as sealed::FsPin<T>>::FUNCTION);
+        set_function(<X as sealed::TxdPin<T>>::PAR, <X as sealed::TxdPin<T>>::FUNCTION);
+        set_function(<R as sealed::RxdPin<T>>::PAR, <R as sealed::RxdPin<T>>::FUNCTION);
+        let (mask, value) = misccr_src(T::INDEX, config.clock);
+        let m = pac::CCM.misccr().read().0;
+        pac::CCM.misccr().write_value(pac::ccm::regs::Misccr((m & !mask) | value));
+        if let ClockSource::Pll { div } = config.clock {
+            let (mask, value) = cdrh_div(T::INDEX, div);
+            let d = pac::CCM.cdrh().read().0;
+            pac::CCM.cdrh().write_value(pac::ccm::regs::Cdrh((d & !mask) | value));
+        }
+        let r = T::REGS;
+        r.cr().write_value(regs::Cr(w.cr));
+        r.tcr().write_value(regs::Tcr(w.tcr));
+        r.rcr().write_value(regs::Rcr(w.rcr));
+        r.ccr().write_value(regs::Ccr(w.ccr));
+        r.fcsr().write_value(regs::Fcsr(w.fcsr));
+        r.ier().write_value(regs::Ier(w.ier));
+        Self { cr: w.cr, _p: core::marker::PhantomData }
+    }
+
+    /// Put SSI_CLKIN (the external audio clock) on its pad, for `ClockSource::Clkin`.
+    pub fn with_clkin<C: ClkinPin>(self, _clkin: crate::Peri<'d, C>) -> Self {
+        set_function(<C as sealed::ClkinPin>::PAR, <C as sealed::ClkinPin>::FUNCTION);
+        self
+    }
+
+    /// Run the bit clock and frame sync with silence going out, without streaming: for a codec that needs its clocks
+    /// before it is configured. `stream` keeps them running.
+    pub fn start_clocks(&mut self) {
+        let r = T::REGS;
+        for (reg, v) in start_sequence(self.cr) {
+            match reg {
+                Reg::Cr => r.cr().write_value(regs::Cr(v)),
+                Reg::Tx0 => r.tx0().write_value(regs::Tx0(v)),
+            }
+        }
+    }
+
+    /// Transmit, receive and the SSI off.
+    pub fn stop(&mut self) {
+        T::REGS.cr().write_value(regs::Cr(self.cr));
+    }
+
+    /// The SSI is enabled (clocks running).
+    pub fn is_running(&self) -> bool {
+        T::REGS.cr().read().0 & CR_SSI_EN != 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +212,16 @@ mod tests {
     fn clkin_is_ph4_alt1() {
         use crate::peripherals::PH4;
         assert_eq!(par_update(0, <PH4 as sealed::ClkinPin>::PAR, <PH4 as sealed::ClkinPin>::FUNCTION), 0x02);
+    }
+
+    #[test]
+    fn start_clocks_sets_en_and_te_and_primes_silence() {
+        let cr = 1 << 4 | 0b01 << 5;
+        let seq = start_sequence(cr);
+        assert_eq!(seq[0], (Reg::Cr, cr | CR_SSI_EN));
+        assert!(seq[1..1 + FIFO_DEPTH].iter().all(|&w| w == (Reg::Tx0, 0)));
+        assert_eq!(seq[1 + FIFO_DEPTH], (Reg::Cr, cr | CR_SSI_EN | CR_TE));
+        assert_eq!(seq.len(), FIFO_DEPTH + 2);
     }
 
     #[test]
