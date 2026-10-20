@@ -139,6 +139,11 @@ fn mux_bus<T: Instance, C: SckPin<T>, O: SoutPin<T>, I: SinPin<T>>(_: &Peri<'_, 
     pinmux::set_function(<I as sealed::SinPin<T>>::PAR, <I as sealed::SinPin<T>>::FUNCTION);
 }
 
+fn mux_tx_only<T: Instance, C: SckPin<T>, O: SoutPin<T>>(_: &Peri<'_, C>, _: &Peri<'_, O>) {
+    pinmux::set_function(<C as sealed::SckPin<T>>::PAR, <C as sealed::SckPin<T>>::FUNCTION);
+    pinmux::set_function(<O as sealed::SoutPin<T>>::PAR, <O as sealed::SoutPin<T>>::FUNCTION);
+}
+
 /// Frames an operation sends (nonzero exactly when it has bytes).
 fn frames_of(op: &Operation<'_, u8>) -> usize {
     match op {
@@ -377,6 +382,22 @@ pub struct PcsDevice<'d> {
 }
 
 impl<'d> PcsDevice<'d> {
+    /// Like [`PcsDevice::new_blocking`] without SIN, for a write-only device on a board that has no SIN pad for it
+    /// (reads return what the open SIN line gives).
+    pub fn new_blocking_tx_only<T: Instance, C: PcsPin<T>>(
+        _spi: Peri<'d, T>,
+        sck: Peri<'d, impl SckPin<T>>,
+        sout: Peri<'d, impl SoutPin<T>>,
+        _cs: Peri<'d, C>,
+        config: Config,
+    ) -> Self {
+        clocks::ungate(T::GATE);
+        mux_tx_only(&sck, &sout);
+        pinmux::set_function(<C as sealed::PcsPin<T>>::PAR, <C as sealed::PcsPin<T>>::FUNCTION);
+        let pcs = <C as sealed::PcsPin<T>>::PCS;
+        Self { spi: Spi::setup::<T>(config), cmd: PUSHR_CONT | 1 << (16 + pcs as u32) }
+    }
+
     /// [`Spi::new_blocking`] plus the chip select `cs`, its pad muxed.
     pub fn new_blocking<T: Instance, C: PcsPin<T>>(
         _spi: Peri<'d, T>,

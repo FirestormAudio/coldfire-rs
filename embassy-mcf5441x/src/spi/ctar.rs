@@ -58,6 +58,11 @@ pub struct Ctar(u32);
 
 impl Ctar {
     /// `mode`, MSB first, the fastest clock (bus / 2 / 2) and the shortest delays (2 bus clocks each).
+    /// A whole CTAR word, for a board that has a proven one (its timing kept as given; `frames` still sets FMSZ).
+    pub const fn from_bits(bits: u32) -> Self {
+        Ctar(bits)
+    }
+
     pub const fn new(mode: Mode) -> Self {
         Ctar((mode as u32) << 25)
     }
@@ -156,6 +161,14 @@ mod tests {
         assert_eq!(t.frames(8), fields | 7 << 27);
         assert_eq!(t.frames(16), fields | 15 << 27);
         assert_eq!(t.sck_hz(BUS), 12_500_000); // 125 MHz / 5 × 2 / 4
+    }
+
+    #[test]
+    fn from_bits_keeps_the_word_and_frames_sets_fmsz() {
+        // a board's own CTAR word (timing it proved): kept as given, apart from FMSZ, which `frames` sets
+        let t = Ctar::from_bits(0x7A02_0011);
+        assert_eq!(t.frames(8), 0x3A02_0011);
+        assert_eq!(t.frames(16), 0x7A02_0011);
     }
 
     #[test]
