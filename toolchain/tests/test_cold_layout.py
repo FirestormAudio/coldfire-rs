@@ -88,8 +88,18 @@ def test_bootloader_layout_unchanged():
     r = subprocess.run([str(ROOT / "toolchain/cargo-cf"), str(ROOT / "examples"), "--features", "mcf54415"], env=env,
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-4000:]
-    golden = (Path(__file__).parent / "golden/bootloader-sections.txt").read_text().split("\n")[:-1]
-    assert coldelf.golden_lines(ROOT / "examples/target/m68k-coldfire-none-elf/release/ticker") == golden
+    golden = [l.split() for l in (Path(__file__).parent / "golden/bootloader-sections.txt").read_text().split("\n")[:-1]]
+    got = [l.split() for l in coldelf.golden_lines(ROOT / "examples/target/m68k-coldfire-none-elf/release/ticker")]
+
+    def stable(rows):
+        # .rodata holds panic locations' file paths, so its size (and .bss's address after it) depend on the checkout
+        # path; the vector table, the code and where the constants start don't
+        out = []
+        for name, addr, size in rows:
+            out.append((name, addr, size if name in (".vectors", ".text") else None) if name != ".bss" else (name, None, size))
+        return out
+
+    assert stable(got) == stable(golden)
 
 
 def test_overflow_is_a_link_error(tmp_path):
