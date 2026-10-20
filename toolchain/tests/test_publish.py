@@ -149,13 +149,13 @@ def test_publish_dry_run_of_the_workspace_passes():
     # uploads nothing; the PAC and HAL refuse to build without a part, so verification needs one (as the real publish
     # will). --workspace handles crates whose siblings aren't on crates.io yet, through a temporary local registry
     # whose crates cargo extracts under ~/.cargo/registry/src/-<hash>/ and never refreshes while the version stays
-    # 0.1.0, and whose builds it treats as immutable: drop those extractions and builds of our crates first, or the
+    # the same, and whose builds it treats as immutable: drop those extractions and builds of our crates first, or the
     # check verifies against an old copy
     import os
     import shutil
     src = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "registry/src"
-    for d in src.glob("-*/*-0.1.0"):
-        if d.name.removesuffix("-0.1.0") in CRATES:
+    for d in src.glob("-*/*-[0-9]*.[0-9]*.[0-9]*"):
+        if d.name.rsplit("-", 1)[0] in CRATES:
             shutil.rmtree(d)
     target = ROOT / "target/publish-check"
     names = {c.replace("-", "_") for c in CRATES} | set(CRATES)

@@ -73,7 +73,7 @@ Depend on the HAL and the runtime, and pick your part:
 
 ```toml
 [dependencies]
-embassy-mcf5441x = { version = "0.1", features = ["mcf54415", "bootloader", "executor-thread"] }   # or a cold boot feature
+embassy-mcf5441x = { version = "0.2", features = ["mcf54415", "bootloader", "executor-thread"] }   # or a cold boot feature
 coldfire-rt = "0.1"
 ```
 
