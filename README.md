@@ -8,7 +8,7 @@ repository has:
 - **a peripheral access crate (PAC)** generated from an SVD;
 - **an [Embassy](https://embassy.dev) HAL** with async drivers.
 
-The drivers run on hardware, on an MCF54415 board, except SSI: its SSI1 path is tested in emulation and awaits its hardware run, and SSI0 has no board wired. The API is young and may still change before 1.0.
+The drivers run on hardware, on an MCF54415 board (SSI as SSI1 only: no board here wires SSI0). The API is young and may still change before 1.0.
 
 ## Crates
 
@@ -33,7 +33,7 @@ The drivers run on hardware, on an MCF54415 board, except SSI: its SSI1 path is 
 | UART | Blocking `Uart`/`UartTx`/`UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
 | DSPI | Blocking SPI: `SpiBus` and `SpiDevice` with hardware chip selects (`embedded-hal` 1.0). |
 | eSDHC | eMMC block reads (read-only) through eDMA, async. |
-| SSI | I2S or network-mode audio: full-duplex eDMA rings, a `render(input, output)` callback in a software interrupt at the level you pick. Emulation-tested; not yet run on hardware. |
+| SSI | I2S or network-mode audio: full-duplex eDMA rings, a `render(input, output)` callback in a software interrupt at the level you pick. SSI1 runs on hardware; SSI0 is emulation-tested only. |
 | USB OTG | Device mode at high speed through a ULPI PHY (`embassy-usb-driver`). MCF54415–MCF54418 only. |
 
 Not there yet: eSDHC writes, EPORT, DMA timers, I2C, RTC, PWM, ADC/DAC, FlexCAN, Ethernet, NAND flash and
