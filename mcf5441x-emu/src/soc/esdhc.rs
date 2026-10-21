@@ -27,7 +27,7 @@ const ADMASAR: u32 = 0x58;
 const VENDOR: u32 = 0xC0;
 const HOSTVER: u32 = 0xFC;
 
-/// Reset values (RM Table 25-2).
+/// Reset values (RM Table 25-2, measured on an MCF54415).
 const BLKATTR_RESET: u32 = 0x0001_0000;
 const PROCTL_RESET: u32 = 0x20;
 const SYSCTL_RESET: u32 = 0x8008;
@@ -109,7 +109,7 @@ struct Pending {
 /// (eDMA channel 59) through DATPORT. The internal DMA (XFERTYP\[DMAEN\]) is not modelled.
 ///
 /// Registers (32-bit accesses only, RM Table 25-2; anything else is refused with [`Stop::Unmodelled`]), with their
-/// reset values:
+/// reset values (RM Table 25-2, all measured on an MCF54415):
 /// - DSADDR (0), BLKATTR (0x0001_0000), CMDARG (0), PROCTL (0x20), ADMASAR (0), VENDOR (1): stored. BLKATTR's block
 ///   size and count are used by block reads; PROCTL's EMODE and DTW are checked; VENDOR\[EXT_DMA_EN\] gates the DMA
 ///   request.
@@ -121,8 +121,11 @@ struct Pending {
 ///   BREN and BWEN for the bus test; the rest reads as at reset (0xFF88_00F8: the lines high, SDSTB, the clocks
 ///   gated off — guess: the model's controller is always idle between instantaneous steps). DAT0 (bit 24) reads
 ///   low while the card is busy after CMD6. CIHB is never set: a response is immediate.
-/// - SYSCTL (0x8008): stored; RSTA, RSTC, RSTD and INITA act and read 0. Changing SDCLKFS or DVS while SDCLKEN is set
-///   in both the old and the new value is refused (RM Table 25-13: change the frequency with SDCLKEN clear).
+/// - SYSCTL (0x8008, SDCLKEN set): stored; RSTA, RSTC, RSTD and INITA act and read 0. Changing SDCLKFS or DVS while
+///   SDCLKEN is set in both the old and the new value is refused (RM Table 25-13: change the frequency with SDCLKEN
+///   clear), but only when a SYSCTL write since the last reset (power-on or RSTA, the RSTA write's own value
+///   included) set SDCLKEN: the reset value's SDCLKEN does not count, as a driver's first write after reset sets its
+///   divider with SDCLKEN and works on the chip.
 /// - IRQSTAT: write 1 to clear. A status bit is set only when its IRQSTATEN bit is (RM 25.3.11).
 /// - IRQSTATEN (0x117F_013F): reserved bits read 0; clearing a bit clears its status bit (RM 25.3.11).
 /// - IRQSIGEN (0): a write setting a reserved bit is refused. The interrupt request is asserted while IRQSTAT and
@@ -189,6 +192,8 @@ pub struct Esdhc {
     drain_by: Option<u64>,
     /// DAT0 is low until this tick.
     busy_until: u64,
+    /// SDCLKEN was set by a SYSCTL write since the last reset (it then guards the divider).
+    clock_written: bool,
     writes: Vec<(u32, u32)>,
 }
 
@@ -216,6 +221,7 @@ impl Esdhc {
             buffer: VecDeque::new(),
             drain_by: None,
             busy_until: 0,
+            clock_written: false,
             writes: Vec::new(),
         }
     }
@@ -270,7 +276,8 @@ impl Esdhc {
 
     fn write_sysctl(&mut self, v: u32, cx: &mut DeviceCx) {
         let old = self.sysctl;
-        if v & RSTA == 0 && old & v & SDCLKEN != 0 && (old ^ v) & DIVIDER != 0 {
+        if v & RSTA == 0 && self.clock_written && old & v & SDCLKEN != 0 && (old ^ v) & DIVIDER != 0
+        {
             return cx.refuse(
                 Stop::Unmodelled,
                 format!(
@@ -298,6 +305,7 @@ impl Esdhc {
             self.irqstat &= !CC;
         }
         self.sysctl = v & !(RSTA | RSTC | RSTD | INITA) & SYSCTL_BITS;
+        self.clock_written = v & SDCLKEN != 0;
         self.signal(cx);
         self.request(cx);
     }

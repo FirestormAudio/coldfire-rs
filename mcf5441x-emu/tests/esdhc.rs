@@ -472,19 +472,18 @@ fn reserved_irqsigen_bits_halt() {
 #[test]
 fn register_writes_are_recorded_in_order() {
     let mut b = board(&[]);
-    // SDCLKEN clear: the RM's reset SYSCTL (0x8008) has the SD clock running, so its divider may not change
-    b.w(SYSCTL, 0x1050);
+    b.w(SYSCTL, 0x1058);
     b.w(CMDARG, 0x40FF_8000);
     b.w(XFERTYP, CMD1);
     assert_eq!(
         b.esdhc().writes(),
-        [(SYSCTL, 0x1050), (CMDARG, 0x40FF_8000), (XFERTYP, CMD1)]
+        [(SYSCTL, 0x1058), (CMDARG, 0x40FF_8000), (XFERTYP, CMD1)]
     );
 }
 
 #[test]
 fn reset_values_follow_the_rm() {
-    // RM Table 25-2
+    // RM Table 25-2, measured on an MCF54415 (SYSCTL 0x8008: SDCLKEN set at reset)
     let reset = [
         (DSADDR, 0),
         (BLKATTR, 0x0001_0000),
@@ -618,16 +617,42 @@ fn cmd6_busy_holds_dat0_and_refuses_commands() {
 
 #[test]
 fn divider_change_with_sdclken_set_refuses() {
-    // RM 25.3.9 SDCLKEN: change the SD clock frequency only with SDCLKEN clear
+    // RM 25.3.9 SDCLKEN: change the SD clock frequency only with SDCLKEN clear. SDCLKEN set by a software write
+    // guards the divider; the reset value's SDCLKEN does not
     let mut b = board(&[]);
-    let d = b.refused(SYSCTL, 0x1058);
+    b.w(SYSCTL, 0x1058);
+    let d = b.refused(SYSCTL, 0x1068);
     assert!(d.contains("divider"), "{d}");
-    assert_eq!(b.r(SYSCTL), 0x8008);
+    assert_eq!(b.r(SYSCTL), 0x1058);
+    b.w(SYSCTL, 0x1050);
     b.w(SYSCTL, 0x8000);
     b.w(SYSCTL, 0x1050);
     b.w(SYSCTL, 0x1058);
     b.w(SYSCTL, 0x0E_1058); // DTOCV is not the divider
     assert_eq!(b.r(SYSCTL), 0x0E_1058);
+}
+
+#[test]
+fn first_sysctl_write_after_reset_may_change_the_divider() {
+    // SYSCTL resets to 0x8008 with SDCLKEN set (measured on an MCF54415), and a driver's first write after reset
+    // sets its own divider with SDCLKEN: only SDCLKEN set by a write since the last reset (power-on or RSTA) guards
+    // the divider
+    let mut b = board(&[]);
+    b.w(SYSCTL, 0x1058);
+    let d = b.refused(SYSCTL, 0x8008);
+    assert!(d.contains("divider"), "{d}");
+    b.w(SYSCTL, RSTA);
+    assert_eq!(b.r(SYSCTL), 0);
+    b.w(SYSCTL, 0x8008);
+    let d = b.refused(SYSCTL, 0x1058);
+    assert!(d.contains("divider"), "{d}");
+    // RSTA forgets the write that set SDCLKEN
+    let mut b = board(&[]);
+    b.w(SYSCTL, 0x1058);
+    b.w(SYSCTL, RSTA | 0x1058);
+    assert_eq!(b.r(SYSCTL), 0x1058);
+    let d = b.refused(SYSCTL, 0x2058);
+    assert!(d.contains("divider"), "{d}");
 }
 
 #[test]
