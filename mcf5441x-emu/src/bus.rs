@@ -14,7 +14,9 @@
 //! instruction.
 
 use crate::device::DeviceCx;
-use crate::mem::{Fault, Size};
+use crate::irq::IrqLines;
+use crate::mem::{Fault, Size, Space, truncate};
+use crate::stop::StopReason;
 
 /// The DMA request lines: 64, one per channel of the eDMA.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -44,61 +46,62 @@ impl DmaLines {
 /// unmapped. Accesses through it are not traced and not counted by the poll detector; a write over decoded code
 /// is seen by the next instruction fetched, as with a write by the core. A device reached through it gets a
 /// [`DeviceCx`] with the master's clock and lines (and its own `Bus` when it is a bus master too).
-#[repr(transparent)]
-pub struct Bus<'a> {
-    /// The master's context; its address space is present (checked by [`DeviceCx::bus`]).
-    cx: DeviceCx<'a>,
+///
+/// It borrows the master's [`DeviceCx`] (see [`DeviceCx::bus`]): the lines it drives are the ones the master sees
+/// in `cx.irq` and `cx.dma` once the bus is dropped.
+pub struct Bus<'b> {
+    now: u64,
+    irq: &'b mut IrqLines,
+    dma: &'b mut DmaLines,
+    stop: &'b mut Option<StopReason>,
+    space: &'b mut Space,
 }
 
-impl<'a> Bus<'a> {
+impl<'b> Bus<'b> {
     /// The bus of `cx`, when it has an address space.
-    pub(crate) fn of<'s>(cx: &'s mut DeviceCx<'a>) -> Option<&'s mut Bus<'a>> {
-        cx.space.as_ref()?;
-        let cx: *mut DeviceCx<'a> = cx;
-        // SAFETY: `Bus` is `repr(transparent)` over `DeviceCx`, so the two have the same layout, and the returned
-        // reference borrows `cx` exclusively for as long as it lives.
-        Some(unsafe { &mut *cx.cast::<Bus<'a>>() })
+    pub(crate) fn of(cx: &'b mut DeviceCx<'_>) -> Option<Bus<'b>> {
+        Some(Bus {
+            now: cx.now,
+            irq: &mut *cx.irq,
+            dma: &mut *cx.dma,
+            stop: &mut *cx.stop,
+            space: cx.space.as_deref_mut()?,
+        })
     }
 
     /// Read a big-endian value of `size` at `addr`, zero-extended.
     pub fn read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
-        let DeviceCx {
-            now,
-            irq,
-            dma,
-            stop,
-            space,
-        } = &mut self.cx;
-        let space = space.as_deref_mut().expect("a bus has an address space");
-        if let Some(v) = space.ram_read(addr, size) {
+        if let Some(v) = self.space.ram_read(addr, size) {
             return Ok(v);
         }
         let unmapped = Fault::Unmapped { addr, size };
-        let (i, off) = space.devices.find(addr, size.bytes()).ok_or(unmapped)?;
-        space
-            .call(i, *now, irq, dma, stop, |d, cx| d.read(off, size, cx))
-            .map(|v| crate::mem::truncate(v, size))
+        let (i, off) = self
+            .space
+            .devices
+            .find(addr, size.bytes())
+            .ok_or(unmapped)?;
+        self.space
+            .call(i, self.now, self.irq, self.dma, self.stop, |d, cx| {
+                d.read(off, size, cx)
+            })
+            .map(|v| truncate(v, size))
             .ok_or(unmapped)
     }
 
     /// Write the low `size` bytes of `value` at `addr`, big-endian.
     pub fn write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
-        let DeviceCx {
-            now,
-            irq,
-            dma,
-            stop,
-            space,
-        } = &mut self.cx;
-        let space = space.as_deref_mut().expect("a bus has an address space");
-        if space.ram_write(addr, size, value).is_some() {
+        if self.space.ram_write(addr, size, value).is_some() {
             return Ok(());
         }
         let unmapped = Fault::Unmapped { addr, size };
-        let (i, off) = space.devices.find(addr, size.bytes()).ok_or(unmapped)?;
-        let value = crate::mem::truncate(value, size);
-        space
-            .call(i, *now, irq, dma, stop, |d, cx| {
+        let (i, off) = self
+            .space
+            .devices
+            .find(addr, size.bytes())
+            .ok_or(unmapped)?;
+        let value = truncate(value, size);
+        self.space
+            .call(i, self.now, self.irq, self.dma, self.stop, |d, cx| {
                 d.write(off, size, value, cx)
             })
             .ok_or(unmapped)
@@ -107,12 +110,7 @@ impl<'a> Bus<'a> {
     /// Copy `out.len()` bytes of RAM at `addr` into `out`. Fails with `Unmapped` at `addr` (as a byte access)
     /// unless one RAM region covers them all; devices are never read this way.
     pub fn read_bytes(&mut self, addr: u32, out: &mut [u8]) -> Result<(), Fault> {
-        let space = self
-            .cx
-            .space
-            .as_deref_mut()
-            .expect("a bus has an address space");
-        space.copy_out(addr, out).ok_or(Fault::Unmapped {
+        self.space.copy_out(addr, out).ok_or(Fault::Unmapped {
             addr,
             size: Size::Byte,
         })
@@ -121,11 +119,6 @@ impl<'a> Bus<'a> {
     /// Copy `data` into RAM at `addr`, as [`Memory::load`](crate::Memory::load): fails with `Unmapped` at `addr`
     /// (as a byte access) unless one RAM region covers it all; devices are never written this way.
     pub fn write_bytes(&mut self, addr: u32, data: &[u8]) -> Result<(), Fault> {
-        let space = self
-            .cx
-            .space
-            .as_deref_mut()
-            .expect("a bus has an address space");
-        space.load(addr, data)
+        self.space.load(addr, data)
     }
 }

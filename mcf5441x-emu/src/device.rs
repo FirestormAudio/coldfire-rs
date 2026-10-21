@@ -39,6 +39,10 @@ pub trait Device: Any {
     /// events, and after every host-side call, on every bus master in the order they were added, and called again
     /// while a round of calls changed the request lines; more than 64 rounds that all change them stop the run
     /// with [`Stop::Unmodelled`].
+    ///
+    /// A master serves each asserted request until it drops or no further progress is possible (e.g. it runs
+    /// minor loops while the line stays asserted): a request left asserted is not serviced again until the next
+    /// boundary, which RAM-only code may never reach.
     fn service(&mut self, _cx: &mut DeviceCx) {}
     /// Whether the poll detector counts reads of this device's registers (see
     /// [`Machine::set_poll_limit`](crate::Machine::set_poll_limit)). A model whose registers change with time or
@@ -67,9 +71,10 @@ pub struct DeviceCx<'a> {
     pub(crate) space: Option<&'a mut Space>,
 }
 
-impl<'a> DeviceCx<'a> {
-    /// The address space, for a bus master; `None` for any other device.
-    pub fn bus(&mut self) -> Option<&mut Bus<'a>> {
+impl DeviceCx<'_> {
+    /// The address space, for a bus master; `None` for any other device. The bus borrows this context: the
+    /// lines a device reached through it drives are seen in `irq` and `dma` once it is dropped.
+    pub fn bus(&mut self) -> Option<Bus<'_>> {
         Bus::of(self)
     }
 

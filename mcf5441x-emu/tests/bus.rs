@@ -6,7 +6,7 @@ mod common;
 use std::collections::VecDeque;
 
 use common::{BASE, prepare, until};
-use mcf5441x_emu::{Access, Device, DeviceCx, Fault, Machine, Size, Stop};
+use mcf5441x_emu::{Access, Device, DeviceCx, Fault, Limit, Machine, Size, Stop};
 
 const FIFO: u32 = 0xFC00_0000;
 const MOVER: u32 = 0xFC01_0000;
@@ -67,7 +67,7 @@ impl Device for Mover {
         self.moved
     }
     fn write(&mut self, offset: u32, _: Size, value: u32, cx: &mut DeviceCx) {
-        let bus = cx.bus().expect("a bus master has a bus");
+        let mut bus = cx.bus().expect("a bus master has a bus");
         match offset {
             0 => bus.write_bytes(value, &[0x4e, 0x71, 0x4e, 0x71]).unwrap(),
             _ => {
@@ -83,7 +83,7 @@ impl Device for Mover {
     fn service(&mut self, cx: &mut DeviceCx) {
         while cx.dma.asserted() & 1 << LINE != 0 {
             assert!(self.moved < 100, "the request never dropped");
-            let bus = cx.bus().expect("a bus master has a bus");
+            let mut bus = cx.bus().expect("a bus master has a bus");
             let v = bus.read(FIFO, Size::Long).unwrap();
             bus.write(self.dst, Size::Long, v).unwrap();
             self.dst += 4;
@@ -145,7 +145,7 @@ impl Device for Poller {
     }
     fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
     fn service(&mut self, cx: &mut DeviceCx) {
-        let bus = cx.bus().unwrap();
+        let mut bus = cx.bus().unwrap();
         for _ in 0..10 {
             bus.read(FIFO + 8, Size::Long).unwrap();
             self.reads += 1;
@@ -283,7 +283,7 @@ fn master_access_to_its_own_window_is_unmapped() {
     );
     // Byte copies reach RAM only.
     m.with_device::<Mover, _>(mover, |_, cx| {
-        let bus = cx.bus().unwrap();
+        let mut bus = cx.bus().unwrap();
         assert_eq!(
             bus.read_bytes(FIFO, &mut [0; 4]),
             Err(Fault::Unmapped {
@@ -400,10 +400,10 @@ fn idle_until_advances_devices_without_instructions() {
     let mut m = Machine::new();
     m.mem.map_ram(0x4010_0000, 0x10_0000);
     let t = m.add_timer(Box::new(Ticker::default()));
-    m.idle_until(120);
+    assert_eq!(m.idle_until(120), None);
     assert_eq!(m.device::<Ticker>(t).at, [50, 100]);
     assert_eq!((m.now(), m.instructions()), (120, 0));
-    m.idle_until(150);
+    assert_eq!(m.idle_until(150), None);
     assert_eq!(m.device::<Ticker>(t).at, [50, 100, 150]);
     assert_eq!(m.now(), 150);
     assert_eq!(m.cpu.pc, 0);
@@ -429,7 +429,7 @@ fn idle_until_advances_devices_without_instructions() {
     m.add_timer(Box::new(Request { done: false }));
     m.with_device::<Fifo, _>(fifo, |f, _| f.q.push_back(7));
     assert_eq!(m.device::<Mover>(mover).moved, 0, "no request yet");
-    m.idle_until(10);
+    assert_eq!(m.idle_until(10), None);
     assert_eq!(m.mem.peek(0x4010_0000, 4).unwrap(), [0, 0, 0, 7]);
     assert_eq!(m.device::<Mover>(mover).moved, 1);
     assert_eq!(m.dma_lines().asserted(), 0);
@@ -442,7 +442,7 @@ fn with_device_gets_a_bus_for_masters_only() {
     let plain = m.with_device::<Fifo, _>(fifo, |_, cx| cx.bus().is_none());
     assert!(plain);
     let master = m.with_device::<Mover, _>(mover, |_, cx| {
-        let bus = cx.bus().unwrap();
+        let mut bus = cx.bus().unwrap();
         bus.write(FIFO + 4, Size::Long, 0x55).unwrap();
         bus.read(FIFO + 8, Size::Long).unwrap()
     });
@@ -457,4 +457,137 @@ fn with_device_gets_a_bus_for_masters_only() {
 fn dma_line_out_of_range_panics() {
     let (mut m, fifo, _) = fifo_and_mover(0x4010_0000);
     m.with_device::<Fifo, _>(fifo, |_, cx| cx.dma.set(64, true));
+}
+
+/// Halts the run when advanced at `at`, then schedules nothing; or, with `stuck`, keeps its event at `at`.
+struct Alarm {
+    at: u64,
+    fired: bool,
+    stuck: bool,
+}
+
+impl Device for Alarm {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
+    fn next_event(&self) -> Option<u64> {
+        (self.stuck || !self.fired).then_some(self.at)
+    }
+    fn advance(&mut self, now: u64, cx: &mut DeviceCx) {
+        if !self.stuck {
+            self.fired = true;
+            cx.halt(Stop::Halt("alarm"), format!("at {now}"));
+        }
+    }
+}
+
+#[test]
+fn a_halt_from_with_device_is_reported_by_the_next_run() {
+    let (mut m, l) = prepare("moveq #1,%d0\nend:", &["end"]);
+    let fifo = m.add_device(FIFO, 0x100, Box::new(Fifo::default()));
+    m.with_device::<Fifo, _>(fifo, |_, cx| cx.halt(Stop::Halt("host"), "from the host"));
+    // Idling does not report it: it stays pending for the run.
+    assert_eq!(m.idle_until(10), None);
+    assert_eq!(m.now(), 10);
+    let r = m.run(until(l[0]));
+    assert_eq!((r.kind, r.pc), (Stop::Halt("host"), BASE), "{r:?}");
+    assert_eq!(r.detail, "from the host");
+    assert_eq!((m.cpu.pc, m.instructions(), m.cpu.d[0]), (BASE, 0, 0));
+    // Reported once.
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+}
+
+#[test]
+fn idle_until_stops_at_a_device_halt_and_returns_it() {
+    let (mut m, _) = prepare("nop", &[]);
+    m.add_timer(Box::new(Alarm {
+        at: 30,
+        fired: false,
+        stuck: false,
+    }));
+    let r = m.idle_until(100).expect("halted");
+    assert_eq!((r.kind, r.pc), (Stop::Halt("alarm"), BASE), "{r:?}");
+    assert_eq!(r.detail, "at 30");
+    assert_eq!((m.now(), m.instructions()), (30, 0));
+    // Taken: the next run does not report it again, and idling continues from there.
+    let r = m.run(Limit {
+        max_instructions: Some(1),
+        ..Limit::default()
+    });
+    assert_eq!((r.kind, m.now()), (Stop::InstructionLimit, 31), "{r:?}");
+    assert_eq!(m.idle_until(100), None);
+    assert_eq!(m.now(), 100);
+}
+
+#[test]
+fn idle_until_stops_at_an_event_that_is_not_advanced() {
+    let mut m = Machine::new();
+    m.add_timer(Box::new(Alarm {
+        at: 10,
+        fired: false,
+        stuck: true,
+    }));
+    let r = m.idle_until(50).expect("halted");
+    assert_eq!(r.kind, Stop::Halt("device event not advanced"), "{r:?}");
+    assert!(r.detail.contains("tick 10"), "{r:?}");
+    assert_eq!(m.now(), 10);
+}
+
+/// A bus master that, on a write to its +0, writes the value to `peer` through its bus; on a write to its +4,
+/// reads `peer` through its bus. It keeps the results.
+struct Relay {
+    peer: u32,
+    seen: Vec<Result<u32, Fault>>,
+}
+
+impl Device for Relay {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0x5A
+    }
+    fn write(&mut self, offset: u32, _: Size, value: u32, cx: &mut DeviceCx) {
+        let mut bus = cx.bus().expect("bus master");
+        let r = match offset {
+            0 => bus.write(self.peer, Size::Long, value).map(|()| 0),
+            _ => bus.read(self.peer, Size::Long),
+        };
+        self.seen.push(r);
+    }
+}
+
+#[test]
+fn nested_masters_reach_each_other_but_not_back() {
+    const A: u32 = 0xFC03_0000;
+    const B: u32 = 0xFC04_0000;
+    let mut m = Machine::new();
+    // A forwards a write to B's +4; B then reads A through its own bus while A is being called.
+    let a = m.add_bus_master(
+        A,
+        0x100,
+        Box::new(Relay {
+            peer: B + 4,
+            seen: Vec::new(),
+        }),
+    );
+    let b = m.add_bus_master(
+        B,
+        0x100,
+        Box::new(Relay {
+            peer: A,
+            seen: Vec::new(),
+        }),
+    );
+    m.access(A, Size::Long, Some(1)).unwrap();
+    assert_eq!(m.device::<Relay>(a).seen, [Ok(0)]);
+    assert_eq!(
+        m.device::<Relay>(b).seen,
+        [Err(Fault::Unmapped {
+            addr: A,
+            size: Size::Long
+        })]
+    );
+    // From the host, B reads A: A is not being called, so it answers.
+    m.access(B + 4, Size::Long, Some(0)).unwrap();
+    assert_eq!(m.device::<Relay>(b).seen[1], Ok(0x5A));
 }

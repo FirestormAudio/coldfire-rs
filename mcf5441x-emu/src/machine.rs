@@ -102,8 +102,8 @@ impl Machine {
     }
 
     /// Call `f` on device `id` with a full context at the current tick (with a [`Bus`](crate::bus::Bus) when it
-    /// is a bus master), then service the bus masters. Panics when it is not a `T`. A halt asked for here is
-    /// reported by the next run, before its first instruction.
+    /// is a bus master), then service the bus masters. Panics when it is not a `T`. A halt asked for here (or by
+    /// the servicing) stays pending and is reported by the next run, before its first instruction.
     pub fn with_device<T: Device, R>(
         &mut self,
         id: DeviceId,
@@ -116,8 +116,8 @@ impl Machine {
 
     /// Make an access as the core would at the current tick, by the instruction at PC: RAM, or a device access
     /// that is traced but not counted by the poll detector; then service the bus masters. Returns the value read,
-    /// or 0 for a write (`write` holds the value to write). A halt a device asks for is reported by the next run,
-    /// before its first instruction.
+    /// or 0 for a write (`write` holds the value to write). A halt a device asks for stays pending and is reported
+    /// by the next run, before its first instruction.
     pub fn access(&mut self, addr: u32, size: Size, write: Option<u32>) -> Result<u32, Fault> {
         self.mem.pc = self.cpu.pc;
         let r = self.mem.host_access(addr, size, write);
@@ -126,39 +126,48 @@ impl Machine {
     }
 
     /// Move the clock to `tick` without executing instructions or taking interrupts: advance the devices at each
-    /// of their events up to and including `tick`, in order, servicing the bus masters after each. A halt a device
-    /// asks for ends the move at that tick, and the next run reports it before its first instruction. Panics when
-    /// `tick` is before the clock.
-    pub fn idle_until(&mut self, tick: u64) {
+    /// of their events up to and including `tick`, in order, servicing the bus masters after each. `None` when the
+    /// clock reached `tick`. When a device halts (or its event is not moved past the clock), the clock stays at that
+    /// event and the halt is returned, not reported again. A halt still pending from [`Machine::access`] or
+    /// [`Machine::with_device`] is left for the next run. Panics when `tick` is before the clock.
+    pub fn idle_until(&mut self, tick: u64) -> Option<StopReason> {
         assert!(
             tick >= self.mem.now,
             "idle_until({tick}) is before the clock ({})",
             self.mem.now
         );
         self.mem.horizon = 0;
+        let pending = self.mem.stop.take();
+        let r = self.idle(tick);
+        self.mem.stop = pending;
+        r
+    }
+
+    /// [`Machine::idle_until`] with no halt pending.
+    fn idle(&mut self, tick: u64) -> Option<StopReason> {
         loop {
             self.mem.advance_due();
             self.mem.service_masters();
-            if self.mem.stop.is_some() {
-                return;
+            if let Some(r) = self.mem.stop.take() {
+                return Some(self.stop(r.kind, r.detail));
             }
             match self.mem.next_event() {
                 Some(t) if t <= self.mem.now => {
-                    self.mem.stop = Some(StopReason {
-                        kind: Stop::Halt("device event not advanced"),
-                        pc: 0,
-                        detail: format!(
-                            "a device's next event stays at tick {t}, not after the clock ({})",
+                    return Some(self.stop(
+                        Stop::Halt("device event not advanced"),
+                        format!(
+                            "a device's next event stays at tick {t}, not after the clock ({}); the device must \
+                             move its event forward in `advance`",
                             self.mem.now
                         ),
-                    });
-                    return;
+                    ));
                 }
                 Some(t) if t <= tick => self.mem.now = t,
                 _ => break,
             }
         }
         self.mem.now = tick;
+        None
     }
 
     /// The DMA request lines.
