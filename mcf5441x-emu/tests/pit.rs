@@ -92,6 +92,56 @@ fn byte_accesses_hit_their_lanes() {
 }
 
 #[test]
+fn byte_writes_keep_the_other_lane_and_clear_pif() {
+    let (mut m, _) = regs();
+    w(&mut m, PMR, Size::Word, 9);
+    w(&mut m, PCSR, Size::Word, RLD | EN);
+    idle(&mut m, 10);
+    assert_ne!(r(&mut m, PCSR, Size::Word) & PIF, 0);
+    // A high-byte write leaves PIF and EN alone.
+    w(&mut m, PCSR, Size::Byte, 0x01);
+    assert_eq!(r(&mut m, PCSR, Size::Word), 0x0100 | PIF | RLD | EN);
+    // A low-byte write with PIF set clears PIF and keeps the high byte.
+    w(&mut m, PCSR + 1, Size::Byte, PIF | RLD | EN);
+    assert_eq!(r(&mut m, PCSR, Size::Word), 0x0100 | RLD | EN);
+    // A PMR high-byte write keeps the low byte and clears PIF.
+    idle(&mut m, 10 + 20);
+    assert_ne!(r(&mut m, PCSR, Size::Word) & PIF, 0);
+    w(&mut m, PMR, Size::Byte, 0x01);
+    assert_eq!(r(&mut m, PMR, Size::Word), 0x0109);
+    assert_eq!(r(&mut m, PCSR, Size::Word) & PIF, 0);
+}
+
+#[test]
+fn pre_change_while_running_keeps_the_count_continuous() {
+    // PMR 99, PRE 0: PCNTR is 49 at tick 50. Writing PRE = 2 keeps the count and slows it to one per 4 ticks.
+    // guess: the prescaler's partial count is dropped (RM 38.2.1 only says the prescaler counter resets).
+    let (mut m, id) = regs();
+    w(&mut m, PMR, Size::Word, 99);
+    w(&mut m, PCSR, Size::Word, RLD | EN);
+    idle(&mut m, 50);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 49);
+    w(&mut m, PCSR, Size::Word, 0x0200 | RLD | EN);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 49);
+    assert_eq!(next(&m, id), Some(50 + 50 * 4));
+    idle(&mut m, 50 + 8);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 47);
+    // Disabling captures the count at the new rate.
+    w(&mut m, PCSR, Size::Word, 0x0200 | RLD);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 47);
+    // The expiry lands when the count runs out, then the period is PMR at the new rate.
+    w(&mut m, PCSR, Size::Word, 0x0200 | RLD | EN);
+    assert_eq!(next(&m, id), Some(58 + 100 * 4));
+    // Raising the rate mid-run, too.
+    idle(&mut m, 58 + 40);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 89);
+    w(&mut m, PCSR, Size::Word, RLD | EN);
+    assert_eq!(next(&m, id), Some(58 + 40 + 90));
+    idle(&mut m, 58 + 40 + 90);
+    assert_eq!(m.device::<Pit>(id).expiries(), 1);
+}
+
+#[test]
 fn pit_stop_wakes_and_fast_forwards() {
     let (mut m, _, l) = board(include_str!("fixtures/pitstop.s"), &["done", "pit_isr"]);
     set_vector(&mut m, 205, l[1]);
@@ -264,7 +314,7 @@ fn free_running_mode_rolls_over_without_reload() {
 }
 
 #[test]
-fn pcsr_keeps_dbg_and_doze_and_32bit_reads_pack() {
+fn pcsr_keeps_dbg_and_doze() {
     let (mut m, _) = regs();
     w(&mut m, PMR, Size::Word, 0x1234);
     w(&mut m, PCSR, Size::Word, 0x0260); // PRE 2, DOZE, DBG

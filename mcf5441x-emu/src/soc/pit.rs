@@ -17,15 +17,17 @@ const WRITABLE: u16 = 0x0F7B;
 /// `(modulus + 1) << PRE` ticks, and what a tick is in time is the board's choice.
 ///
 /// - PCSR (reset 0): EN, RLD, PIF (write 1 to clear), PIE, OVW, DBG and DOZE (stored only), PRE in bits 11:8.
-///   Enabling starts the counter from PMR. Changing PRE while enabled does not restart it (guess: the RM says the
-///   prescaler counter resets, which has no visible effect on a timer counting whole periods).
+///   Enabling loads the counter from PMR (the RM does not say so). Changing PRE while enabled keeps the count and
+///   continues it at the new rate. guess: the prescaler's partial count is dropped (RM 38.2.1 says changing PRE
+///   resets the prescaler counter).
 /// - PMR (reset 0xFFFF): the modulus. Writing it clears PIF (RM 38.3.4). The counter takes it at its next reload,
 ///   or at once with OVW. A write with the timer disabled and OVW set loads the held counter (guess: RM 38.2.2
 ///   says PMR is then transparent to the counter).
 /// - PCNTR (read-only, reset 0xFFFF): the down-counter. A disabled timer holds its value (RM 38.2.1).
 /// - With RLD set the counter reloads PMR when it passes 0; with RLD clear it rolls over to 0xFFFF and counts
-///   a full 65536 counts (RM 38.3.2). PIF is set at each expiry, which stays on the original grid when the
-///   timer is serviced late.
+///   a full 65536 counts (RM 38.3.2). PIF is set at each expiry, which is the reload, one count after PCNTR
+///   reads 0 (guess: RM 38.3 says "when the counter reaches 0x0000"; this is the older model's grid). Expiries
+///   stay on the original grid when the timer is serviced late.
 ///
 /// Byte and word accesses address their lanes of the registers: a byte at +0 is the high byte of PCSR (PRE and the
 /// reserved bits), at +1 its low byte, at +2 and +3 the bytes of PMR, and so on for PCNTR; a byte write to PCSR
@@ -110,6 +112,14 @@ impl Pit {
         }
         let new = (self.pcsr & !mask & WRITABLE) | (value & WRITABLE) | pif;
         let (was, now_en) = (self.pcsr & EN != 0, new & EN != 0);
+        let new_pre = u32::from(new >> 8) & 0xF;
+        if was && now_en && new_pre != self.pre() {
+            // Continue from the current count at the new rate.
+            let c = self.pcntr(cx.now);
+            self.start = cx.now;
+            self.modulus = u32::from(c);
+            self.next = Some(cx.now + ((u64::from(c) + 1) << new_pre));
+        }
         if was && !now_en {
             self.held = self.pcntr(cx.now);
             self.next = None;
