@@ -69,7 +69,12 @@ pub struct DeviceCx<'a> {
     pub(crate) stop: &'a mut Option<StopReason>,
     /// The address space without the device being called, when that device is a bus master.
     pub(crate) space: Option<&'a mut Space>,
+    /// The refusal of the access in flight, if the device made one.
+    pub(crate) refused: Option<Refusal>,
 }
+
+/// A refused access: the kind of stop and its detail.
+pub(crate) type Refusal = (Stop, String);
 
 impl DeviceCx<'_> {
     /// The address space, for a bus master; `None` for any other device. The bus borrows this context: the
@@ -89,6 +94,36 @@ impl DeviceCx<'_> {
                 detail: detail.into(),
             });
         }
+    }
+
+    /// Refuse the access in flight: it fails, and the instruction making it does not complete. The run stops with
+    /// `kind` and `detail`, PC on that instruction and the registers as they were before it, as for an access to
+    /// unmapped memory; a later run tries the instruction again. This is how a model stops on a register access
+    /// to a feature it does not model. The first refusal in a call wins.
+    ///
+    /// A bus master's access refused this way fails with [`Fault::Device`](crate::Fault::Device) and also asks the
+    /// run to stop as [`DeviceCx::halt`] does, so the detail is kept whatever the master does with the error. A
+    /// host-side [`Machine::access`](crate::Machine::access) refused this way returns that error and leaves no stop
+    /// pending. Called outside an access (from [`Device::advance`], [`Device::service`],
+    /// [`InterruptController::acknowledge`](crate::InterruptController::acknowledge) or
+    /// [`Machine::with_device`](crate::Machine::with_device)), it acts as [`DeviceCx::halt`].
+    pub fn refuse(&mut self, kind: Stop, detail: impl Into<String>) {
+        if self.refused.is_none() {
+            self.refused = Some((kind, detail.into()));
+        }
+    }
+}
+
+/// Ask the run to stop with `refusal` as [`DeviceCx::halt`] does, unless a halt is already asked for.
+pub(crate) fn halt_on(stop: &mut Option<StopReason>, refusal: Option<Refusal>) {
+    if let Some((kind, detail)) = refusal
+        && stop.is_none()
+    {
+        *stop = Some(StopReason {
+            kind,
+            pc: 0,
+            detail,
+        });
     }
 }
 

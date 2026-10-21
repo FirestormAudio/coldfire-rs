@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 
 use crate::bus::DmaLines;
-use crate::device::{Access, Device, DeviceCx, DeviceId};
-use crate::irq::{InterruptController, IrqLines};
+use crate::device::{Access, Device, DeviceCx, DeviceId, Refusal, halt_on};
+use crate::irq::{InterruptController, Irq, IrqLines};
 use crate::sched::{Devices, Kind};
 use crate::stop::{Stop, StopReason};
 
@@ -41,7 +41,8 @@ impl Size {
 pub enum Fault {
     /// No memory covers the whole access.
     Unmapped { addr: u32, size: Size },
-    /// The access cannot complete and the run stops with this kind (a fault during exception processing).
+    /// The access cannot complete and the run stops with this kind: a device refused it
+    /// ([`DeviceCx::refuse`]), or a fault during exception processing.
     Device(Stop),
 }
 
@@ -117,6 +118,9 @@ pub struct Memory {
     pub(crate) pc: u32,
     /// A halt a device asked for, reported at the next instruction boundary.
     pub(crate) stop: Option<StopReason>,
+    /// The detail of the last access a device refused ([`DeviceCx::refuse`]), for the stop its
+    /// [`Fault::Device`] ends in.
+    pub(crate) refused: Option<String>,
     trace: Option<Vec<Access>>,
     /// Device reads per (pc, addr) since the last device write. Only counted, never iterated.
     polls: HashMap<(u32, u32), u32>,
@@ -142,6 +146,7 @@ impl Default for Memory {
             horizon: 0,
             pc: 0,
             stop: None,
+            refused: None,
             trace: None,
             polls: HashMap::new(),
             poll_limit: DEFAULT_POLL_LIMIT,
@@ -176,6 +181,28 @@ pub(crate) fn truncate(value: u32, size: Size) -> u32 {
         Size::Byte => value & 0xFF,
         Size::Word => value & 0xFFFF,
         Size::Long => value,
+    }
+}
+
+/// The aligned accesses RM Table 3-12 splits a misaligned operand access into, in ascending address order, and
+/// how many there are: a word at an odd address is byte, byte; a long at address\[1:0\] = 01 or 11 is byte, word,
+/// byte; a long at 10 is word, word. An aligned access is itself.
+fn pieces(addr: u32, size: Size) -> ([(u32, Size); 3], usize) {
+    let at = |n: u32| addr.wrapping_add(n);
+    match (size, addr & 3) {
+        (Size::Word, 1 | 3) => (
+            [(addr, Size::Byte), (at(1), Size::Byte), (0, Size::Byte)],
+            2,
+        ),
+        (Size::Long, 1 | 3) => (
+            [(addr, Size::Byte), (at(1), Size::Word), (at(3), Size::Byte)],
+            3,
+        ),
+        (Size::Long, 2) => (
+            [(addr, Size::Word), (at(2), Size::Word), (0, Size::Byte)],
+            2,
+        ),
+        _ => ([(addr, size), (0, Size::Byte), (0, Size::Byte)], 1),
     }
 }
 
@@ -272,7 +299,8 @@ impl Space {
     }
 
     /// Call device `i` with a context at `now`: a bus master is taken out of its slot and gets the rest of the
-    /// address space as its bus. `None`, without a call, when `i` is a bus master already being called.
+    /// address space as its bus. Returns what `f` returned and the refusal the device made, if any; `None`,
+    /// without a call, when `i` is a bus master already being called.
     pub(crate) fn call<R>(
         &mut self,
         i: usize,
@@ -281,7 +309,7 @@ impl Space {
         dma: &mut DmaLines,
         stop: &mut Option<StopReason>,
         f: impl FnOnce(&mut dyn Device, &mut DeviceCx) -> R,
-    ) -> Option<R> {
+    ) -> Option<(R, Option<Refusal>)> {
         match self.devices.kind(i) {
             Kind::Out => None,
             Kind::Plain => {
@@ -291,25 +319,42 @@ impl Space {
                     dma,
                     stop,
                     space: None,
+                    refused: None,
                 };
-                Some(f(self.devices.get_mut(i), &mut cx))
+                let r = f(self.devices.get_mut(i), &mut cx);
+                Some((r, cx.refused))
             }
             Kind::Master => {
                 let mut dev = self.devices.take(i);
-                let r = f(
-                    &mut *dev,
-                    &mut DeviceCx {
-                        now,
-                        irq,
-                        dma,
-                        stop,
-                        space: Some(self),
-                    },
-                );
+                let mut cx = DeviceCx {
+                    now,
+                    irq,
+                    dma,
+                    stop,
+                    space: Some(self),
+                    refused: None,
+                };
+                let r = f(&mut *dev, &mut cx);
+                let refused = cx.refused;
                 self.devices.restore(i, dev);
-                Some(r)
+                Some((r, refused))
             }
         }
+    }
+
+    /// Call device `i` outside an access: a refusal acts as a halt. `None` as for [`Space::call`].
+    pub(crate) fn call_halting<R>(
+        &mut self,
+        i: usize,
+        now: u64,
+        irq: &mut IrqLines,
+        dma: &mut DmaLines,
+        stop: &mut Option<StopReason>,
+        f: impl FnOnce(&mut dyn Device, &mut DeviceCx) -> R,
+    ) -> Option<R> {
+        let (r, refused) = self.call(i, now, irq, dma, &mut *stop, f)?;
+        halt_on(stop, refused);
+        Some(r)
     }
 }
 
@@ -381,13 +426,81 @@ impl Memory {
         self.horizon = 0;
     }
 
-    /// A read RAM does not cover: the device whose window holds it, or unmapped. More than the poll limit of
-    /// reads of one register by one instruction, with no device write in between, asks the run to stop.
+    /// An instruction-stream word: RAM, or a read of the device whose window holds it that is neither traced nor
+    /// counted by the poll detector.
+    #[inline]
+    pub(crate) fn fetch(&mut self, addr: u32) -> Result<u32, Fault> {
+        match self.space.ram_read(addr, Size::Word) {
+            Some(v) => Ok(v),
+            None => self.device_fetch(addr),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn device_fetch(&mut self, addr: u32) -> Result<u32, Fault> {
+        self.device_access(addr, Size::Word, None, false)
+            .map(|(v, _)| v)
+    }
+
+    /// A read RAM does not cover: the devices, or unmapped. More than the poll limit of reads of one register by
+    /// one instruction, with no device write in between, asks the run to stop.
     #[cold]
     #[inline(never)]
     fn device_read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
-        let (value, counted) = self.device_access(addr, size, None)?;
-        if counted {
+        self.device_op(addr, size, None, true)
+    }
+
+    /// A write RAM does not cover: the devices, or unmapped.
+    #[cold]
+    #[inline(never)]
+    fn device_write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
+        self.polls.clear();
+        self.device_op(addr, size, Some(value), false).map(|_| ())
+    }
+
+    /// An operand access to the devices: one access when it is aligned to its size, else the aligned pieces of
+    /// [`pieces`], in order, each a traced device access of its own. A misaligned access is unmapped as a whole,
+    /// with no piece made, unless every piece falls in a device window; a piece a device refuses ends it there,
+    /// after the pieces before it were made. Reads are poll-counted when `counted`. The value read, or 0 for a
+    /// write.
+    fn device_op(
+        &mut self,
+        addr: u32,
+        size: Size,
+        write: Option<u32>,
+        counted: bool,
+    ) -> Result<u32, Fault> {
+        let (list, n) = pieces(addr, size);
+        if n == 1 {
+            return self.piece(addr, size, write, counted);
+        }
+        if list[..n]
+            .iter()
+            .any(|&(a, s)| self.space.devices.find(a, s.bytes()).is_none())
+        {
+            return Err(Fault::Unmapped { addr, size });
+        }
+        let mut value = 0;
+        let mut left = size.bytes();
+        for &(a, s) in &list[..n] {
+            left -= s.bytes();
+            let part = write.map(|w| truncate(w >> (8 * left), s));
+            value = value << (8 * s.bytes()) | self.piece(a, s, part, counted)?;
+        }
+        Ok(value)
+    }
+
+    /// One aligned device access, as [`Memory::device_op`] makes them.
+    fn piece(
+        &mut self,
+        addr: u32,
+        size: Size,
+        write: Option<u32>,
+        counted: bool,
+    ) -> Result<u32, Fault> {
+        let (value, poll) = self.device_access(addr, size, write, true)?;
+        if counted && poll && write.is_none() {
             let pc = self.pc;
             let n = self.polls.entry((pc, addr)).or_insert(0);
             *n += 1;
@@ -402,21 +515,15 @@ impl Memory {
         Ok(value)
     }
 
-    /// A write RAM does not cover: the device whose window holds it, or unmapped.
-    #[cold]
-    #[inline(never)]
-    fn device_write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
-        self.polls.clear();
-        self.device_access(addr, size, Some(value)).map(|_| ())
-    }
-
-    /// A traced access to the device whose window holds all of it: the value read (0 for a write) and whether
-    /// the device's reads are poll-counted. Ends the run of uninterrupted execution.
+    /// An access to the device whose window holds all of it, traced when `traced`: the value read (0 for a
+    /// write) and whether the device's reads are poll-counted. Ends the run of uninterrupted execution. A refused
+    /// access is traced like any other, fails with [`Fault::Device`] and leaves its detail in `refused`.
     fn device_access(
         &mut self,
         addr: u32,
         size: Size,
         write: Option<u32>,
+        traced: bool,
     ) -> Result<(u32, bool), Fault> {
         let unmapped = Fault::Unmapped { addr, size };
         let (i, off) = self
@@ -424,7 +531,9 @@ impl Memory {
             .devices
             .find(addr, size.bytes())
             .ok_or(unmapped)?;
-        if let Some(value) = write {
+        if let Some(value) = write
+            && traced
+        {
             self.record(addr, size, true, truncate(value, size));
         }
         let r = self.space.call(
@@ -441,16 +550,21 @@ impl Memory {
                 None => (truncate(d.read(off, size, cx), size), d.poll_counted()),
             },
         );
-        let (value, counted) = r.ok_or(unmapped)?;
+        let ((value, counted), refused) = r.ok_or(unmapped)?;
         self.horizon = 0;
-        if write.is_none() {
+        if write.is_none() && traced {
             self.record(addr, size, false, value);
+        }
+        if let Some((kind, detail)) = refused {
+            self.refused = Some(detail);
+            return Err(Fault::Device(kind));
         }
         Ok((value, counted))
     }
 
-    /// An access made from outside the core at the current tick: RAM, or a device access traced as the core's
-    /// would be and not counted by the poll detector. The value read, or 0 for a write.
+    /// An access made from outside the core at the current tick: RAM, or device accesses (split as the core's
+    /// are) traced as the core's would be and not counted by the poll detector. The value read, or 0 for a
+    /// write. A refusal's detail is dropped: the error is all a caller outside a run gets.
     pub(crate) fn host_access(
         &mut self,
         addr: u32,
@@ -458,14 +572,16 @@ impl Memory {
         write: Option<u32>,
     ) -> Result<u32, Fault> {
         self.horizon = 0;
-        match write {
+        let r = match write {
             None => match self.space.ram_read(addr, size) {
                 Some(v) => Ok(v),
-                None => self.device_access(addr, size, None).map(|(v, _)| v),
+                None => self.device_op(addr, size, None, false),
             },
             Some(value) if self.space.ram_write(addr, size, value).is_some() => Ok(0),
-            Some(value) => self.device_access(addr, size, Some(value)).map(|_| 0),
-        }
+            Some(value) => self.device_op(addr, size, Some(value), false),
+        };
+        self.refused = None;
+        r
     }
 
     fn record(&mut self, addr: u32, size: Size, write: bool, value: u32) {
@@ -551,7 +667,7 @@ impl Memory {
     ) -> R {
         self.horizon = 0;
         self.space
-            .call(
+            .call_halting(
                 id.0,
                 self.now,
                 &mut self.irq,
@@ -621,7 +737,7 @@ impl Memory {
         let now = self.now;
         for i in 0..self.space.devices.len() {
             if self.space.devices.due(i, now) {
-                self.space.call(
+                self.space.call_halting(
                     i,
                     now,
                     &mut self.irq,
@@ -644,7 +760,7 @@ impl Memory {
             let before = self.dma;
             for k in 0..self.space.devices.masters().len() {
                 let i = self.space.devices.masters()[k];
-                self.space.call(
+                self.space.call_halting(
                     i,
                     now,
                     &mut self.irq,
@@ -671,17 +787,52 @@ impl Memory {
     }
 
     /// The highest request over all controllers for the request lines `lines`.
-    pub(crate) fn pending_with(
-        &self,
-        lines: &IrqLines,
-        allow_level7: bool,
-    ) -> Option<crate::irq::Irq> {
-        self.space.devices.pending(lines, allow_level7)
+    pub(crate) fn pending_with(&self, lines: &IrqLines, allow_level7: bool) -> Option<Irq> {
+        self.space
+            .devices
+            .pending(lines, allow_level7)
+            .map(|(_, irq)| irq)
     }
 
-    /// The highest request over all controllers, ignoring level 7 unless `allow_level7`.
-    pub(crate) fn pending(&self, allow_level7: bool) -> Option<crate::irq::Irq> {
+    /// The highest request over all controllers, ignoring level 7 unless `allow_level7`, and the index of the
+    /// controller making it.
+    pub(crate) fn pending(&self, allow_level7: bool) -> Option<(usize, Irq)> {
         self.space.devices.pending(&self.irq, allow_level7)
+    }
+
+    /// Tell controller `i` that the core took its request `irq` ([`InterruptController::acknowledge`]). A
+    /// refusal acts as a halt.
+    pub(crate) fn acknowledge(&mut self, i: usize, irq: Irq) {
+        self.horizon = 0;
+        let mut cx = DeviceCx {
+            now: self.now,
+            irq: &mut self.irq,
+            dma: &mut self.dma,
+            stop: &mut self.stop,
+            space: None,
+            refused: None,
+        };
+        self.space
+            .devices
+            .controller_mut(i)
+            .acknowledge(irq, &mut cx);
+        let refused = cx.refused;
+        halt_on(&mut self.stop, refused);
+    }
+
+    /// The request lines as they could become while the core waits after STOP: the asserted lines plus every
+    /// source the devices with a pending event list ([`Device::wake_sources`]); `None` when one of them cannot
+    /// say.
+    pub(crate) fn wake_lines(&self) -> Option<IrqLines> {
+        let mut sources = Vec::new();
+        if !self.space.devices.wake_sources(&mut sources) {
+            return None;
+        }
+        let mut lines = self.irq.clone();
+        for (controller, source) in sources {
+            lines.set(controller, source, true);
+        }
+        Some(lines)
     }
 
     /// Whether the level-7 line is up.

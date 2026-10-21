@@ -115,9 +115,11 @@ impl Machine {
     }
 
     /// Make an access as the core would at the current tick, by the instruction at PC: RAM, or a device access
-    /// that is traced but not counted by the poll detector; then service the bus masters. Returns the value read,
-    /// or 0 for a write (`write` holds the value to write). A halt a device asks for stays pending and is reported
-    /// by the next run, before its first instruction.
+    /// that is traced but not counted by the poll detector (a misaligned one split as the core splits it, RM
+    /// Table 3-12); then service the bus masters. Returns the value read, or 0 for a write (`write` holds the
+    /// value to write). A halt a device asks for stays pending and is reported by the next run, before its first
+    /// instruction. An access a device refuses ([`DeviceCx::refuse`]) returns `Err(Fault::Device(kind))` and
+    /// leaves nothing pending: there is no instruction to stop on, so the error is the whole report.
     pub fn access(&mut self, addr: u32, size: Size, write: Option<u32>) -> Result<u32, Fault> {
         self.mem.pc = self.cpu.pc;
         let r = self.mem.host_access(addr, size, write);
@@ -305,6 +307,7 @@ impl Machine {
     /// boundary to report.
     fn begin(&mut self, limit: Limit) -> u64 {
         self.mem.reset_polls();
+        self.mem.refused = None;
         self.mem.horizon = 0;
         limit
             .max_instructions
@@ -520,7 +523,7 @@ impl Machine {
             {
                 return Err(self.stop(Stop::TimeLimit, format!("{} ticks", self.mem.now)));
             }
-            if let Some(irq) = self.deliverable() {
+            if let Some((controller, irq)) = self.deliverable() {
                 if self.policy.stop_on[irq.vector as usize] {
                     return Err(self.exception(irq.vector));
                 }
@@ -530,6 +533,7 @@ impl Machine {
                 {
                     return Err(self.fault(f));
                 }
+                self.mem.acknowledge(controller, irq);
                 if irq.level == 7 {
                     // Taken: the line has to fall and rise again for another.
                     self.level7_edge = false;
@@ -576,33 +580,39 @@ impl Machine {
     }
 
     /// Whether any request a device could raise would be taken while the core waits after STOP: some controller,
-    /// with every one of its sources asserted, reports a level above SR\[I\], or level 7 when the level-7 line is
+    /// with the lines as they could become, reports a level above SR\[I\], or level 7 when the level-7 line is
     /// not already held (a held line gives no new edge).
     ///
-    /// While the core waits, SR is fixed and no instruction runs, so no controller register is written: a device
-    /// event can only change the request lines, which this assumes all asserted. The probe is exact as long as a
-    /// controller's masks and levels change only through its registers.
+    /// The lines as they could become are the asserted lines plus the sources every device with a pending event
+    /// lists from [`Device::wake_sources`]; when one of those devices cannot say, every source of every controller
+    /// is taken as asserted. While the core waits, SR is fixed and no instruction runs, so no controller register
+    /// is written: a device event can only change the request lines. The probe is exact as long as a controller's
+    /// masks and levels change only through its registers, and the sources a device lists cover its events.
     // guess: an interrupt controller that changes its own masks or levels in `advance` (none is modelled: the chip's
     // INTC has no timed behaviour) could wake a core this reports as unable to wake.
     fn can_wake(&self) -> bool {
         let ipl = (self.cpu.sr() >> 8) as u8 & 7;
+        let lines = self
+            .mem
+            .wake_lines()
+            .unwrap_or_else(crate::irq::IrqLines::all);
         self.mem
-            .pending_with(&crate::irq::IrqLines::all(), !self.level7_line)
+            .pending_with(&lines, !self.level7_line)
             .is_some_and(|irq| irq.level == 7 || irq.level > ipl)
     }
 
-    /// The request the core takes now, if any. Samples the level-7 line for its rising edge. A request held off by
-    /// SR\[I\] is looked at again after the next write to SR (MOVE to SR, STRLDSR, RTE and STOP end the run of
-    /// uninterrupted execution).
-    fn deliverable(&mut self) -> Option<Irq> {
+    /// The request the core takes now, if any, and the controller making it. Samples the level-7 line for its
+    /// rising edge. A request held off by SR\[I\] is looked at again after the next write to SR (MOVE to SR,
+    /// STRLDSR, RTE and STOP end the run of uninterrupted execution).
+    fn deliverable(&mut self) -> Option<(usize, Irq)> {
         let line = self.mem.level7();
         if line != self.level7_line {
             self.level7_line = line;
             self.level7_edge = line;
         }
-        let irq = self.mem.pending(self.level7_edge)?;
+        let (controller, irq) = self.mem.pending(self.level7_edge)?;
         let ipl = (self.cpu.sr() >> 8) as u8 & 7;
-        (irq.level == 7 || irq.level > ipl).then_some(irq)
+        (irq.level == 7 || irq.level > ipl).then_some((controller, irq))
     }
 
     /// One instruction completed.
@@ -642,13 +652,17 @@ impl Machine {
         }
     }
 
-    fn fault(&self, f: Fault) -> StopReason {
+    /// The stop for fault `f`; a device's refusal brings its detail.
+    fn fault(&mut self, f: Fault) -> StopReason {
         match f {
             Fault::Unmapped { addr, size } => self.stop(
                 Stop::Unmapped,
                 format!("unmapped {size:?} access at {addr:#010x}"),
             ),
-            Fault::Device(kind) => self.stop(kind, String::new()),
+            Fault::Device(kind) => {
+                let detail = self.mem.refused.take().unwrap_or_default();
+                self.stop(kind, detail)
+            }
         }
     }
 

@@ -49,7 +49,13 @@ peripherals:
 - `add_device(base, size, device)` maps a device window; `add_timer(device)` adds one with no registers.
 - `add_interrupt_controller(base, size, controller)` maps an [`InterruptController`]. Devices drive request lines with
   `cx.irq.set(controller, source, on)`; the controller turns them into a level and a vector.
-- A device ends a run with `DeviceCx::halt(kind, detail)`; the instruction making the access completes first.
+- A device ends a run with `DeviceCx::halt(kind, detail)`; the instruction making the access completes first. With
+  `DeviceCx::refuse(kind, detail)` it refuses the access instead: the instruction does not complete, PC stays on it
+  and the run stops with that kind and detail.
+- A misaligned word or longword access to a device is split into the aligned pieces of RM Table 3-12, each a device
+  access of its own. Instruction fetches from a device window are neither traced nor poll-counted.
+- A device with events can list the interrupt sources they could assert (`wake_sources`), so that a STOP nothing can
+  wake halts at once; an interrupt controller hears which of its requests the core took (`acknowledge`).
 - `m.device::<T>(id)` and `m.device_mut::<T>(id)` give typed access to a device after the fact.
 
 `Machine::run(Limit)` returns a [`StopReason`] with a [`Stop`] kind, the program counter and a detail string.

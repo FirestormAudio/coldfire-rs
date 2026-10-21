@@ -6,7 +6,7 @@
 //! non-maskable and edge-triggered on one line shared by all controllers: it is taken once each time that line
 //! rises (RM 17.1.1, RM 3.2.9 SR\[I\]).
 
-use crate::device::Device;
+use crate::device::{Device, DeviceCx};
 
 /// The request lines into each interrupt controller: up to 64 sources per controller.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -65,4 +65,9 @@ pub trait InterruptController: Device {
     fn pending(&self, lines: &IrqLines, allow_level7: bool) -> Option<Irq>;
     /// Whether an asserted, unmasked level-7 source holds the core's level-7 line up.
     fn level7(&self, lines: &IrqLines) -> bool;
+    /// The core took `irq`, this controller's request: called at interrupt entry, once the exception frame is
+    /// written and the core is about to run the handler, on the controller whose request was taken (the one
+    /// [`InterruptController::pending`] reported it). Requests are sampled again before the handler's first
+    /// instruction, so a request this negates is not taken twice.
+    fn acknowledge(&mut self, _irq: Irq, _cx: &mut DeviceCx) {}
 }

@@ -172,26 +172,45 @@ impl Devices {
             .min()
     }
 
-    fn controllers(&self) -> impl Iterator<Item = &dyn InterruptController> + '_ {
+    /// The interrupt controllers with their indices, in the order they were added.
+    fn controllers(&self) -> impl Iterator<Item = (usize, &dyn InterruptController)> + '_ {
         self.controllers.iter().map(|&i| match &self.models[i] {
-            Model::Controller(c) => &**c,
+            Model::Controller(c) => (i, &**c),
             _ => unreachable!("controller index of a device that is not a controller"),
         })
     }
 
-    /// The highest request over all controllers. At equal levels the controller added first wins: RM 17.3.2 gives
-    /// INTC0 the highest priority and INTC2 the lowest, so the chip's controllers are added in that order.
-    pub(crate) fn pending(&self, lines: &IrqLines, allow_level7: bool) -> Option<Irq> {
+    /// Controller `i`, mutably; panics when device `i` is not an interrupt controller.
+    pub(crate) fn controller_mut(&mut self, i: usize) -> &mut dyn InterruptController {
+        match &mut self.models[i] {
+            Model::Controller(c) => &mut **c,
+            _ => panic!("device {i} is not an interrupt controller"),
+        }
+    }
+
+    /// The highest request over all controllers, and the index of the controller making it. At equal levels the
+    /// controller added first wins: RM 17.3.2 gives INTC0 the highest priority and INTC2 the lowest, so the
+    /// chip's controllers are added in that order.
+    pub(crate) fn pending(&self, lines: &IrqLines, allow_level7: bool) -> Option<(usize, Irq)> {
         self.controllers()
-            .filter_map(|c| c.pending(lines, allow_level7))
-            .fold(None, |best: Option<Irq>, irq| match best {
-                Some(b) if b.level >= irq.level => Some(b),
-                _ => Some(irq),
+            .filter_map(|(i, c)| Some((i, c.pending(lines, allow_level7)?)))
+            .fold(None, |best: Option<(usize, Irq)>, (i, irq)| match best {
+                Some(b) if b.1.level >= irq.level => Some(b),
+                _ => Some((i, irq)),
             })
     }
 
     /// Whether any controller holds the level-7 line up.
     pub(crate) fn level7(&self, lines: &IrqLines) -> bool {
-        self.controllers().any(|c| c.level7(lines))
+        self.controllers().any(|(_, c)| c.level7(lines))
+    }
+
+    /// Push to `out` the interrupt sources that the devices with a pending event list
+    /// ([`Device::wake_sources`]), in the order the devices were added; `false` as soon as one cannot say.
+    pub(crate) fn wake_sources(&self, out: &mut Vec<(usize, u8)>) -> bool {
+        (0..self.models.len())
+            .filter_map(|i| self.try_get(i))
+            .filter(|d| d.next_event().is_some())
+            .all(|d| d.wake_sources(out))
     }
 }

@@ -71,7 +71,7 @@ struct Stream<'a> {
 
 impl Stream<'_> {
     fn word(&mut self) -> Result<u32, Fault> {
-        let w = self.mem.read(self.at, Size::Word)?;
+        let w = self.mem.fetch(self.at)?;
         self.at = self.at.wrapping_add(2);
         Ok(w)
     }

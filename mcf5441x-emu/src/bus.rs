@@ -13,7 +13,7 @@
 //! while a round changed the request lines. A request is therefore served in the tick it is raised, before the next
 //! instruction.
 
-use crate::device::DeviceCx;
+use crate::device::{DeviceCx, Refusal, halt_on};
 use crate::irq::IrqLines;
 use crate::mem::{Fault, Size, Space, truncate};
 use crate::stop::StopReason;
@@ -69,7 +69,9 @@ impl<'b> Bus<'b> {
         })
     }
 
-    /// Read a big-endian value of `size` at `addr`, zero-extended.
+    /// Read a big-endian value of `size` at `addr`, zero-extended. An access is made as it is, even when it is
+    /// not aligned to its size (only the core splits misaligned accesses, RM Table 3-12). An access a device
+    /// refuses fails with [`Fault::Device`] and stops the run as [`DeviceCx::halt`] does.
     pub fn read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
         if let Some(v) = self.space.ram_read(addr, size) {
             return Ok(v);
@@ -80,12 +82,14 @@ impl<'b> Bus<'b> {
             .devices
             .find(addr, size.bytes())
             .ok_or(unmapped)?;
-        self.space
+        let (v, refused) = self
+            .space
             .call(i, self.now, self.irq, self.dma, self.stop, |d, cx| {
                 d.read(off, size, cx)
             })
-            .map(|v| truncate(v, size))
-            .ok_or(unmapped)
+            .ok_or(unmapped)?;
+        self.refused(refused)?;
+        Ok(truncate(v, size))
     }
 
     /// Write the low `size` bytes of `value` at `addr`, big-endian.
@@ -100,11 +104,24 @@ impl<'b> Bus<'b> {
             .find(addr, size.bytes())
             .ok_or(unmapped)?;
         let value = truncate(value, size);
-        self.space
+        let ((), refused) = self
+            .space
             .call(i, self.now, self.irq, self.dma, self.stop, |d, cx| {
                 d.write(off, size, value, cx)
             })
-            .ok_or(unmapped)
+            .ok_or(unmapped)?;
+        self.refused(refused)
+    }
+
+    /// A refused access fails with its kind and asks the run to stop with its detail.
+    fn refused(&mut self, refused: Option<Refusal>) -> Result<(), Fault> {
+        match refused {
+            None => Ok(()),
+            Some((kind, detail)) => {
+                halt_on(self.stop, Some((kind, detail)));
+                Err(Fault::Device(kind))
+            }
+        }
     }
 
     /// Copy `out.len()` bytes of RAM at `addr` into `out`. Fails with `Unmapped` at `addr` (as a byte access)
