@@ -31,6 +31,10 @@ const PLL_DR: u32 = 0x4;
 const PLL_SR: u32 = 0x8;
 const LOCK: u32 = 1 << 4;
 const LOCKS: u32 = 1 << 5;
+const LOLF: u32 = 1 << 6;
+/// PLL_CR LOLIRQ and LOLEN (RM Figure 8-3).
+const LOLIRQ: u32 = 1 << 14;
+const LOLEN: u32 = 1 << 12;
 /// Test values: REFDIV 0, FBKDIV 26; OUTDIV5 3, OUTDIV4 2, OUTDIV3 3, OUTDIV2 2, OUTDIV1 1.
 const TEST_CR: u32 = 0x0000_001A;
 const TEST_DR: u32 = 0x0062_0C41;
@@ -286,8 +290,8 @@ fn pll_reads_its_configuration_and_records_writes() {
 
 #[test]
 fn pll_status_flags_follow_the_rm() {
-    // LOCK and LOCKS are read-only, LOCF and LOLF write-1-to-clear (RM Table 8-5); the model never loses lock or
-    // clock, so no write changes SR.
+    // LOCK and LOCKS are read-only, LOCF and LOLF write-1-to-clear (RM Table 8-5); with the PLL locked and its
+    // clock never lost, no write changes SR.
     let mut r = rig();
     r.write(PLL + PLL_SR, Size::Long, 0xFFFF_FFFF);
     assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK | LOCKS);
@@ -582,6 +586,31 @@ fn unlocked_pll_reads_no_lock() {
     assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK);
     r.write(PLL + PLL_SR, Size::Long, LOCKS);
     assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK);
+}
+
+#[test]
+fn loss_of_lock_sets_lolf_when_enabled() {
+    // RM Table 8-5 and RM 8.3.4.2: with PLL_CR[LOLIRQ, LOLEN] set, LOLF is set upon loss of lock, stays set after
+    // the PLL re-locks, and is cleared by writing a one; writing 0 has no effect
+    let mut r = rig();
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR | LOLEN);
+    r.m.device_mut::<Pll>(r.pll).set_locked(false);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), 0, "LOLIRQ clear: no LOLF");
+    r.m.device_mut::<Pll>(r.pll).set_locked(true);
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR | LOLIRQ | LOLEN);
+    r.m.device_mut::<Pll>(r.pll).set_locked(false);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOLF);
+    r.m.device_mut::<Pll>(r.pll).set_locked(false);
+    r.m.device_mut::<Pll>(r.pll).set_locked(true);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOLF | LOCK, "sticky");
+    r.write(PLL + PLL_SR, Size::Long, !LOLF);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOLF | LOCK);
+    r.write(PLL + PLL_SR + 3, Size::Byte, LOLF);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK, "cleared by a one");
+    // without LOLEN, LOLIRQ has no effect
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR | LOLIRQ);
+    r.m.device_mut::<Pll>(r.pll).set_locked(false);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), 0);
 }
 
 #[test]

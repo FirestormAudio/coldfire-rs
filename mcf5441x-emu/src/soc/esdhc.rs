@@ -169,7 +169,7 @@ struct Pending {
 ///
 /// TC frees the data line (CDIHB, DLA, BREN, BWEN); an error (DCE, DTOE) leaves it busy until RSTD or RSTA.
 /// BRR and BWR are never set: the watermarks are not modelled. Every accepted register write is recorded
-/// ([`Esdhc::writes`]).
+/// ([`Esdhc::writes`]) unless [`Esdhc::record`] turned the log off.
 #[derive(Debug)]
 pub struct Esdhc {
     config: EsdhcConfig,

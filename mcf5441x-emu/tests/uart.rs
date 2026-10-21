@@ -449,6 +449,34 @@ fn transmitter_has_a_holding_and_a_shift_register() {
 }
 
 #[test]
+fn tx_idle_at_is_when_both_registers_are_empty() {
+    let tx_idle_at = |m: &Machine, id| uart(m, id).tx_idle_at();
+    let (mut m, id) = board(false);
+    // idle from reset: at or before the clock
+    assert!(tx_idle_at(&m, id) <= m.now());
+    w(&mut m, UCR, 0x04);
+    idle(&mut m, 10);
+    assert!(tx_idle_at(&m, id) <= m.now());
+    // one character in the holding register: it moves at 13 and ends a character later
+    w(&mut m, URB, 0x41);
+    assert_eq!(tx_idle_at(&m, id), 113);
+    // in the shift register, a second in the holding register behind it
+    idle(&mut m, 20);
+    w(&mut m, URB, 0x42);
+    assert_eq!(tx_idle_at(&m, id), 213);
+    // the host drains it without running instructions: both characters go out, then TXEMP
+    let end = tx_idle_at(&m, id);
+    idle(&mut m, end);
+    assert_eq!(uart(&m, id).sent(), [(13, 0x41), (113, 0x42)]);
+    assert_eq!(r(&mut m, USR), TXRDY | TXEMP);
+    assert_eq!(
+        tx_idle_at(&m, id),
+        m.now(),
+        "idle again, after the last character"
+    );
+}
+
+#[test]
 fn back_to_back_writes_drop_the_second() {
     // RM 41.3.7: the second write finds TXRDY clear (the first is still in the holding register).
     let (mut m, id, l) = snippet(

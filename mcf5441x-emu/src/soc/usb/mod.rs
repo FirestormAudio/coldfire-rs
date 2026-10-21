@@ -232,7 +232,7 @@ pub struct UsbStats {
 ///
 /// Registers (RM Table 24-4). Reads of any size return the bytes of the 32-bit word they fall in; writes must be
 /// aligned 32-bit, anything else is refused with [`Stop::Unmodelled`]. Every accepted write is recorded
-/// ([`UsbStats::writes`]).
+/// ([`UsbStats::writes`]) unless [`UsbOtg::record`] turned the log off.
 /// - ID, HWGENERAL, HWHOST, HWDEVICE, HWTXBUF, HWRXBUF, HCIVERSION/CAPLENGTH, HCSPARAMS, HCCPARAMS, DCIVERSION,
 ///   DCCPARAMS, CONFIGFLAG: constant (RM Table 24-4).
 /// - USBCMD (0x0008_0000): stored. RST resets the controller (every register to its reset value; OTGSC keeps its

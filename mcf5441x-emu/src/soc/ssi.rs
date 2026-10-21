@@ -214,6 +214,11 @@ impl Ssi {
         self.source = Some(f);
     }
 
+    /// Remove the received line's source: from the next frame on the line is silent again.
+    pub fn clear_source(&mut self) {
+        self.source = None;
+    }
+
     /// The frames sent: (tick of the frame's end, the signed word of each slot).
     pub fn capture(&self) -> &[(u64, Vec<i32>)] {
         &self.capture

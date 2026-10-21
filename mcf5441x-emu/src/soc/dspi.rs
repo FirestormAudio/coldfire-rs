@@ -72,8 +72,8 @@ pub trait SpiDevice: Any {
 
 /// One DSPI (RM ch. 40) in master mode, with [`SpiDevice`] parts on its chip selects
 /// ([`Dspi::attach`]). A frame takes no time: it is shifted out, and its answer is in the RX FIFO, when it is
-/// pushed. Every frame shifted out is recorded ([`Dspi::frames`]), so the DSPI also serves as a recorder for
-/// write-only parts with nothing behind their select.
+/// pushed. Every frame shifted out is recorded ([`Dspi::frames`]) unless [`Dspi::record`] turned the log off,
+/// so the DSPI also serves as a recorder for write-only parts with nothing behind their select.
 ///
 /// Registers (32-bit accesses only: a 1- or 2-byte access is refused with [`Stop::Unmodelled`], though the chip
 /// takes 8- and 16-bit PUSHR writes and POPR reads):

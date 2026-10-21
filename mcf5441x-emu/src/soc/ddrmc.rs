@@ -59,7 +59,7 @@ const PADCR_RESET: u32 = 0x200;
 /// register (guess: the RM gives only 32-bit widths); one that crosses a register (from a bus master) is refused
 /// with [`Stop::Unmodelled`]. No interrupt is raised: CR26\[INTMASK\] is stored like the rest of CR26, but the
 /// model never asserts the controller's interrupt and it is wired to no interrupt source. Every write is recorded
-/// ([`Ddrmc::writes`]).
+/// ([`Ddrmc::writes`]) unless [`Ddrmc::record`] turned the log off.
 #[derive(Debug)]
 pub struct Ddrmc {
     cr: [u32; 64],

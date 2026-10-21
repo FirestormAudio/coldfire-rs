@@ -388,6 +388,20 @@ fn rx_frames_reach_the_dma_ring() {
 }
 
 #[test]
+fn cleared_source_leaves_the_line_silent() {
+    let mut b = board();
+    b.m.device_mut::<Ssi>(b.ssi)
+        .set_source(Box::new(|_| vec![7, 8]));
+    rx_run(&mut b); // no DMA channel: the words wait in the RX FIFO
+    b.at(FRAME);
+    assert_eq!((b.r(RX0), b.r(RX0)), (7, 8));
+    b.m.device_mut::<Ssi>(b.ssi).clear_source();
+    b.at(2 * FRAME);
+    assert_eq!(b.r(FCSR) >> 12 & 0xF, 2, "a frame still arrives");
+    assert_eq!((b.r(RX0), b.r(RX0)), (0, 0), "silent");
+}
+
+#[test]
 fn rx_overrun_counts() {
     let mut b = board();
     b.m.device_mut::<Ssi>(b.ssi)

@@ -155,10 +155,10 @@ fn serial(elf: &[u8], pll_cr: u32) -> (Machine, Chip, BTreeMap<String, u32>) {
         JEDEC,
         &sbf_image(&image, sym["__boot_size"] as usize, 0),
     );
-    let (mut m, chip) = machine(ChipOptions::default().with_pll(pll_cr, PLL_DR));
+    let (mut m, mut chip) = machine(ChipOptions::default().with_pll(pll_cr, PLL_DR));
     let pc = boot(
         &mut m,
-        &chip,
+        &mut chip,
         BootSource::Serial {
             flash,
             sram_base: SRAM.0,
@@ -187,10 +187,10 @@ fn nand_array(elf: &[u8], bad: &[u32]) -> NandArray {
 
 fn nand(elf: &[u8], bad: &[u32]) -> (Machine, Chip, BTreeMap<String, u32>) {
     let sym = symbols(elf).unwrap();
-    let (mut m, chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
+    let (mut m, mut chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
     let pc = boot(
         &mut m,
-        &chip,
+        &mut chip,
         BootSource::Nand {
             array: nand_array(elf, bad),
         },
@@ -203,9 +203,11 @@ fn nand(elf: &[u8], bad: &[u32]) -> (Machine, Chip, BTreeMap<String, u32>) {
     (m, chip, sym)
 }
 
-fn nor_of(chip: &Chip, m: &Machine) -> Vec<u8> {
-    let nor = m.device::<Dspi>(chip.dspi[0]).device::<SpiNor>(1);
-    nor.log()
+/// The distinct commands the serial flash has seen.
+fn flash_ops(chip: &Chip, m: &Machine) -> Vec<u8> {
+    chip.nor(m)
+        .expect("boot records the serial flash")
+        .log()
         .iter()
         .map(|&(_, op, _)| op)
         .collect::<BTreeSet<_>>()
@@ -232,7 +234,7 @@ fn serial_boot_reaches_main() {
     let r = run_to(&mut m, sym["main"]);
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     // the boot part only READs (0x03) the flash
-    assert_eq!(nor_of(&chip, &m), [0x03]);
+    assert_eq!(flash_ops(&chip, &m), [0x03]);
     // without pll-keep the boot part programs the PLL (so keep_match_reaches_main's "no PLL writes" is the keep)
     assert!(!m.device::<Pll>(chip.pll).writes().is_empty());
     // SBFSR holds BLL (RM 11.3.1)
@@ -246,8 +248,8 @@ fn nor_boot_reaches_main() {
     let sym = symbols(&elf).unwrap();
     let (base, image) = flat(&elf, &[&BOOT_SECTIONS[..], &APP_SECTIONS[..]].concat());
     assert_eq!(base, 0);
-    let (mut m, chip) = machine(ChipOptions::default());
-    boot(&mut m, &chip, BootSource::Nor { image }).unwrap();
+    let (mut m, mut chip) = machine(ChipOptions::default());
+    boot(&mut m, &mut chip, BootSource::Nor { image }).unwrap();
     let r = run_to(&mut m, sym["main"]);
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     // the program's CS0 (cold-hello's FlexBusCs0): CSCR0 (RM 20.3.3) WS 4 (bits 15:10), AA (bit 8), PS 1x 16-bit
@@ -455,10 +457,11 @@ fn handmade(longs: usize, skip: &[u8]) -> (Vec<u8>, Vec<u8>) {
 #[test]
 fn serial_boot_loads_bll_plus_one_longwords() {
     let (image, flash) = handmade(6, &[]);
-    let (mut m, chip) = machine(ChipOptions::default());
+    let (mut m, mut chip) = machine(ChipOptions::default());
+    assert!(chip.nor(&m).is_none(), "no flash before the boot");
     let pc = boot(
         &mut m,
-        &chip,
+        &mut chip,
         BootSource::Serial {
             flash: SpiNor::new(1 << 20, JEDEC, &flash),
             sram_base: SRAM.0,
@@ -475,11 +478,16 @@ fn serial_boot_loads_bll_plus_one_longwords() {
     // SBFSR BLL 5, SBFCR BLDIV 1 and FR clear (RM 11.3)
     assert_eq!(m.access(0xEC09_0020, Size::Word, None), Ok(5));
     assert_eq!(m.access(0xEC09_0022, Size::Word, None), Ok(1));
-    // the flash is on DSPI0 PCS1
+    // the flash is on DSPI0 PCS1, and the chip records it there
+    assert_eq!(chip.nor, Some((0, 1)));
     assert_eq!(
         m.device::<Dspi>(chip.dspi[0]).device::<SpiNor>(1).memory()[..flash.len()],
         flash[..]
     );
+    assert!(std::ptr::eq(
+        chip.nor(&m).unwrap(),
+        m.device::<Dspi>(chip.dspi[0]).device::<SpiNor>(1)
+    ));
 }
 
 #[test]
@@ -487,10 +495,10 @@ fn serial_boot_skips_bytes_until_bits_7_4_clear() {
     // RM 11.4.1 step 5: a byte with bits 7:4 not 0000 is skipped. guess: the 1-to-0 transition the SBF also needs
     // before the next byte is taken as given.
     let (image, flash) = handmade(4, &[0xFF, 0x80]);
-    let (mut m, chip) = machine(ChipOptions::default());
+    let (mut m, mut chip) = machine(ChipOptions::default());
     let pc = boot(
         &mut m,
-        &chip,
+        &mut chip,
         BootSource::Serial {
             flash: SpiNor::new(1 << 20, JEDEC, &flash),
             sram_base: SRAM.0,
@@ -502,13 +510,13 @@ fn serial_boot_skips_bytes_until_bits_7_4_clear() {
 
 #[test]
 fn serial_boot_refusals() {
-    let (mut m, chip) = machine(ChipOptions::default());
+    let (mut m, mut chip) = machine(ChipOptions::default());
     // BLL 0: nothing is loaded (RM 11.4.3), the reset vector would come from FlexBus or the NFC
     let flash = SpiNor::new(1 << 20, JEDEC, &sbf_image(&[0; 16], 0, 0));
     assert_eq!(
         boot(
             &mut m,
-            &chip,
+            &mut chip,
             BootSource::Serial {
                 flash,
                 sram_base: SRAM.0
@@ -521,7 +529,7 @@ fn serial_boot_refusals() {
     assert_eq!(
         boot(
             &mut m,
-            &chip,
+            &mut chip,
             BootSource::Serial {
                 flash,
                 sram_base: SRAM.0
@@ -535,7 +543,7 @@ fn serial_boot_refusals() {
     assert_eq!(
         boot(
             &mut m,
-            &chip,
+            &mut chip,
             BootSource::Serial {
                 flash,
                 sram_base: 0x9000_0000
@@ -551,11 +559,11 @@ fn nor_boot_maps_the_image_at_0() {
     image.extend_from_slice(&0x8001_0000u32.to_be_bytes());
     image.extend_from_slice(&0x0000_0400u32.to_be_bytes());
     image.extend_from_slice(&[0x4E, 0x71]);
-    let (mut m, chip) = machine(ChipOptions::default());
+    let (mut m, mut chip) = machine(ChipOptions::default());
     assert_eq!(
         boot(
             &mut m,
-            &chip,
+            &mut chip,
             BootSource::Nor {
                 image: image.clone()
             }
@@ -591,8 +599,11 @@ fn nand_boot_falls_back_to_the_next_boot_block() {
         bad: BTreeSet::from([2]),
         payload: PAYLOAD,
     };
-    let (mut m, chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
-    assert_eq!(boot(&mut m, &chip, BootSource::Nand { array }), Ok(0x20));
+    let (mut m, mut chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
+    assert_eq!(
+        boot(&mut m, &mut chip, BootSource::Nand { array }),
+        Ok(0x20)
+    );
     // NFC_CFG[BTMD] is set after an NFC boot (RM Table 22-17)
     assert_ne!(m.access(0xFC0F_FF30, Size::Long, None).unwrap() & 1 << 6, 0);
     // the 4000-byte view: page p's bytes 992..995 (erased here) at 0xF80 + 8p, then 4 bytes past its payload
@@ -617,8 +628,11 @@ fn nand_boot_reads_996_payload_bytes_whatever_the_array_payload() {
         bad: BTreeSet::new(),
         payload: 2048,
     };
-    let (mut m, chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
-    assert_eq!(boot(&mut m, &chip, BootSource::Nand { array }), Ok(0x10));
+    let (mut m, mut chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
+    assert_eq!(
+        boot(&mut m, &mut chip, BootSource::Nand { array }),
+        Ok(0x10)
+    );
     assert_eq!(
         m.mem.peek(0xF98, 8).unwrap(),
         [1, 2, 3, 4, 0xFF, 0xFF, 0xFF, 0xFF]
@@ -637,9 +651,9 @@ fn nand_boot_refusals() {
         bad: BTreeSet::from([0, 257, 514, 771]),
         payload: PAYLOAD,
     };
-    let (mut m, chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
+    let (mut m, mut chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
     assert_eq!(
-        boot(&mut m, &chip, BootSource::Nand { array }),
+        boot(&mut m, &mut chip, BootSource::Nand { array }),
         Err(BootError::NandBootFailed)
     );
     // a chip without a NAND array has no NFC model
@@ -648,9 +662,9 @@ fn nand_boot_refusals() {
         bad: BTreeSet::new(),
         payload: PAYLOAD,
     };
-    let (mut m, chip) = machine(ChipOptions::default());
+    let (mut m, mut chip) = machine(ChipOptions::default());
     assert_eq!(
-        boot(&mut m, &chip, BootSource::Nand { array }),
+        boot(&mut m, &mut chip, BootSource::Nand { array }),
         Err(BootError::NoNfc)
     );
 }

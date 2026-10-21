@@ -78,10 +78,10 @@ Table 19-6), and returns their ids in a [`Chip`](soc::Chip). What the chip does 
 the eMMC, the NAND array), the PLL_CR and PLL_DR values the reset configuration left, and the time scale of every
 clock in machine ticks (each UART's character time, each SSI's frame period, ticks per microsecond for USB, the
 eSDHC's data latency and CMD6 busy time). Nothing in the models assumes a clock frequency. `ChipOptions::default()`
-is the chip with nothing on it (no parts, the PLL values of the default reset configuration, one tick per character,
-frame and microsecond); the `with_nor`, `with_card`, `with_nand`, `with_pll`, `with_uart_ticks`, `with_ssi_ticks`,
-`with_usb_ticks_per_us` and `with_sd_timing` builders change one part of it. `Chip::nor`, `nor_mut`, `card` and
-`card_mut` give the parts back from the machine.
+is the chip with nothing on it (no parts, the PLL values of the default reset configuration, UARTs with no character
+time (0 ticks: sending and receiving are instant), one tick per frame and microsecond); the `with_nor`, `with_card`,
+`with_nand`, `with_pll`, `with_uart_ticks`, `with_ssi_ticks`, `with_usb_ticks_per_us` and `with_sd_timing` builders
+change one part of it. `Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
 
 ```
 use mcf5441x_emu::Machine;
@@ -175,7 +175,8 @@ fault as unmapped.
 - **DDR controller** (RM ch. 21): the registers, with the reset values and the INTSTATUS after START measured on an
   MCF54415; the DDR itself is RAM. `Ddrmc::set_init_completes(false)` models a DRAM that never finishes initializing.
 - **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, locked unless the host says otherwise
-  (`Pll::set_locked(false)` drops LOCK and LOCKS; LOCKS stays clear when the lock returns, as RM 8.3.4 has it).
+  (`Pll::set_locked(false)` drops LOCK and LOCKS, and sets LOLF when PLL_CR enables it; LOCKS stays clear when the
+  lock returns, as RM 8.3.4 has it).
 - **NFC** (RM ch. 22): page reads into the buffer from a [`NandArray`](soc::NandArray), with the ECC status byte
   as the RM describes it; the reset values measured on an MCF54415.
 
@@ -242,8 +243,8 @@ idle-low select; the eSDHC's RSTA reset of the registers not measured and a data
 phase; USB detach 100 µs after RS clears; the SSI's underrun sending silence and emptying the FIFO, where RM Table
 35-8 re-transmits the previous data; the word and longword accesses over the INTC's 8-bit SIMR, CIMR, CLMASK and
 SLMASK; the DDR controller's PADCR bit 9; the NFC's address increment after a single-page read and its ECC status
-byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once (LOCKS stays clear after a lost lock); the NOR flash's WEL and WIP timing
-around a failed program.
+byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once (LOCKS stays
+clear after a lost lock); the NOR flash's WEL and WIP timing around a failed program.
 
 ## Running a program
 
@@ -298,12 +299,13 @@ use mcf5441x_emu::soc::{ChipOptions, Mcf5441x};
 
 let mut m = Machine::new();
 m.mem.map_ram(0x8000_0000, 0x1_0000); // the SRAM, where the board's RAMBAR puts it
-let chip = Mcf5441x::build(&mut m, ChipOptions::default());
+let mut chip = Mcf5441x::build(&mut m, ChipOptions::default());
 // SP, PC, then `bra.s .`
 let image = [0x80, 0x01, 0x00, 0x00, 0x80, 0x00, 0x00, 0x08, 0x60, 0xFE, 0x4E, 0x71];
 let flash = SpiNor::new(1 << 20, [0x01, 0x20, 0x18, 0x4D, 0x01, 0x80], &sbf_image(&image, image.len(), 0));
-let pc = boot(&mut m, &chip, BootSource::Serial { flash, sram_base: 0x8000_0000 }).unwrap();
+let pc = boot(&mut m, &mut chip, BootSource::Serial { flash, sram_base: 0x8000_0000 }).unwrap();
 assert_eq!((pc, m.cpu.a[7]), (0x8000_0008, 0x8001_0000));
+assert!(chip.nor(&m).is_some()); // the flash stays on DSPI0 PCS1
 # use mcf5441x_emu::Machine;
 ```
 

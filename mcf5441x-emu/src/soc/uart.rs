@@ -61,7 +61,9 @@ pub trait SerialPeer: Any {
         None
     }
     /// Called at an instruction boundary once the clock has reached [`SerialPeer::next_event`] (`cx.now` may be
-    /// past it). Afterwards the event should lie after `cx.now`, as for [`Device::advance`].
+    /// past it). Afterwards the event should lie after `cx.now`, as for [`Device::advance`]. A character the peer
+    /// sends here starts at `cx.now` at the earliest, so one meant for the event's tick goes out at the later of the
+    /// two ([`PeerCx::send`] panics on a start before `cx.now`).
     fn advance(&mut self, _cx: &mut PeerCx) {}
 }
 
@@ -118,8 +120,8 @@ fn schedule(
 /// The host drives the receive line with [`Uart::receive`] and sees what is sent in [`Uart::sent`] (or through a
 /// hook, [`Uart::on_byte`]). A [`SerialPeer`] [attached](Uart::attach) to it is the other end of both lines: it
 /// hears each character as it begins shifting out, sends characters to the receiver, has events of its own (the
-/// UART's [`Device::next_event`] includes them) and can end the run. The receiver and the transmitter start disabled (RM 41.3.5): a board whose boot
-/// stages left them on writes UCR.
+/// UART's [`Device::next_event`] includes them) and can end the run. The receiver and the transmitter start
+/// disabled (RM 41.3.5): a board whose boot stages left them on writes UCR.
 ///
 /// Registers (byte registers; the access size is not checked and only the low byte of a write is used):
 /// - UMR1/UMR2 (+0x00, reset 0): stored and read back through the mode register pointer (RM 41.3.1, RM
@@ -149,11 +151,13 @@ fn schedule(
 /// register, clearing TXRDY and TXEMP. The character moves to the shift register 3 ticks after the write when
 /// that is idle (status reads at +1 and +2 still see TXRDY clear; guess: the shortest of the measured 2 to 9
 /// instructions), else when the shift register finishes its character; the move sets TXRDY again. A second
-/// character written before the move is dropped (RM 41.3.7), as on the chip. TXEMP sets when the last character has been shifted out, `ticks_per_byte` after it
-/// began. TRANSMITTER DISABLE lets the character being shifted finish; one still in the holding register is not
-/// sent (guess: RM Table 41-6 says characters loaded while the transmitter is disabled are not sent). Each
-/// character is recorded ([`Uart::sent`], [`Uart::on_byte`]) with the tick it begins shifting out: when it
-/// starts on the line, which is what a peer on the line sees. The transmit DMA request is not driven.
+/// character written before the move is dropped (RM 41.3.7), as on the chip. TXEMP sets when the last character
+/// has been shifted out, `ticks_per_byte` after it began ([`Uart::tx_idle_at`] gives that tick to the host).
+/// TRANSMITTER DISABLE lets the character being shifted finish; one still in the holding register is not sent
+/// (guess: RM Table 41-6 says characters loaded while the transmitter is disabled are not sent). Each character
+/// is recorded ([`Uart::sent`], unless [`Uart::record`] turned the log off; [`Uart::on_byte`] and the peer see it
+/// either way) with the tick it begins shifting out: when it starts on the line, which is what a peer on the line
+/// sees. The transmit DMA request is not driven.
 ///
 /// The receiver: a character arrives `ticks_per_byte` after its start bit, and lands in the holding register,
 /// setting RXRDY, when the receiver is on and the register is empty. Otherwise it is lost ([`Uart::lost`]): with
@@ -302,6 +306,16 @@ impl Uart {
     /// Call `f` with the tick and the character of every character sent from now on: a board's peer on the line.
     pub fn on_byte(&mut self, f: Box<dyn FnMut(u64, u8)>) {
         self.hook = Some(f);
+    }
+
+    /// The tick at which the transmitter's holding and shift registers are both empty, with nothing more written:
+    /// the end of the character in the shift register, or of the one in the holding register after it. At or
+    /// before the clock when the transmitter is idle. A host can [`Machine::idle_until`](crate::Machine::idle_until)
+    /// the later of this tick and the clock to let the characters already written go out (each is recorded, and
+    /// heard by the hook and the peer, as it moves to the shift register) without running instructions.
+    pub fn tx_idle_at(&self) -> u64 {
+        self.move_at()
+            .map_or(self.shift_end, |at| at + self.config.ticks_per_byte)
     }
 
     /// Received characters lost: arriving with the receiver off or over a held character.

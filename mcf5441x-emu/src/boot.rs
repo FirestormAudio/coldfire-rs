@@ -68,7 +68,8 @@ pub enum BootError {
     Unmapped { addr: u32 },
     /// The image is shorter than its reset vector (SP and PC, 8 bytes).
     ShortImage,
-    /// NAND: the chip was built without a NAND array, so it has no NFC model ([`ChipOptions::nand`](crate::soc::ChipOptions::nand)).
+    /// NAND: the chip was built without a NAND array, so it has no NFC model
+    /// ([`ChipOptions::nand`](crate::soc::ChipOptions::nand)).
     NoNfc,
     /// NAND: a page of every boot block fails ECC, so the NFC boot is unsuccessful (RM 22.4.4).
     NandBootFailed,
@@ -107,7 +108,8 @@ fn long(b: &[u8], at: usize) -> Result<u32, BootError> {
 ///   clear, RM 11.4.1; guess: the 1-to-0 transition it also needs is taken as given), reads BLL and RCON, and
 ///   copies 4 × (BLL + 1) bytes from just after the header into the SRAM at `sram_base` (bytes past the flash's
 ///   end read 0xFF). SBFSR reads BLL and SBFCR the header's BLDIV with FR clear (RM 11.3; set in the CCM stub).
-///   The flash goes on DSPI0 PCS1, in place of any part there. RCON drives nothing: what it configures (the PLL's
+///   The flash goes on DSPI0 PCS1, in place of any part there, and `chip` records it there, so
+///   [`Chip::nor`] returns it. RCON drives nothing: what it configures (the PLL's
 ///   values among them) is the board's [`ChipOptions`](crate::soc::ChipOptions). RM 11.4.3 has the SBF map the
 ///   SRAM "to address 0 via the RAMBAR", which RAMBAR's base field cannot hold; the SRAM is wherever the board
 ///   mapped it, RAMBAR is left at its reset value, and the reset vector is read from the SRAM's first bytes.
@@ -123,7 +125,7 @@ fn long(b: &[u8], at: usize) -> Result<u32, BootError> {
 ///
 /// # Panics
 /// When the RAM mapped at address 0 (NOR, NAND) overlaps RAM or a device `m` already has there.
-pub fn boot(m: &mut Machine, chip: &Chip, source: BootSource) -> Result<u32, BootError> {
+pub fn boot(m: &mut Machine, chip: &mut Chip, source: BootSource) -> Result<u32, BootError> {
     m.cpu = Cpu::new();
     let vector = match source {
         BootSource::Serial { flash, sram_base } => {
@@ -133,6 +135,7 @@ pub fn boot(m: &mut Machine, chip: &Chip, source: BootSource) -> Result<u32, Boo
                 .map_err(|_| BootError::Unmapped { addr: sram_base })?;
             m.device_mut::<Dspi>(chip.dspi[SBF_DSPI])
                 .attach(SBF_PCS, Box::new(flash));
+            chip.nor = Some((SBF_DSPI as u8, SBF_PCS));
             code
         }
         BootSource::Nor { image } => {

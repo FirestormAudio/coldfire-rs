@@ -22,8 +22,9 @@ type WriteHook = Box<dyn FnMut(u32, Size, u32, &mut DeviceCx)>;
 ///
 /// A read returns the canned value at that exact offset if there is one, else zero ([`StubMode::ReadZero`]) or
 /// the last value written at that exact offset ([`StubMode::ReadBack`]), truncated to the access size. There is no
-/// byte-lane slicing: a value is keyed by the offset it was given at. Writes are logged, passed to the hook, and
-/// stored in `ReadBack` mode. Reads are counted by the poll detector.
+/// byte-lane slicing: a value is keyed by the offset it was given at. Writes are logged (unless
+/// [`StubBlock::record`] turned the log off), passed to the hook, and stored in `ReadBack` mode. Reads are counted
+/// by the poll detector.
 pub struct StubBlock {
     name: &'static str,
     mode: StubMode,

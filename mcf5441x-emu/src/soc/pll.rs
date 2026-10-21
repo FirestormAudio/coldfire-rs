@@ -15,8 +15,13 @@ const DR_BITS: u32 = 0x03FF_7FFF;
 /// PLL_SR LOCKS and LOCK (RM Table 8-5).
 const LOCKS: u32 = 1 << 5;
 const LOCK: u32 = 1 << 4;
+/// PLL_SR LOLF, write-1-to-clear (RM Table 8-5).
+const LOLF: u32 = 1 << 6;
+/// PLL_CR LOLIRQ and LOLEN (RM Figure 8-3): with both set, a loss of lock sets LOLF.
+const LOLIRQ: u32 = 1 << 14;
+const LOLEN: u32 = 1 << 12;
 
-/// The PLL (RM ch. 8), mapped at 0xFC0C_0000, always locked.
+/// The PLL (RM ch. 8), mapped at 0xFC0C_0000: locked, unless the host says otherwise ([`Pll::set_locked`]).
 ///
 /// Registers:
 /// - PLL_CR (+0) and PLL_DR (+4): their reset values come from the reset configuration (RM Figures 8-3 and 8-4:
@@ -24,14 +29,18 @@ const LOCK: u32 = 1 << 4;
 ///   constructor's. Writes are stored, the reserved bits reading 0 (RM Figures 8-3 and 8-4). A narrow write to
 ///   PLL_DR is refused with [`Stop::Unmodelled`] (RM 8.2.2: it takes a single 32-bit write); other narrow accesses
 ///   use the register's big-endian byte lanes.
-/// - PLL_SR (+8): LOCK and LOCKS (0x30), measured on an MCF54415 after reset. LOCF and LOLF are write-1-to-clear
-///   and LOC is status (RM Table 8-5); the model never loses lock or clock, so they read 0 and no write changes SR.
-///   guess: there is no relock time; a new CR or DR leaves the PLL locked.
+/// - PLL_SR (+8): LOCK and LOCKS (0x30), measured on an MCF54415 after reset; both clear while the host has the
+///   PLL unlocked ([`Pll::set_locked`]), and LOCKS stays clear after (RM 8.3.4). LOLF is set when the host takes
+///   the lock away with PLL_CR\[LOLIRQ\] and \[LOLEN\] both set (RM Table 8-5, RM 8.3.4.2), and a write of 1
+///   clears it. The model never loses its clock, so LOCF and LOC read 0. guess: there is no relock time; a new CR
+///   or DR leaves the PLL locked.
 ///
 /// The rest of the window reads 0 and ignores writes. An access that crosses a register (from a bus master) is
 /// refused with [`Stop::Unmodelled`]. The interrupt enables PLL_CR\[LOCIRQ\] and \[LOLIRQ\] are stored, but the
-/// model never loses clock or lock, so no interrupt is raised (and none is wired). Nothing derives a clock from
-/// the dividers: time is the board's, in ticks. Every accepted write is recorded ([`Pll::writes`]).
+/// model never loses its clock, and loses lock only at the host's word: LOLF's interrupt request (INTC2 source 12,
+/// RM Table 17-17) is not wired, and LOLRE's reset request is not modelled. Nothing derives a clock from the
+/// dividers: time is the board's, in ticks. Every accepted write is recorded ([`Pll::writes`]) unless
+/// [`Pll::record`] turned the log off.
 #[derive(Debug)]
 pub struct Pll {
     cr: u32,
@@ -41,6 +50,7 @@ pub struct Pll {
     locked: bool,
     /// Lock was lost since reset: LOCKS stays clear (RM 8.3.4).
     lost: bool,
+    lolf: bool,
 }
 
 impl Pll {
@@ -53,6 +63,7 @@ impl Pll {
             record: true,
             locked: true,
             lost: false,
+            lolf: false,
         }
     }
 
@@ -75,8 +86,12 @@ impl Pll {
     /// PLL_SR\[LOCK\] and \[LOCKS\] read 0 (RM 8.3.4). On again restores LOCK only: LOCKS is sticky and "remains
     /// cleared" after the PLL re-locks (RM 8.3.4); only a reset sets it again, and the model has no reset of the
     /// PLL. guess: a write to PLL_SR does not restore LOCKS (the RM says to clear it by writing a one, which
-    /// leaves it 0).
+    /// leaves it 0). Taking the lock away while PLL_CR\[LOLIRQ\] and \[LOLEN\] are both set sets PLL_SR\[LOLF\]
+    /// (RM Table 8-5), which stays set, lock or no lock, until a write of 1 clears it.
     pub fn set_locked(&mut self, on: bool) {
+        if self.locked && !on && self.cr & (LOLIRQ | LOLEN) == LOLIRQ | LOLEN {
+            self.lolf = true;
+        }
         self.locked = on;
         self.lost |= !on;
     }
@@ -85,7 +100,11 @@ impl Pll {
         match reg {
             PLL_CR => self.cr,
             PLL_DR => self.dr,
-            PLL_SR => (if self.locked { LOCK } else { 0 }) | (if self.lost { 0 } else { LOCKS }),
+            PLL_SR => {
+                (if self.locked { LOCK } else { 0 })
+                    | (if self.lost { 0 } else { LOCKS })
+                    | (if self.lolf { LOLF } else { 0 })
+            }
             _ => 0,
         }
     }
@@ -121,6 +140,7 @@ impl Device for Pll {
         match reg {
             PLL_CR => self.cr = new & CR_BITS,
             PLL_DR => self.dr = new & DR_BITS,
+            PLL_SR if lane_merge(0, offset, size, value) & LOLF != 0 => self.lolf = false,
             _ => {}
         }
     }
