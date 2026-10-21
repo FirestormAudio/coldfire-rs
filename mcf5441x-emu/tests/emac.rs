@@ -452,7 +452,8 @@ fn omc_saturates_and_sets_pav() {
         ),
         // Beyond 32 bits but inside 48: EV only, no saturation.
         row(l, OMC, 0x7FFF_FFFF, 1, 1, (0x8000_0000, 0, OMC | EV)),
-        // Unsigned: product overflow saturates MAC to all ones, MSAC to zero; a borrow saturates to zero.
+        // Unsigned: product overflow saturates MAC to all ones (measured on an MCF54415, see
+        // `unsigned_product_overflow_with_omc_saturates_to_all_ones`), MSAC to zero; a borrow saturates to zero.
         row(
             l,
             OMC | SU,
@@ -489,7 +490,8 @@ fn omc_saturates_and_sets_pav() {
             0x4000_0000,
             (0x8000_0000, 0xFF00, OMC | FI | PAV0 | N | V),
         ),
-        // -1 * -1 = +1.0 needs the extension but does not overflow 48 bits.
+        // -1 * -1 = +1.0 needs the extension but does not overflow 48 bits (measured on an MCF54415, see
+        // `fractional_minus_one_squared_with_omc_is_not_saturated`).
         row(
             l,
             OMC | FI,
@@ -662,6 +664,58 @@ fn fractional_minus_one_squared_is_not_a_product_overflow() {
     let m = run(src, [0; 8]);
     assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0x21, 0x8000_0100, 0));
     assert_eq!(m.cpu.d[5], FI | EV);
+}
+
+#[test]
+fn unsigned_product_overflow_with_omc_saturates_to_all_ones() {
+    // Measured on an MCF54415, unsigned integer with OMC (MACSR 0xC0): 0xFFFF_FFFF * 0xFFFF_FFFF into ACC0 = 5
+    // saturates to the unsigned 48-bit maximum: MACSR 0x1CB (PAV0, OMC, S/U, N, V, EV), MOVE ACC0 reads
+    // 0xFFFF_FFFF and ACCext01 0x0000_FFFF.
+    let src = "
+        move.l #0xc0,%d0
+        move.l %d0,%macsr
+        moveq #0,%d0
+        move.l %d0,%accext01
+        moveq #5,%d0
+        move.l %d0,%acc0
+        moveq #-1,%d2
+        moveq #-1,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        move.l %acc0,%d6
+        move.l %accext01,%d7
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!(
+        (m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]),
+        (0x1CB, 0xFFFF_FFFF, 0x0000_FFFF)
+    );
+    assert_eq!(m.cpu.d[5], PAV0 | OMC | SU | N | V | EV);
+}
+
+#[test]
+fn fractional_minus_one_squared_with_omc_is_not_saturated() {
+    // Measured on an MCF54415, signed fractional with OMC (MACSR 0xA0): ACC0 = 0x0000_0100, then
+    // 0x8000_0000 * 0x8000_0000 is no overflow: MACSR 0xA1 (OMC, F/I, EV; no PAV0, no V) and ACCext01 0. The
+    // accumulator holds 0x8000_0100 (+1.0 and a bit), which MOVE ACC0 saturates to 0x7FFF_FFFF on the way out.
+    let src = "
+        move.l #0xa0,%d0
+        move.l %d0,%macsr
+        moveq #0,%d0
+        move.l %d0,%accext01
+        move.l #0x100,%d0
+        move.l %d0,%acc0
+        move.l #0x80000000,%d2
+        move.l %d2,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        move.l %acc0,%d6
+        move.l %accext01,%d7
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0xA1, 0x7FFF_FFFF, 0));
+    assert_eq!(m.cpu.d[5], OMC | FI | EV);
+    assert_eq!(m.cpu.emac.acc[0], 0x8000_0100);
 }
 
 #[test]

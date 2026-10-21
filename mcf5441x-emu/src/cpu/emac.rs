@@ -386,7 +386,7 @@ impl Emac {
 
     /// Unsigned integers.
     fn unsigned(&self, n: usize, op: MacOp, product: u64, omc: bool) -> (u64, bool) {
-        // Saturation is all ones for MAC and zero for MSAC (RM 5.3.5).
+        // Saturation is all ones for MAC (measured on an MCF54415) and zero for MSAC (RM 5.3.5).
         let saturated = if op.subtract { 0 } else { MASK48 };
         let product_overflow = product >> 40 != 0;
         if product_overflow && omc {
@@ -416,7 +416,7 @@ impl Emac {
     /// Signed fractions: `product` is Y * X of the 32-bit operands. The scale factor is ignored (RM 5.3.1.4).
     /// There is no product overflow in this mode (RM 5.3.5: it applies to 32 x 32 integer operations only), only
     /// the 48-bit accumulation overflow. Measured on an MCF54415 without OMC: -1 * -1 into 0x0000_0100 leaves
-    /// 0x8000_0100 with EV and without PAV0 or V. With OMC the same holds by RM 5.3.5 (not measured).
+    /// 0x8000_0100 with EV and without PAV0 or V. Measured with OMC too: the same, with no saturation.
     fn fractional(&self, n: usize, op: MacOp, product: i128, omc: bool) -> (u64, bool) {
         // product[63:0] = (Y * X) << 1; held exactly, so -1 * -1 is +2^63, which is the zero-filled
         // product[71:64] RM 5.3.5 asks for in that case and the sign extension in every other.

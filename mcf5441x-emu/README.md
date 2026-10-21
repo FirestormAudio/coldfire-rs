@@ -19,9 +19,9 @@ through a small device interface and decides what a stop means.
   instruction.
 
 Where the manuals do not say what the hardware does and it was not measured, the code carries a `guess:` comment with
-the reason, and so does its test. The notable open points: the address-error frame for an odd BSR target and for an
-odd PC loaded by RTE (taken as FS 0100, like the measured odd JSR and RTS), and the EMAC with OMC set in the cases
-only measured without it (fractional -1 * -1, unsigned product overflow), which follow RM 5.3.5.
+the reason, and so does its test. The EMAC overflow cases are all measured; the notable open point is the
+address-error frame for an odd BSR target and for an odd PC loaded by RTE (taken as FS 0100, like the measured odd
+JSR and RTS).
 
 ## What is not modelled
 
