@@ -1,19 +1,20 @@
 //! Big-endian physical memory: sorted RAM regions and device windows behind a faulting access interface.
 //!
 //! RAM is the fast path. An access that no RAM region covers goes to the device whose window holds all of it,
-//! with a [`DeviceCx`] for the clock, the interrupt lines and halting; every such access also ends the current
-//! instruction's run of uninterrupted execution, so the machine looks at interrupts and events before the next
-//! instruction.
+//! with a [`DeviceCx`] for the clock, the interrupt and DMA request lines and halting (and, for a bus master, a
+//! [`Bus`](crate::bus::Bus)); every such access also ends the current instruction's run of uninterrupted
+//! execution, so the machine looks at interrupts and events before the next instruction.
 //!
 //! Memory also keeps one bit per 4 KiB page for the pages holding decoded instructions. A write into such a page,
-//! by an instruction or by [`Memory::load`], clears the bit, reports the page to the machine and ends the run of
+//! by an instruction, a bus master or [`Memory::load`], clears the bit, reports the page to the machine and ends the run of
 //! uninterrupted execution, so the page's decoded blocks are dropped before the next instruction.
 
 use std::collections::HashMap;
 
+use crate::bus::DmaLines;
 use crate::device::{Access, Device, DeviceCx, DeviceId};
 use crate::irq::{InterruptController, IrqLines};
-use crate::sched::Devices;
+use crate::sched::{Devices, Kind};
 use crate::stop::{Stop, StopReason};
 
 /// Access width.
@@ -84,14 +85,30 @@ impl Ram {
 /// The default for [`Memory::set_poll_limit`].
 pub const DEFAULT_POLL_LIMIT: u32 = 10_000;
 
-/// The physical address space: RAM, devices, the interrupt lines and the clock the devices see.
-pub struct Memory {
+/// The most rounds of bus master servicing in one go; a round after that which still changes the DMA request lines
+/// stops the run.
+const SERVICE_ROUNDS: u32 = 64;
+
+/// The address space proper: RAM, the device table and the record of decoded code. This is what a bus master's
+/// [`Bus`](crate::bus::Bus) reaches; the lines, the clock and the bookkeeping of the core's accesses stay in
+/// [`Memory`].
+pub(crate) struct Space {
     /// Sorted by base, non-overlapping.
     ram: Vec<Ram>,
     /// Index of the region that served the last access.
     last: usize,
-    devices: Devices,
+    pub(crate) devices: Devices,
+    /// One bit per 4 KiB page of the address space: the page holds bytes of a decoded block.
+    code: Box<[u64]>,
+    /// Pages whose code was written since the machine last dropped their blocks.
+    pub(crate) written: Vec<u32>,
+}
+
+/// The physical address space: RAM, devices, the interrupt and DMA request lines and the clock the devices see.
+pub struct Memory {
+    pub(crate) space: Space,
     irq: IrqLines,
+    dma: DmaLines,
     /// The clock, in ticks.
     pub(crate) now: u64,
     /// The machine looks at events, limits and interrupts once `now` reaches this; a device access sets it to 0.
@@ -104,10 +121,6 @@ pub struct Memory {
     /// Device reads per (pc, addr) since the last device write. Only counted, never iterated.
     polls: HashMap<(u32, u32), u32>,
     poll_limit: u32,
-    /// One bit per 4 KiB page of the address space: the page holds bytes of a decoded block.
-    code: Box<[u64]>,
-    /// Pages whose code was written since the machine last dropped their blocks.
-    pub(crate) written: Vec<u32>,
 }
 
 /// Log2 of the page size the block cache tracks writes in.
@@ -116,10 +129,15 @@ pub(crate) const PAGE_SHIFT: u32 = 12;
 impl Default for Memory {
     fn default() -> Self {
         Memory {
-            ram: Vec::new(),
-            last: 0,
-            devices: Devices::default(),
+            space: Space {
+                ram: Vec::new(),
+                last: 0,
+                devices: Devices::default(),
+                code: vec![0; 1 << (32 - PAGE_SHIFT - 6)].into_boxed_slice(),
+                written: Vec::new(),
+            },
             irq: IrqLines::default(),
+            dma: DmaLines::default(),
             now: 0,
             horizon: 0,
             pc: 0,
@@ -127,8 +145,6 @@ impl Default for Memory {
             trace: None,
             polls: HashMap::new(),
             poll_limit: DEFAULT_POLL_LIMIT,
-            code: vec![0; 1 << (32 - PAGE_SHIFT - 6)].into_boxed_slice(),
-            written: Vec::new(),
         }
     }
 }
@@ -139,13 +155,15 @@ impl std::fmt::Debug for Memory {
             .field(
                 "ram",
                 &self
+                    .space
                     .ram
                     .iter()
                     .map(|r| (r.base, r.len()))
                     .collect::<Vec<_>>(),
             )
-            .field("devices", &self.devices.len())
+            .field("devices", &self.space.devices.len())
             .field("irq", &self.irq)
+            .field("dma", &self.dma)
             .field("now", &self.now)
             .finish_non_exhaustive()
     }
@@ -153,7 +171,7 @@ impl std::fmt::Debug for Memory {
 
 /// `value` truncated to `size`.
 #[inline(always)]
-fn truncate(value: u32, size: Size) -> u32 {
+pub(crate) fn truncate(value: u32, size: Size) -> u32 {
     match size {
         Size::Byte => value & 0xFF,
         Size::Word => value & 0xFFFF,
@@ -170,30 +188,7 @@ fn window(what: &str, base: u32, size: u32) -> (u32, u32) {
     (base, last)
 }
 
-impl Memory {
-    /// Map zeroed RAM at `base`. Panics when the region is empty, wraps the address space or overlaps another
-    /// region or a device.
-    pub fn map_ram(&mut self, base: u32, size: u32) {
-        let (_, last) = window("RAM", base, size);
-        assert!(
-            !self.devices.overlaps(base, last),
-            "RAM overlaps a device at {base:#x}"
-        );
-        let end = base as u64 + size as u64;
-        let at = self.ram.partition_point(|r| r.base < base);
-        if let Some(prev) = at.checked_sub(1).map(|i| &self.ram[i]) {
-            assert!(
-                prev.base as u64 + prev.data.len() as u64 <= base as u64,
-                "RAM overlaps at {base:#x}"
-            );
-        }
-        if let Some(next) = self.ram.get(at) {
-            assert!(end <= next.base as u64, "RAM overlaps at {base:#x}");
-        }
-        self.ram.insert(at, Ram::new(base, size));
-        self.last = 0;
-    }
-
+impl Space {
     /// Find the region holding `[addr, addr + len)`; returns its index and the offset.
     fn find(&mut self, addr: u32, len: u32) -> Option<(usize, usize)> {
         if let Some(off) = self.ram.get(self.last).and_then(|r| r.span(addr, len)) {
@@ -208,30 +203,28 @@ impl Memory {
         Some((i, off))
     }
 
-    /// Read a big-endian value, zero-extended.
-    #[inline]
-    pub fn read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
+    /// A RAM read: `None` unless one region covers the access.
+    #[inline(always)]
+    pub(crate) fn ram_read(&mut self, addr: u32, size: Size) -> Option<u32> {
         let n = size.bytes();
-        let Some((i, off)) = self.find(addr, n) else {
-            return self.device_read(addr, size);
-        };
+        let (i, off) = self.find(addr, n)?;
         let b = &self.ram[i].data[off..off + n as usize];
-        Ok(b.iter().fold(0u32, |v, &x| (v << 8) | x as u32))
+        Some(b.iter().fold(0u32, |v, &x| (v << 8) | x as u32))
     }
 
-    /// Write the low bytes of `value`, big-endian.
-    #[inline]
-    pub fn write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
+    /// A RAM write: `None` unless one region covers the access, else whether it wrote into a page holding
+    /// decoded code (reported in `written`).
+    #[inline(always)]
+    pub(crate) fn ram_write(&mut self, addr: u32, size: Size, value: u32) -> Option<bool> {
         let n = size.bytes() as usize;
-        let Some((i, off)) = self.find(addr, n as u32) else {
-            return self.device_write(addr, size, value);
-        };
+        let (i, off) = self.find(addr, n as u32)?;
         self.ram[i].data[off..off + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
         let (first, last) = (addr >> PAGE_SHIFT, (addr + (n as u32 - 1)) >> PAGE_SHIFT);
-        if self.has_code(first) || self.has_code(last) {
+        let code = self.has_code(first) || self.has_code(last);
+        if code {
             self.code_written(first, last);
         }
-        Ok(())
+        Some(code)
     }
 
     /// Whether `page` holds bytes of a decoded block.
@@ -240,15 +233,8 @@ impl Memory {
         self.code[(page >> 6) as usize & (self.code.len() - 1)] >> (page & 63) & 1 != 0
     }
 
-    /// Mark pages `first..=last` as holding bytes of a decoded block.
-    pub(crate) fn mark_code(&mut self, first: u32, last: u32) {
-        for page in first..=last {
-            self.code[(page >> 6) as usize] |= 1 << (page & 63);
-        }
-    }
-
-    /// RAM in pages `first..=last` was written: report the ones holding code, so that their blocks are dropped
-    /// before the next instruction.
+    /// RAM in pages `first..=last` was written: report the ones holding code in `written`, so that their blocks
+    /// are dropped before the next instruction.
     #[cold]
     #[inline(never)]
     fn code_written(&mut self, first: u32, last: u32) {
@@ -256,14 +242,137 @@ impl Memory {
             if self.has_code(page) {
                 self.code[(page >> 6) as usize] &= !(1 << (page & 63));
                 self.written.push(page);
-                self.horizon = 0;
             }
+        }
+    }
+
+    /// Copy `bytes` into RAM; `Unmapped` at `addr` unless one region covers them all.
+    pub(crate) fn load(&mut self, addr: u32, bytes: &[u8]) -> Result<(), Fault> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let (i, off) = self.find(addr, bytes.len() as u32).ok_or(Fault::Unmapped {
+            addr,
+            size: Size::Byte,
+        })?;
+        self.ram[i].data[off..off + bytes.len()].copy_from_slice(bytes);
+        let last = addr + (bytes.len() as u32 - 1);
+        self.code_written(addr >> PAGE_SHIFT, last >> PAGE_SHIFT);
+        Ok(())
+    }
+
+    /// Copy RAM at `addr` into `out`; `None` unless one region covers it all.
+    pub(crate) fn copy_out(&mut self, addr: u32, out: &mut [u8]) -> Option<()> {
+        if out.is_empty() {
+            return Some(());
+        }
+        let (i, off) = self.find(addr, out.len() as u32)?;
+        out.copy_from_slice(&self.ram[i].data[off..off + out.len()]);
+        Some(())
+    }
+
+    /// Call device `i` with a context at `now`: a bus master is taken out of its slot and gets the rest of the
+    /// address space as its bus. `None`, without a call, when `i` is a bus master already being called.
+    pub(crate) fn call<R>(
+        &mut self,
+        i: usize,
+        now: u64,
+        irq: &mut IrqLines,
+        dma: &mut DmaLines,
+        stop: &mut Option<StopReason>,
+        f: impl FnOnce(&mut dyn Device, &mut DeviceCx) -> R,
+    ) -> Option<R> {
+        match self.devices.kind(i) {
+            Kind::Out => None,
+            Kind::Plain => {
+                let mut cx = DeviceCx {
+                    now,
+                    irq,
+                    dma,
+                    stop,
+                    space: None,
+                };
+                Some(f(self.devices.get_mut(i), &mut cx))
+            }
+            Kind::Master => {
+                let mut dev = self.devices.take(i);
+                let r = f(
+                    &mut *dev,
+                    &mut DeviceCx {
+                        now,
+                        irq,
+                        dma,
+                        stop,
+                        space: Some(self),
+                    },
+                );
+                self.devices.restore(i, dev);
+                Some(r)
+            }
+        }
+    }
+}
+
+impl Memory {
+    /// Map zeroed RAM at `base`. Panics when the region is empty, wraps the address space or overlaps another
+    /// region or a device.
+    pub fn map_ram(&mut self, base: u32, size: u32) {
+        let (_, last) = window("RAM", base, size);
+        let space = &mut self.space;
+        assert!(
+            !space.devices.overlaps(base, last),
+            "RAM overlaps a device at {base:#x}"
+        );
+        let end = base as u64 + size as u64;
+        let at = space.ram.partition_point(|r| r.base < base);
+        if let Some(prev) = at.checked_sub(1).map(|i| &space.ram[i]) {
+            assert!(
+                prev.base as u64 + prev.data.len() as u64 <= base as u64,
+                "RAM overlaps at {base:#x}"
+            );
+        }
+        if let Some(next) = space.ram.get(at) {
+            assert!(end <= next.base as u64, "RAM overlaps at {base:#x}");
+        }
+        space.ram.insert(at, Ram::new(base, size));
+        space.last = 0;
+    }
+
+    /// Read a big-endian value, zero-extended.
+    #[inline]
+    pub fn read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
+        let n = size.bytes();
+        let Some((i, off)) = self.space.find(addr, n) else {
+            return self.device_read(addr, size);
+        };
+        let b = &self.space.ram[i].data[off..off + n as usize];
+        Ok(b.iter().fold(0u32, |v, &x| (v << 8) | x as u32))
+    }
+
+    /// Write the low bytes of `value`, big-endian.
+    #[inline]
+    pub fn write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
+        match self.space.ram_write(addr, size, value) {
+            None => self.device_write(addr, size, value),
+            Some(code) => {
+                if code {
+                    self.horizon = 0;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Mark pages `first..=last` as holding bytes of a decoded block.
+    pub(crate) fn mark_code(&mut self, first: u32, last: u32) {
+        for page in first..=last {
+            self.space.code[(page >> 6) as usize] |= 1 << (page & 63);
         }
     }
 
     /// Whether one RAM region holds all of `[addr, addr + len)`.
     pub(crate) fn in_ram(&mut self, addr: u32, len: u32) -> bool {
-        self.find(addr, len).is_some()
+        self.space.find(addr, len).is_some()
     }
 
     /// Look at events, limits and interrupts before the next instruction: the interrupt mask may have changed.
@@ -277,27 +386,18 @@ impl Memory {
     #[cold]
     #[inline(never)]
     fn device_read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
-        let (i, off) = self
-            .devices
-            .find(addr, size.bytes())
-            .ok_or(Fault::Unmapped { addr, size })?;
-        let mut cx = DeviceCx {
-            now: self.now,
-            irq: &mut self.irq,
-            stop: &mut self.stop,
-        };
-        let value = truncate(self.devices.get_mut(i).read(off, size, &mut cx), size);
-        self.horizon = 0;
-        self.record(addr, size, false, value);
-        let pc = self.pc;
-        let n = self.polls.entry((pc, addr)).or_insert(0);
-        *n += 1;
-        if *n > self.poll_limit && self.stop.is_none() {
-            self.stop = Some(StopReason {
-                kind: Stop::Poll,
-                pc,
-                detail: format!("spinning at {pc:#x} reading {addr:#x}"),
-            });
+        let (value, counted) = self.device_access(addr, size, None)?;
+        if counted {
+            let pc = self.pc;
+            let n = self.polls.entry((pc, addr)).or_insert(0);
+            *n += 1;
+            if *n > self.poll_limit && self.stop.is_none() {
+                self.stop = Some(StopReason {
+                    kind: Stop::Poll,
+                    pc,
+                    detail: format!("spinning at {pc:#x} reading {addr:#x}"),
+                });
+            }
         }
         Ok(value)
     }
@@ -306,21 +406,66 @@ impl Memory {
     #[cold]
     #[inline(never)]
     fn device_write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
+        self.polls.clear();
+        self.device_access(addr, size, Some(value)).map(|_| ())
+    }
+
+    /// A traced access to the device whose window holds all of it: the value read (0 for a write) and whether
+    /// the device's reads are poll-counted. Ends the run of uninterrupted execution.
+    fn device_access(
+        &mut self,
+        addr: u32,
+        size: Size,
+        write: Option<u32>,
+    ) -> Result<(u32, bool), Fault> {
+        let unmapped = Fault::Unmapped { addr, size };
         let (i, off) = self
+            .space
             .devices
             .find(addr, size.bytes())
-            .ok_or(Fault::Unmapped { addr, size })?;
-        let value = truncate(value, size);
-        self.record(addr, size, true, value);
-        self.polls.clear();
-        let mut cx = DeviceCx {
-            now: self.now,
-            irq: &mut self.irq,
-            stop: &mut self.stop,
-        };
-        self.devices.get_mut(i).write(off, size, value, &mut cx);
+            .ok_or(unmapped)?;
+        if let Some(value) = write {
+            self.record(addr, size, true, truncate(value, size));
+        }
+        let r = self.space.call(
+            i,
+            self.now,
+            &mut self.irq,
+            &mut self.dma,
+            &mut self.stop,
+            |d, cx| match write {
+                Some(value) => {
+                    d.write(off, size, truncate(value, size), cx);
+                    (0, d.poll_counted())
+                }
+                None => (truncate(d.read(off, size, cx), size), d.poll_counted()),
+            },
+        );
+        let (value, counted) = r.ok_or(unmapped)?;
         self.horizon = 0;
-        Ok(())
+        if write.is_none() {
+            self.record(addr, size, false, value);
+        }
+        Ok((value, counted))
+    }
+
+    /// An access made from outside the core at the current tick: RAM, or a device access traced as the core's
+    /// would be and not counted by the poll detector. The value read, or 0 for a write.
+    pub(crate) fn host_access(
+        &mut self,
+        addr: u32,
+        size: Size,
+        write: Option<u32>,
+    ) -> Result<u32, Fault> {
+        self.horizon = 0;
+        match write {
+            None => match self.space.ram_read(addr, size) {
+                Some(v) => Ok(v),
+                None => self.device_access(addr, size, None).map(|(v, _)| v),
+            },
+            Some(value) if self.space.ram_write(addr, size, value).is_some() => Ok(0),
+            Some(value) => self.device_access(addr, size, Some(value)).map(|_| 0),
+        }
     }
 
     fn record(&mut self, addr: u32, size: Size, write: bool, value: u32) {
@@ -340,7 +485,14 @@ impl Memory {
     /// or another device.
     pub fn add_device(&mut self, base: u32, size: u32, dev: Box<dyn Device>) -> DeviceId {
         let w = self.device_window(base, size);
-        self.devices.add_device(Some(w), dev)
+        self.space.devices.add_device(Some(w), dev)
+    }
+
+    /// Map bus master `dev` at `base..base + size`, as [`Memory::add_device`]: every call into it gets a
+    /// [`Bus`](crate::bus::Bus), and it is serviced at every instruction boundary (see [`crate::bus`]).
+    pub fn add_bus_master(&mut self, base: u32, size: u32, dev: Box<dyn Device>) -> DeviceId {
+        let w = self.device_window(base, size);
+        self.space.devices.add_master(w, dev)
     }
 
     /// Map interrupt controller `c` at `base..base + size`, as [`Memory::add_device`].
@@ -351,19 +503,20 @@ impl Memory {
         c: Box<dyn InterruptController>,
     ) -> DeviceId {
         let w = self.device_window(base, size);
-        self.devices.add_controller(w, c)
+        self.space.devices.add_controller(w, c)
     }
 
     /// Add `dev` with no registers: it only schedules events.
     pub fn add_timer(&mut self, dev: Box<dyn Device>) -> DeviceId {
         self.horizon = 0;
-        self.devices.add_device(None, dev)
+        self.space.devices.add_device(None, dev)
     }
 
     fn device_window(&mut self, base: u32, size: u32) -> (u32, u32) {
         let (base, last) = window("device", base, size);
         assert!(
             !self
+                .space
                 .ram
                 .iter()
                 .any(|r| base as u64 <= r.base as u64 + r.len() as u64 - 1 && r.base <= last),
@@ -375,7 +528,7 @@ impl Memory {
 
     /// Device `id`. Panics when it is not a `T`.
     pub fn device<T: Device>(&self, id: DeviceId) -> &T {
-        let dev: &dyn std::any::Any = self.devices.get(id.0);
+        let dev: &dyn std::any::Any = self.space.devices.get(id.0);
         dev.downcast_ref()
             .unwrap_or_else(|| panic!("device {id:?} is not a {}", std::any::type_name::<T>()))
     }
@@ -383,9 +536,36 @@ impl Memory {
     /// Device `id`, mutably. Panics when it is not a `T`.
     pub fn device_mut<T: Device>(&mut self, id: DeviceId) -> &mut T {
         self.horizon = 0;
-        let dev: &mut dyn std::any::Any = self.devices.get_mut(id.0);
+        let dev: &mut dyn std::any::Any = self.space.devices.get_mut(id.0);
         dev.downcast_mut()
             .unwrap_or_else(|| panic!("device {id:?} is not a {}", std::any::type_name::<T>()))
+    }
+
+    /// Call `f` on device `id` with a context at the current tick (with a [`Bus`](crate::bus::Bus) when it is a
+    /// bus master). Panics when it is not a `T`. Bus masters are not serviced afterwards; see
+    /// [`Machine::with_device`](crate::Machine::with_device).
+    pub(crate) fn with_device<T: Device, R>(
+        &mut self,
+        id: DeviceId,
+        f: impl FnOnce(&mut T, &mut DeviceCx) -> R,
+    ) -> R {
+        self.horizon = 0;
+        self.space
+            .call(
+                id.0,
+                self.now,
+                &mut self.irq,
+                &mut self.dma,
+                &mut self.stop,
+                |d, cx| {
+                    let d: &mut dyn std::any::Any = d;
+                    let d = d.downcast_mut().unwrap_or_else(|| {
+                        panic!("device {id:?} is not a {}", std::any::type_name::<T>())
+                    });
+                    f(d, cx)
+                },
+            )
+            .expect("no device is being called")
     }
 
     /// The interrupt request lines.
@@ -398,6 +578,11 @@ impl Memory {
     pub fn irq_lines_mut(&mut self) -> &mut IrqLines {
         self.horizon = 0;
         &mut self.irq
+    }
+
+    /// The DMA request lines.
+    pub fn dma_lines(&self) -> &DmaLines {
+        &self.dma
     }
 
     /// Record every device access ([`Memory::take_trace`]) or stop recording.
@@ -415,7 +600,8 @@ impl Memory {
     }
 
     /// Stop a run after more than `reads` reads of one device register by one instruction with no device write in
-    /// between (default [`DEFAULT_POLL_LIMIT`]).
+    /// between (default [`DEFAULT_POLL_LIMIT`]). Reads of a device whose [`Device::poll_counted`] is `false` are
+    /// not counted.
     pub fn set_poll_limit(&mut self, reads: u32) {
         self.poll_limit = reads;
     }
@@ -427,13 +613,61 @@ impl Memory {
 
     /// The earliest event a device has scheduled.
     pub(crate) fn next_event(&self) -> Option<u64> {
-        self.devices.next_event()
+        self.space.devices.next_event()
     }
 
-    /// Advance the devices whose events are due.
+    /// Advance the devices whose events are due, in the order they were added.
     pub(crate) fn advance_due(&mut self) {
-        self.devices
-            .advance_due(self.now, &mut self.irq, &mut self.stop);
+        let now = self.now;
+        for i in 0..self.space.devices.len() {
+            if self.space.devices.due(i, now) {
+                self.space.call(
+                    i,
+                    now,
+                    &mut self.irq,
+                    &mut self.dma,
+                    &mut self.stop,
+                    |d, cx| d.advance(now, cx),
+                );
+            }
+        }
+    }
+
+    /// Call [`Device::service`] on every bus master, in the order they were added, until a round leaves the DMA
+    /// request lines as it found them. When [`SERVICE_ROUNDS`] rounds all change them, asks the run to stop.
+    pub(crate) fn service_masters(&mut self) {
+        if self.space.devices.masters().is_empty() {
+            return;
+        }
+        let now = self.now;
+        for _ in 0..SERVICE_ROUNDS {
+            let before = self.dma;
+            for k in 0..self.space.devices.masters().len() {
+                let i = self.space.devices.masters()[k];
+                self.space.call(
+                    i,
+                    now,
+                    &mut self.irq,
+                    &mut self.dma,
+                    &mut self.stop,
+                    |d, cx| d.service(cx),
+                );
+            }
+            if self.dma == before {
+                return;
+            }
+        }
+        if self.stop.is_none() {
+            self.stop = Some(StopReason {
+                kind: Stop::Unmodelled,
+                pc: 0,
+                detail: format!(
+                    "DMA requests never settle: bus masters changed the request lines ({:#018x}) in each of \
+                     {SERVICE_ROUNDS} rounds",
+                    self.dma.asserted()
+                ),
+            });
+        }
     }
 
     /// The highest request over all controllers for the request lines `lines`.
@@ -442,42 +676,34 @@ impl Memory {
         lines: &IrqLines,
         allow_level7: bool,
     ) -> Option<crate::irq::Irq> {
-        self.devices.pending(lines, allow_level7)
+        self.space.devices.pending(lines, allow_level7)
     }
 
     /// The highest request over all controllers, ignoring level 7 unless `allow_level7`.
     pub(crate) fn pending(&self, allow_level7: bool) -> Option<crate::irq::Irq> {
-        self.devices.pending(&self.irq, allow_level7)
+        self.space.devices.pending(&self.irq, allow_level7)
     }
 
     /// Whether the level-7 line is up.
     pub(crate) fn level7(&self) -> bool {
-        self.devices.level7(&self.irq)
+        self.space.devices.level7(&self.irq)
     }
 
-    /// Copy `bytes` into RAM; fails with `Unmapped` at `addr`, the start of the copy, unless a single RAM region covers all of `bytes`. Devices are
-    /// not written.
+    /// Copy `bytes` into RAM; fails with `Unmapped` at `addr`, the start of the copy, unless a single RAM region
+    /// covers all of `bytes`. Devices are not written.
     pub fn load(&mut self, addr: u32, bytes: &[u8]) -> Result<(), Fault> {
-        if bytes.is_empty() {
-            return Ok(());
+        self.space.load(addr, bytes)?;
+        if !self.space.written.is_empty() {
+            self.horizon = 0;
         }
-        let (i, off) = self.find(addr, bytes.len() as u32).ok_or(Fault::Unmapped {
-            addr,
-            size: Size::Byte,
-        })?;
-        self.ram[i].data[off..off + bytes.len()].copy_from_slice(bytes);
-        let last = addr + (bytes.len() as u32 - 1);
-        self.code_written(addr >> PAGE_SHIFT, last >> PAGE_SHIFT);
         Ok(())
     }
 
     /// Copy `len` bytes out of RAM without side effects; `None` unless one RAM region covers all of them.
     pub fn peek(&self, addr: u32, len: u32) -> Option<Vec<u8>> {
-        let i = self
-            .ram
-            .partition_point(|r| r.base <= addr)
-            .checked_sub(1)?;
-        let off = self.ram[i].span(addr, len)?;
-        Some(self.ram[i].data[off..off + len as usize].to_vec())
+        let ram = &self.space.ram;
+        let i = ram.partition_point(|r| r.base <= addr).checked_sub(1)?;
+        let off = ram[i].span(addr, len)?;
+        Some(ram[i].data[off..off + len as usize].to_vec())
     }
 }

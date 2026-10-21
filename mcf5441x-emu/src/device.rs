@@ -2,8 +2,9 @@
 
 use std::any::Any;
 
+use crate::bus::{Bus, DmaLines};
 use crate::irq::IrqLines;
-use crate::mem::Size;
+use crate::mem::{Size, Space};
 use crate::stop::{Stop, StopReason};
 
 /// A peripheral model.
@@ -16,6 +17,10 @@ use crate::stop::{Stop, StopReason};
 /// Time is the machine's clock: one tick per instruction. A device that needs to act at a tick reports it from
 /// [`Device::next_event`]; the core stops at exactly that instruction boundary and calls [`Device::advance`]
 /// before the next instruction runs, then checks for interrupts.
+///
+/// A device added with [`Machine::add_bus_master`](crate::Machine::add_bus_master) is a *bus master*: every call
+/// into it gets a [`Bus`] from [`DeviceCx::bus`], and [`Device::service`] is called at every instruction boundary
+/// (see [`crate::bus`]).
 pub trait Device: Any {
     /// A read of `size` at `offset`. Only the low `size` bytes of the result are used.
     fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32;
@@ -30,6 +35,23 @@ pub trait Device: Any {
     /// the event when the event was set in the past. Afterwards the event should lie after `now`; a device whose
     /// event stays due is advanced again at the next instruction boundary.
     fn advance(&mut self, _now: u64, _cx: &mut DeviceCx) {}
+    /// Bus masters only: serve the DMA requests in `cx.dma`. Called at every instruction boundary after the due
+    /// events, and after every host-side call, on every bus master in the order they were added, and called again
+    /// while a round of calls changed the request lines; more than 64 rounds that all change them stop the run
+    /// with [`Stop::Unmodelled`].
+    fn service(&mut self, _cx: &mut DeviceCx) {}
+    /// Whether the poll detector counts reads of this device's registers (see
+    /// [`Machine::set_poll_limit`](crate::Machine::set_poll_limit)). A model whose registers change with time or
+    /// with state the core cannot see returns `false`.
+    fn poll_counted(&self) -> bool {
+        true
+    }
+    /// The interrupt sources (controller, source) that this device's future events, or the DMA it requests, could
+    /// assert: pushed to `out`, returning `true`; `false` (the default) when the device cannot say, and any source
+    /// might be asserted.
+    fn wake_sources(&self, _out: &mut Vec<(usize, u8)>) -> bool {
+        false
+    }
 }
 
 /// What a device can reach during an access or an [`Device::advance`].
@@ -38,10 +60,19 @@ pub struct DeviceCx<'a> {
     pub now: u64,
     /// The interrupt request lines into the interrupt controllers.
     pub irq: &'a mut IrqLines,
+    /// The DMA request lines into the eDMA.
+    pub dma: &'a mut DmaLines,
     pub(crate) stop: &'a mut Option<StopReason>,
+    /// The address space without the device being called, when that device is a bus master.
+    pub(crate) space: Option<&'a mut Space>,
 }
 
-impl DeviceCx<'_> {
+impl<'a> DeviceCx<'a> {
+    /// The address space, for a bus master; `None` for any other device.
+    pub fn bus(&mut self) -> Option<&mut Bus<'a>> {
+        Bus::of(self)
+    }
+
     /// End the run. The access (and the instruction making it) completes; the run stops at the next instruction
     /// boundary, with PC on the next instruction, so a later run continues from there. The first request in an
     /// instruction wins. When the instruction then faults, the fault is reported and the request is dropped.

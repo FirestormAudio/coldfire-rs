@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+pub mod bus;
 pub mod cpu;
 pub mod device;
 pub mod elf;
@@ -10,6 +11,7 @@ pub mod mem;
 mod sched;
 pub mod stop;
 
+pub use bus::{Bus, DmaLines};
 pub use cpu::{Cpu, ExceptionPolicy};
 pub use device::{Access, Device, DeviceCx, DeviceId};
 pub use irq::{InterruptController, Irq, IrqLines};

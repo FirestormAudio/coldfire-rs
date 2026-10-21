@@ -6,7 +6,8 @@
 //! of any instruction that touched a device, wrote SR (a request held off by the interrupt mask may now be taken)
 //! or wrote over decoded code. There it drops the blocks over written code and *services* the machine: the due
 //! device events, a halt a device asked for, the time limit, and interrupts, in that order; then it sets the next
-//! horizon. RAM-only code pays one comparison per instruction for all of it.
+//! horizon. RAM-only code pays one comparison per instruction for all of it. Bus masters are serviced there too,
+//! after the device events (see [`crate::bus`]).
 //!
 //! Instructions run from decoded blocks: straight runs decoded once, ending at a branch, a jump, a write to SR or a
 //! page boundary. Execution enters a block only at its start, so a run that stops in the middle of one (at the
@@ -16,15 +17,16 @@
 //! access or event), so its edges are seen per instruction, as the core samples them (RM 17.1.1). Lines changed
 //! from outside the devices between runs are sampled once, when the next run starts.
 
+use crate::bus::DmaLines;
 use crate::cpu::block::Blocks;
 use crate::cpu::exception::{
     ADDRESS_ERROR_FETCH_FS, ADDRESS_ERROR_OPERAND_FS, stacks_next_pc, vector,
 };
 use crate::cpu::{self, Cpu, DecodeError, ExceptionPolicy, Flow};
-use crate::device::{Access, Device, DeviceId};
+use crate::device::{Access, Device, DeviceCx, DeviceId};
 use crate::irq::{InterruptController, Irq};
 use crate::isa::Isa;
-use crate::mem::{Fault, Memory};
+use crate::mem::{Fault, Memory, Size};
 use crate::stop::{Limit, Stop, StopReason};
 
 /// A core, its address space and its devices. One instruction is one tick.
@@ -69,6 +71,11 @@ impl Machine {
         self.mem.add_device(base, size, dev)
     }
 
+    /// Map bus master `dev` at `base..base + size` (see [`Memory::add_bus_master`] and [`crate::bus`]).
+    pub fn add_bus_master(&mut self, base: u32, size: u32, dev: Box<dyn Device>) -> DeviceId {
+        self.mem.add_bus_master(base, size, dev)
+    }
+
     /// Map interrupt controller `c` at `base..base + size`; the core takes the requests it reports.
     pub fn add_interrupt_controller(
         &mut self,
@@ -92,6 +99,71 @@ impl Machine {
     /// Device `id`, mutably. Panics when it is not a `T`.
     pub fn device_mut<T: Device>(&mut self, id: DeviceId) -> &mut T {
         self.mem.device_mut(id)
+    }
+
+    /// Call `f` on device `id` with a full context at the current tick (with a [`Bus`](crate::bus::Bus) when it
+    /// is a bus master), then service the bus masters. Panics when it is not a `T`. A halt asked for here is
+    /// reported by the next run, before its first instruction.
+    pub fn with_device<T: Device, R>(
+        &mut self,
+        id: DeviceId,
+        f: impl FnOnce(&mut T, &mut DeviceCx) -> R,
+    ) -> R {
+        let r = self.mem.with_device(id, f);
+        self.mem.service_masters();
+        r
+    }
+
+    /// Make an access as the core would at the current tick, by the instruction at PC: RAM, or a device access
+    /// that is traced but not counted by the poll detector; then service the bus masters. Returns the value read,
+    /// or 0 for a write (`write` holds the value to write). A halt a device asks for is reported by the next run,
+    /// before its first instruction.
+    pub fn access(&mut self, addr: u32, size: Size, write: Option<u32>) -> Result<u32, Fault> {
+        self.mem.pc = self.cpu.pc;
+        let r = self.mem.host_access(addr, size, write);
+        self.mem.service_masters();
+        r
+    }
+
+    /// Move the clock to `tick` without executing instructions or taking interrupts: advance the devices at each
+    /// of their events up to and including `tick`, in order, servicing the bus masters after each. A halt a device
+    /// asks for ends the move at that tick, and the next run reports it before its first instruction. Panics when
+    /// `tick` is before the clock.
+    pub fn idle_until(&mut self, tick: u64) {
+        assert!(
+            tick >= self.mem.now,
+            "idle_until({tick}) is before the clock ({})",
+            self.mem.now
+        );
+        self.mem.horizon = 0;
+        loop {
+            self.mem.advance_due();
+            self.mem.service_masters();
+            if self.mem.stop.is_some() {
+                return;
+            }
+            match self.mem.next_event() {
+                Some(t) if t <= self.mem.now => {
+                    self.mem.stop = Some(StopReason {
+                        kind: Stop::Halt("device event not advanced"),
+                        pc: 0,
+                        detail: format!(
+                            "a device's next event stays at tick {t}, not after the clock ({})",
+                            self.mem.now
+                        ),
+                    });
+                    return;
+                }
+                Some(t) if t <= tick => self.mem.now = t,
+                _ => break,
+            }
+        }
+        self.mem.now = tick;
+    }
+
+    /// The DMA request lines.
+    pub fn dma_lines(&self) -> &DmaLines {
+        self.mem.dma_lines()
     }
 
     /// Stop with [`Stop::TimeLimit`] when the clock reaches `ticks` (an absolute tick, not one per run); `None`
@@ -133,6 +205,12 @@ impl Machine {
     /// Instructions are decoded once into blocks and run from there; a write over decoded code is seen by the
     /// next instruction fetched, as if every instruction were decoded where it is executed.
     pub fn run(&mut self, limit: Limit) -> StopReason {
+        let r = self.run_cached(limit);
+        self.end();
+        r
+    }
+
+    fn run_cached(&mut self, limit: Limit) -> StopReason {
         let end = self.begin(limit);
         loop {
             if self.mem.now >= self.mem.horizon {
@@ -172,6 +250,12 @@ impl Machine {
     /// the cache is checked against.
     #[doc(hidden)]
     pub fn run_uncached(&mut self, limit: Limit) -> StopReason {
+        let r = self.run_each(limit);
+        self.end();
+        r
+    }
+
+    fn run_each(&mut self, limit: Limit) -> StopReason {
         let end = self.begin(limit);
         loop {
             if self.mem.now >= self.mem.horizon {
@@ -208,9 +292,9 @@ impl Machine {
         self.blocks.take_profile()
     }
 
-    /// Start a run: the instruction count to stop at.
+    /// Start a run: the instruction count to stop at. A halt asked for between runs is kept, for the first
+    /// boundary to report.
     fn begin(&mut self, limit: Limit) -> u64 {
-        self.mem.stop = None;
         self.mem.reset_polls();
         self.mem.horizon = 0;
         limit
@@ -218,12 +302,25 @@ impl Machine {
             .map_or(u64::MAX, |n| self.instructions.saturating_add(n))
     }
 
-    /// At the horizon: drop the blocks over written code, then service the machine.
+    /// End a run: a halt asked for by an access that then faulted is dropped.
+    fn end(&mut self) {
+        self.mem.stop = None;
+    }
+
+    /// At the horizon: drop the blocks over written code, then service the machine, then drop the blocks over
+    /// code that bus masters wrote while serviced.
     fn boundary(&mut self) -> Result<bool, StopReason> {
-        while let Some(page) = self.mem.written.pop() {
+        self.drop_written();
+        let r = self.service();
+        self.drop_written();
+        r
+    }
+
+    /// Drop the blocks over written code.
+    fn drop_written(&mut self) {
+        while let Some(page) = self.mem.space.written.pop() {
             self.blocks.drop_page(page);
         }
-        self.service()
     }
 
     /// Execute the block in `slot` from its start, up to the horizon, `until_pc` or the first instruction that
@@ -398,12 +495,14 @@ impl Machine {
         }
     }
 
-    /// At an instruction boundary: advance the devices whose events are due, report a halt a device asked for,
-    /// stop at the time limit, and take the highest deliverable interrupt. While the core waits after STOP, the
-    /// clock jumps from event to event until an interrupt is taken. `Ok(true)` when an interrupt was taken.
+    /// At an instruction boundary: advance the devices whose events are due, service the bus masters, report a
+    /// halt a device asked for, stop at the time limit, and take the highest deliverable interrupt. While the core
+    /// waits after STOP, the clock jumps from event to event until an interrupt is taken. `Ok(true)` when an
+    /// interrupt was taken.
     fn service(&mut self) -> Result<bool, StopReason> {
         loop {
             self.mem.advance_due();
+            self.mem.service_masters();
             if let Some(r) = self.mem.stop.take() {
                 return Err(self.stop(r.kind, r.detail));
             }
