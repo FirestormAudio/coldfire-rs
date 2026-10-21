@@ -17,6 +17,10 @@ loop:
     move.l 0x40102000, %d1
     cmp.l #5, %d1
     bne.s loop
+    moveq #0x6F, %d0
+    move.b %d0, 0xEC07400C          | UART9 UTB: 'o'
+    moveq #0x6B, %d0
+    move.b %d0, 0xEC07400C          | 'k'
 done:
     bra.s done
 pit_isr:

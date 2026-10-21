@@ -3,10 +3,11 @@
 mod common;
 
 use common::{STACK, prepare, set_vector, until};
-use mcf5441x_emu::soc::{Intc, Pit};
+use mcf5441x_emu::soc::{Intc, Pit, Uart, UartConfig};
 use mcf5441x_emu::{DeviceId, Limit, Machine, Size, Stop};
 
 const PIT0: u32 = 0xFC08_0000;
+const UART9: u32 = 0xEC07_4000;
 const INTC2: u32 = 0xFC05_0000;
 /// The counter the fixtures' handlers increment.
 const COUNT: u32 = 0x4010_2000;
@@ -23,13 +24,30 @@ const PIF: u32 = 0x04;
 const PIE: u32 = 0x08;
 const OVW: u32 = 0x10;
 
-/// Assemble `src`, with INTC2 and PIT0 (controller 2, source 13) added; returns the machine, the PIT and the
-/// addresses of `labels`.
-fn board(src: &str, labels: &[&str]) -> (Machine, DeviceId, Vec<u32>) {
+/// Assemble `src`, with INTC2, PIT0 (controller 2, source 13) and UART9 (transmitter enabled, no interrupt
+/// controller behind it) added; returns the machine, the PIT, the UART and the addresses of `labels`.
+fn board_uart(src: &str, labels: &[&str]) -> (Machine, DeviceId, DeviceId, Vec<u32>) {
     let (mut m, l) = prepare(src, labels);
     let ([_, _, intc2], _) = Intc::chip();
     m.add_interrupt_controller(INTC2, 0x4000, Box::new(intc2));
     let id = m.add_device(PIT0, 0x4000, Box::new(Pit::new(2, SOURCE)));
+    let uart = m.add_device(
+        UART9,
+        0x4000,
+        Box::new(Uart::new(UartConfig {
+            controller: 1,
+            source: 53,
+            rx_dma: None,
+            ticks_per_byte: 0,
+        })),
+    );
+    w(&mut m, UART9 + 8, Size::Byte, 0x04); // UCR: transmitter enable
+    (m, id, uart, l)
+}
+
+/// [`board_uart`] without the UART's id.
+fn board(src: &str, labels: &[&str]) -> (Machine, DeviceId, Vec<u32>) {
+    let (m, id, _, l) = board_uart(src, labels);
     (m, id, l)
 }
 
@@ -143,7 +161,7 @@ fn pre_change_while_running_keeps_the_count_continuous() {
 
 #[test]
 fn pit_stop_wakes_and_fast_forwards() {
-    let (mut m, _, l) = board(include_str!("fixtures/pitstop.s"), &["done", "pit_isr"]);
+    let (mut m, _, uart, l) = board_uart(include_str!("fixtures/pitstop.s"), &["done", "pit_isr"]);
     set_vector(&mut m, 205, l[1]);
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
@@ -152,18 +170,25 @@ fn pit_stop_wakes_and_fast_forwards() {
     assert!((5 * 132_000..6 * 132_000).contains(&m.now()), "{}", m.now());
     assert!(m.instructions() < m.now() / 100, "{}", m.instructions());
     assert_eq!(m.cpu.a[7], STACK);
-    // The UART text "ok" the program writes at the end is checked by the UART tests.
+    assert_eq!(m.device::<Uart>(uart).text(), "ok");
 }
 
 #[test]
-#[ignore = "needs the UART model: enabled with it"]
 fn uart_bytes_carry_cycle_stamps() {
-    // With a UART mapped, the bytes the program writes after the fifth period are stamped with ticks that are
-    // sorted and at least 5 * 132000; until then only the time is checked.
-    let (mut m, _, l) = board(include_str!("fixtures/pitstop.s"), &["done", "pit_isr"]);
+    // The bytes the program writes after the fifth period are stamped with sorted ticks, at least 5 * 132000.
+    let (mut m, _, uart, l) = board_uart(include_str!("fixtures/pitstop.s"), &["done", "pit_isr"]);
     set_vector(&mut m, 205, l[1]);
-    m.run(until(l[0]));
-    assert!(m.now() >= 5 * 132_000);
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    let stamps: Vec<u64> = m
+        .device::<Uart>(uart)
+        .sent()
+        .iter()
+        .map(|&(t, _)| t)
+        .collect();
+    assert_eq!(stamps.len(), 2);
+    assert!(stamps.is_sorted(), "{stamps:?}");
+    assert!(stamps[0] >= 5 * 132_000, "{stamps:?}");
 }
 
 #[test]
