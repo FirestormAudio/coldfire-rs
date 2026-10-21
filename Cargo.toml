@@ -1,9 +1,9 @@
 [workspace]
 resolver = "2"
 exclude = ["examples", "build"]   # ColdFire binaries (built with toolchain/cargo-cf, never on a host); build/: the toolchain checkouts
-members = ["coldfire", "coldfire-rt", "coldfire-rt-macros", "mcf5441x-pac", "embassy-mcf5441x"]
+members = ["coldfire", "coldfire-rt", "coldfire-rt-macros", "mcf5441x-pac", "embassy-mcf5441x", "mcf5441x-emu"]
 # the PAC needs a part feature, so plain cargo commands leave it out
-default-members = ["coldfire", "coldfire-rt", "coldfire-rt-macros"]
+default-members = ["coldfire", "coldfire-rt", "coldfire-rt-macros", "mcf5441x-emu"]
 
 [workspace.package]
 version = "0.1.0"

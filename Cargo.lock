@@ -372,6 +372,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcf5441x-emu"
+version = "0.1.0"
+
+[[package]]
 name = "mcf5441x-pac"
 version = "0.1.0"
 dependencies = [

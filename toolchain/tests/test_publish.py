@@ -7,7 +7,7 @@ from functools import cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-CRATES = ["coldfire", "coldfire-rt", "coldfire-rt-macros", "mcf5441x-pac", "embassy-mcf5441x"]
+CRATES = ["coldfire", "coldfire-rt", "coldfire-rt-macros", "mcf5441x-pac", "embassy-mcf5441x", "mcf5441x-emu"]
 
 
 def run(cmd, **kw):

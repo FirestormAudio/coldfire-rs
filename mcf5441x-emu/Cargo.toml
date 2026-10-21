@@ -1,0 +1,10 @@
+[package]
+name = "mcf5441x-emu"
+version = "0.1.0"
+edition = "2024"
+description = "An exact MCF5441x (ColdFire V4e) instruction-set emulator for host-side testing"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["coldfire", "m68k", "mcf5441x", "interpreter", "simulator"]
+categories = ["emulators", "development-tools::testing"]
