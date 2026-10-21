@@ -530,8 +530,8 @@ fn omc_saturates_and_sets_pav() {
 }
 
 #[test]
-fn pav_is_sticky_until_cleared() {
-    // RM 5.2.1: PAVn stays set until MACSR is written or ACCn is loaded; with OMC a saturated accumulator ignores
+fn pav_with_omc_is_sticky_until_cleared() {
+    // RM 5.2.1: with OMC, PAVn stays set until MACSR is written or ACCn is loaded; a saturated accumulator ignores
     // MAC and MSAC until then (RM 5.3.5: nothing happens when OMC and PAVn are both set), and V follows PAVn.
     let src = "
         move.l #0x80,%macsr
@@ -566,41 +566,154 @@ fn pav_is_sticky_until_cleared() {
     assert_eq!(m.cpu.a[2], OMC | PAV2);
     assert_eq!(m.cpu.a[3], 2);
     assert_eq!(m.cpu.a[4], OMC);
-
-    // guess: without OMC RM 5.3.5's algorithm clears PAVn before each MAC, but RM Table 5-2 ("once set, each flag
-    // remains set until V is cleared by a move.l, MACSR instruction or the accumulator is loaded directly") and
-    // every CFPRM ch. 6 MAC/MSAC page ("PAVx: ... unchanged otherwise") make it sticky; this core follows those.
-    // 0x7FFF_FFFF_FFFF + 1 wraps (accumulation overflow), then 0 * 0 keeps PAV0 and V.
-    let src = "
-        move.l #0,%macsr
-        move.l #-1,%acc0
-        move.l #0x7fff,%accext01
-        mac.l %d0,%d0,%acc0
-        move.l %macsr,%d2
-        mac.l %d1,%d1,%acc0
-        move.l %macsr,%d3
-    ";
-    let m = run(src, [1, 0, 0, 0, 0, 0, 0, 0]);
-    assert_eq!(m.cpu.emac.acc[0], 0);
-    assert_eq!(m.cpu.emac.ext[0], 0x8000);
-    assert_eq!(m.cpu.d[2], PAV0 | N | V | EV);
-    assert_eq!(m.cpu.d[3], PAV0 | N | V | EV);
 }
 
+/// The measured sequence: MACSR from D0, ACC0 and ACCext01 cleared, then `mac.l %d2,%d3,%acc0` with D2 = D3 =
+/// 0x7FFF_FFFF, whose product 0x3FFF_FFFF_0000_0001 does not fit 40 bits. MACSR, ACC0 and ACCext01 go to D5-D7.
+const PRODUCT_OVERFLOW: &str = "
+    move.l %d0,%macsr
+    moveq #0,%d0
+    move.l %d0,%acc0
+    move.l %d0,%accext01
+    move.l #0x7fffffff,%d2
+    move.l %d2,%d3
+    mac.l %d2,%d3,%acc0
+    move.l %macsr,%d5
+    move.l %acc0,%d6
+    move.l %accext01,%d7
+";
+
 #[test]
-fn mac_product_overflow_without_omc() {
-    // guess: RM 5.3.5 sets PAVn and V on a product overflow but assigns no result when OMC is clear; this core
-    // accumulates the low 40 bits of the product, sign-extended, as for any integer product (RM 5.3: "the
-    // low-order 40 bits of the product are formed and used with the destination accumulator").
-    // 0x7FFF_FFFF^2 = 0x3FFF_FFFF_0000_0001; its low 40 bits 0xFF_0000_0001 read as -0xFFFF_FFFF.
+fn product_overflow_without_omc_accumulates_the_low_48_bits() {
+    // Measured on an MCF54415, signed integer: 0x7FFF_FFFF * 0x7FFF_FFFF into ACC0 = 0 leaves ACC0 = 0x0000_0001
+    // and ACC0's extension 0xFFFF, the low 48 bits of the product, with MACSR 0x10B (PAV0, N, V, EV).
+    let m = run(PRODUCT_OVERFLOW, [0; 8]);
+    assert_eq!(
+        (m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]),
+        (0x10B, 0x0000_0001, 0x0000_FFFF)
+    );
+    assert_eq!(m.cpu.d[5], PAV0 | N | V | EV);
+
+    // guess: the measured product has bit 39 set, so its low 48 bits are also the low 40 sign-extended; this core
+    // takes the low 48 bits as they are. 0x1_0000 * 0x100_0000 = 2^40 then adds 0x0100_0000_0000 (EV), where
+    // sign-extending the low 40 bits would add 0.
     case(&row(
         "mac.l %d0,%d1,%acc0",
         0,
         0,
-        0x7FFF_FFFF,
-        0x7FFF_FFFF,
-        (0x0000_0001, 0xFFFF, PAV0 | N | V | EV),
+        0x1_0000,
+        0x100_0000,
+        (0, 0x0100, PAV0 | V | EV),
     ));
+    // guess: RM 5.3.5 shifts a zero in on a right shift of an overflowed signed product; taken here as a zero into
+    // bit 47 of those 48 bits: 0xFFFF_0000_0001 >> 1 = 0x7FFF_8000_0000.
+    case(&row(
+        "mac.l %d0,%d1,>>,%acc0",
+        0,
+        0,
+        0x7FFF_FFFF,
+        0x7FFF_FFFF,
+        (0x8000_0000, 0x7FFF, PAV0 | V | EV),
+    ));
+    // guess: unsigned integers likewise take the low 48 bits of a product that does not fit 40 (RM 5.3.5 zero-fills
+    // bits 47-40 for a product that fits), by the same reading as the measured signed case.
+    case(&row(
+        "mac.l %d0,%d1,%acc0",
+        SU,
+        0,
+        0x1_0000,
+        0x100_0000,
+        (0, 0x0100, SU | PAV0 | V | EV),
+    ));
+}
+
+#[test]
+fn product_overflow_with_omc_saturates() {
+    // Measured on an MCF54415, signed integer with OMC: the same product saturates ACC0 to 0x7FFF_FFFF with a zero
+    // extension, MACSR 0x182 (OMC, PAV0, V).
+    let m = run(PRODUCT_OVERFLOW, [OMC, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        (m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]),
+        (0x182, 0x7FFF_FFFF, 0)
+    );
+    assert_eq!(m.cpu.d[5], OMC | PAV0 | V);
+}
+
+#[test]
+fn accumulation_overflow_without_omc_wraps() {
+    // Measured on an MCF54415, signed integer: ACC0 = 0xFFFF_FFFF with ACC0's extension 0x7FFF (the 48-bit maximum
+    // 0x7FFF_FFFF_FFFF), then mac.l 1*1 wraps to 0x8000_0000_0000 (ACC0 0, extension 0x8000), MACSR 0x10B.
+    let src = "
+        moveq #0,%d0
+        move.l %d0,%macsr
+        moveq #-1,%d0
+        move.l %d0,%acc0
+        move.l #0x00007fff,%d0
+        move.l %d0,%accext01
+        moveq #1,%d2
+        moveq #1,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        move.l %acc0,%d6
+        move.l %accext01,%d7
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0x10B, 0, 0x8000));
+    assert_eq!(m.cpu.d[5], PAV0 | N | V | EV);
+}
+
+#[test]
+fn pav_without_omc_is_recomputed_by_each_mac() {
+    // Measured on an MCF54415, signed integer without OMC: the product overflow gives MACSR 0x10B, then a clean
+    // mac.l 1*1 into the same accumulator gives MACSR 0x009: PAV0 and V cleared, as RM 5.3.5's algorithm clears
+    // PAVn before each MAC or MSAC. ACC0 (worked out, not read back): 0xFFFF_0000_0001 + 1.
+    let src = "
+        moveq #0,%d0
+        move.l %d0,%macsr
+        move.l %d0,%acc0
+        move.l %d0,%accext01
+        move.l #0x7fffffff,%d2
+        move.l %d2,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        moveq #1,%d2
+        moveq #1,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d6
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[5], m.cpu.d[6]), (0x10B, 0x009));
+    assert_eq!(m.cpu.d[6], N | EV);
+    assert_eq!((m.cpu.emac.acc[0], m.cpu.emac.ext[0]), (2, 0xFFFF));
+}
+
+#[test]
+fn pav_with_omc_freezes_the_accumulator() {
+    // Measured on an MCF54415, signed integer with OMC: the product overflow saturates ACC0 (0x7FFF_FFFF, MACSR
+    // 0x182); a following mac.l of -1 * 1 leaves ACC0 at 0x7FFF_FFFF and MACSR at 0x182. RM 5.3.5: with OMC and PAVn
+    // both set nothing is computed; V, N, Z and EV are still set from PAVn and the unchanged accumulator.
+    let src = "
+        move.l #0x80,%d0
+        move.l %d0,%macsr
+        moveq #0,%d0
+        move.l %d0,%acc0
+        move.l %d0,%accext01
+        move.l #0x7fffffff,%d2
+        move.l %d2,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d4
+        moveq #-1,%d2
+        moveq #1,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        move.l %acc0,%d6
+        move.l %accext01,%d7
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!(
+        (m.cpu.d[4], m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]),
+        (0x182, 0x182, 0x7FFF_FFFF, 0)
+    );
 }
 
 #[test]
@@ -700,9 +813,8 @@ fn mac_with_load_moves_and_masks_address() {
 
 #[test]
 fn accext_round_trip() {
-    // CFPRM ch. 6 MOVE to/from ACCext01 and ACCext23.
-    // guess: the CFPRM tables put ACCext1 (ACCext3) in bits 31-16 and ACCext0 (ACCext2) in bits 15-0; RM Figure 5-5
-    // draws ACC0U/ACC0L in bits 31-16 instead. This core follows the instruction pages.
+    // CFPRM ch. 6 MOVE to/from ACCext01 and ACCext23: ACCext1 (ACCext3) in bits 31-16 and ACCext0 (ACCext2) in
+    // bits 15-0, as measured on an MCF54415 (see `accext01_low_half_is_acc0`); RM Figure 5-5 has them swapped.
     let m = run(
         "move.l %d0,%accext01\nmove.l %d1,%accext23\nmove.l %accext01,%d2\nmove.l %accext23,%d3",
         [0x1234_5678, 0x9ABC_DEF0, 0, 0, 0, 0, 0, 0],
@@ -761,6 +873,43 @@ fn accext_round_trip() {
     assert_eq!(e.acc, [0x8000_0001, 0x7FFF_FFFF, 3, 0xFFFF_FFFC]);
     assert_eq!(e.ext, [0xA0B0, 0x0102, 0xFEED, 0x0C0D]);
     assert_eq!((e.macsr, e.mask), (0x0F3A, 0xFFFF_1234));
+}
+
+#[test]
+fn accext01_low_half_is_acc0() {
+    // Measured on an MCF54415: with OMC, signed integer, ACC0 = ACC1 = 0 and ACCext01 = 1, MOVE ACC0 saturates to
+    // 0x7FFF_FFFF (its extension is nonzero) and MOVE ACC1 reads 0: bits 15-0 of ACCext01 belong to ACC0 and bits
+    // 31-16 to ACC1 (CFPRM ch. 6; RM Figure 5-5 has them swapped). ACCext01 reads back 1.
+    let src = "
+        move.l #0x80,%d0
+        move.l %d0,%macsr
+        moveq #0,%d0
+        move.l %d0,%acc0
+        move.l %d0,%acc1
+        moveq #1,%d0
+        move.l %d0,%accext01
+        move.l %acc0,%d4
+        move.l %acc1,%d5
+        move.l %accext01,%d6
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[4], m.cpu.d[5], m.cpu.d[6]), (0x7FFF_FFFF, 0, 1));
+
+    // ACCext23 by analogy (not measured): bits 15-0 belong to ACC2, 31-16 to ACC3.
+    let src = "
+        move.l #0x80,%d0
+        move.l %d0,%macsr
+        moveq #0,%d0
+        move.l %d0,%acc2
+        move.l %d0,%acc3
+        moveq #1,%d0
+        move.l %d0,%accext23
+        move.l %acc2,%d4
+        move.l %acc3,%d5
+        move.l %accext23,%d6
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[4], m.cpu.d[5], m.cpu.d[6]), (0x7FFF_FFFF, 0, 1));
 }
 
 #[test]

@@ -24,7 +24,6 @@ pub const EV: u32 = 0x01;
 const MACSR_MASK: u32 = 0x0FFF;
 
 const MASK48: u64 = (1 << 48) - 1;
-const MASK40: u64 = (1 << 40) - 1;
 
 /// The operating mode MACSR\[S/U, F/I\] selects (RM 5.2.1 Table 5-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,12 +72,6 @@ impl Default for Emac {
 #[inline(always)]
 fn sext48(v: u64) -> i64 {
     ((v << 16) as i64) >> 16
-}
-
-/// Sign-extend the low 40 bits.
-#[inline(always)]
-fn sext40(v: u64) -> i64 {
-    ((v << 24) as i64) >> 24
 }
 
 /// `v >> k`, rounded to nearest with ties to even (RM 5.3.1.1).
@@ -191,9 +184,9 @@ impl Emac {
         self.mask = 0xFFFF_0000 | (v & 0xFFFF);
     }
 
-    // guess: the CFPRM ch. 6 MOVE to/from ACCext01 tables put ACCext1 in bits 31-16 and ACCext0 in bits 15-0
-    // (ACCext3 and ACCext2 likewise); RM Figure 5-5 draws ACC0U/ACC0L in bits 31-16 instead. This core follows the
-    // instruction pages.
+    // Measured on an MCF54415: ACCext01 bits 15-0 are ACCext0 and bits 31-16 ACCext1, as the CFPRM ch. 6 MOVE
+    // to/from ACCext01 tables have it (RM Figure 5-5 has them swapped). ACCext23 is taken the same way by analogy
+    // (ACCext2 in bits 15-0, ACCext3 in 31-16).
     /// MOVE from ACCext01 (`pair` 0) or ACCext23 (`pair` 1).
     pub fn accext(&self, pair: usize) -> u32 {
         ((self.ext[2 * pair + 1] as u32) << 16) | self.ext[2 * pair] as u32
@@ -295,15 +288,16 @@ impl Emac {
 
     /// MAC or MSAC of `ry` and `rx` into `op.acc`, following the algorithm of RM 5.3.5 for each mode.
     ///
-    /// With OMC set and PAVn already set the accumulator is left alone (it holds a saturated value). Otherwise the
-    /// product is formed, a product overflow (integer longwords only) or a 48-bit accumulation overflow sets PAVn,
-    /// and with OMC the result saturates. V is PAVn afterwards; N, Z and EV come from the accumulator.
+    /// With OMC set and PAVn already set the accumulator is left alone (it holds a saturated value): PAVn stays set
+    /// until MOVE to ACCn, MOVCLR or a MOVE to MACSR clears it. Otherwise PAVn is recomputed: the product is
+    /// formed, a product overflow (integer longwords only) or a 48-bit accumulation overflow sets PAVn, and with
+    /// OMC the result saturates. V is PAVn afterwards; N, Z and EV come from the accumulator, frozen or not.
     pub fn mac(&mut self, op: MacOp, ry: u32, rx: u32) {
         let n = op.acc;
         let omc = self.macsr & OMC != 0;
-        // guess: RM 5.3.5 clears PAVn before each operation, but RM Table 5-2 ("once set, each flag remains set
-        // until V is cleared by a move.l, MACSR instruction or the accumulator is loaded directly") and the CFPRM
-        // ch. 6 MAC/MSAC pages ("PAVx: ... unchanged otherwise") make it sticky; it is never cleared here.
+        // Measured on an MCF54415, as RM 5.3.5's algorithm has it (and against RM Table 5-2 and the CFPRM ch. 6
+        // MAC/MSAC pages, which call PAVn sticky): without OMC each MAC or MSAC clears PAVn before it computes, so a
+        // clean MAC after an overflow clears PAV0 and V; with OMC a set PAVn freezes the accumulator and stays set.
         if !(omc && self.pav(n)) {
             let half = |r: u32, upper: bool| if upper { r >> 16 } else { r & 0xFFFF };
             let (result, overflow) = match self.mode() {
@@ -339,9 +333,7 @@ impl Emac {
                 }
             };
             self.set_full(n, result);
-            if overflow {
-                self.set_pav(n, true);
-            }
+            self.set_pav(n, overflow);
         }
         let pav = self.pav(n);
         self.set_flags(n, pav);
@@ -355,12 +347,15 @@ impl Emac {
             let positive = (product >= 0) != op.subtract;
             return (Self::saturate_signed(positive), true);
         }
-        // guess: without OMC, RM 5.3.5 assigns no result after a product overflow; this core accumulates the low
-        // 40 bits of the product, sign-extended, as for any integer product (RM 5.3: "the low-order 40 bits of the
-        // product are formed and used with the destination accumulator").
-        let p = sext40(product as u64);
+        // Measured on an MCF54415 (RM 5.3.5 assigns no result here): without OMC, 0x7FFF_FFFF * 0x7FFF_FFFF into 0
+        // leaves 0xFFFF_0000_0001, the low 48 bits of the product. guess: the product is added to the accumulator
+        // (it was 0) and its bits 47-40 are kept as they are rather than sign-extended from bit 39 (the measured
+        // product has bit 39 set, so both read the same). A product that fits 40 bits is unchanged by this.
+        let p = sext48(product as u64);
         let p = match op.sf {
             1 => p << 1,
+            // guess: RM 5.3.5 shifts a zero in on a right shift of an overflowed signed product; here into bit 47.
+            3 if product_overflow => ((p as u64 & MASK48) >> 1) as i64,
             3 => p >> 1,
             _ => p,
         };
@@ -392,7 +387,9 @@ impl Emac {
         if product_overflow && omc {
             return (saturated, true);
         }
-        let p = product & MASK40;
+        // guess: as measured for signed integers on an MCF54415 (see `signed`), a product that does not fit 40 bits
+        // contributes its low 48 bits; one that fits is the zero-filled 40 bits of RM 5.3.5.
+        let p = product & MASK48;
         let p = match op.sf {
             1 => p << 1,
             3 => p >> 1,
@@ -411,6 +408,8 @@ impl Emac {
     }
 
     /// Signed fractions: `product` is Y * X of the 32-bit operands. The scale factor is ignored (RM 5.3.1.4).
+    /// There is no product overflow in this mode (RM 5.3.5: it applies to 32 x 32 integer operations only), only
+    /// the 48-bit accumulation overflow.
     fn fractional(&self, n: usize, op: MacOp, product: i128, omc: bool) -> (u64, bool) {
         // product[63:0] = (Y * X) << 1; held exactly, so -1 * -1 is +2^63, which is the zero-filled
         // product[71:64] RM 5.3.5 asks for in that case and the sign extension in every other.
