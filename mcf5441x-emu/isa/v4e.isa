@@ -1,0 +1,246 @@
+# The MCF5441x (ColdFire V4e) instruction set: one opword form per line.
+#
+# Sources: the ColdFire Family Programmer's Reference Manual, Rev. 3 (CFPRM) chapters 4 to 9, and the
+# MCF54418 Reference Manual (RM). RM ch. 3 (Table 3-9, D0 hardware configuration) fixes what this core
+# implements: ISA_C (CFPRM Table 3-16), the hardware divider, the EMAC of CFPRM ch. 6 (not EMAC_B: RM ch. 5
+# has no dual-accumulate instructions), the MMU (RM 4.3.9: MOVE to/from USP), the CAU (RM ch. 26) and no FPU.
+# FPU and CAU forms are listed so that they can be recognised; the core executes neither from this table.
+#
+# Columns, separated by blanks:
+#   mnemonic  isa  size  pattern  ea-class  extension  op  # citation
+#
+# mnemonic   lower-case CFPRM mnemonic without a size suffix (the size is its own column).
+# isa        A, B, C (ISA_A/ISA_B/ISA_C; ISA_A+ instructions are C), Div (hardware divide), Emac, Cau, Fpu, Mmu.
+# size       B, W, L or - (unsized); it also sizes #imm operands and `imm` extensions.
+# pattern    16 characters, bit 15 first: 0 and 1 are fixed bits, letters are fields:
+#              m e  effective address mode and register (bits 5-3, 2-0)
+#              M E  second effective address, MOVE destination (mode bits 8-6, register bits 11-9)
+#              r    register (Dn, An, or Rn when 4 bits wide)       R  register in bits 11-9
+#              q    quick data or shift count                       c  condition
+#              d    8-bit branch displacement                       v  TRAP vector
+#              a    accumulator number (or its lsb)                 x  msb of a 4-bit register number
+#              y    second accumulator number                       k  cache selector
+#              p    floating-point conditional predicate
+# ea-class   the EA modes the m/e field accepts: `none`, a CFPRM Table 2-3 category (`all`, `data`,
+#            `memory`, `control`, `alterable`, `data-alterable`, `memory-alterable`; Table 2-3 does not count
+#            (xxx).W/(xxx).L as alterable although ch. 4 destinations accept them, so lines spell those out)
+#            or a comma list of Dn An (An) (An)+ -(An) (d16,An) (d8,An,Xi) abs.W abs.L (d16,PC) (d8,PC,Xi) #imm.
+#            `src>dst` gives both fields of MOVE: src for m/e, dst for M/E.
+# extension  words between the opword and the EA extension words, in order: `w` one word, `l` two words,
+#            `ext` an extension word with fields (EMAC, MOVEM mask, MULx.L/DIVx.L/REMx.L, MOVEC, ...),
+#            `imm` immediate data sized by the size column (B and W one word, L two), `-` none.
+#            EA extension words follow: brief-format (d8,An,Xi) one word, d16 and abs.W one, abs.L two,
+#            #imm by size; for MOVE the source's come before the destination's.
+# op         the `Op` variant: one operand shape; sized forms of one shape share it.
+#
+# When several lines accept an opword, the one with the most fixed bits wins; equal counts are an error.
+
+# ---- line 0: bit manipulation, immediate --------------------------------------------------------------
+ori      A    L  0000000010000rrr  none  imm  Ori        # CFPRM ch. 4 ORI, p. 4-67
+bitrev   C    L  0000000011000rrr  none  -    Bitrev     # CFPRM ch. 4 BITREV, p. 4-19
+andi     A    L  0000001010000rrr  none  imm  Andi       # CFPRM ch. 4 ANDI, p. 4-10
+byterev  C    L  0000001011000rrr  none  -    Byterev    # CFPRM ch. 4 BYTEREV, p. 4-26
+subi     A    L  0000010010000rrr  none  imm  Subi       # CFPRM ch. 4 SUBI, p. 4-78
+ff1      C    L  0000010011000rrr  none  -    Ff1        # CFPRM ch. 4 FF1, p. 4-38
+addi     A    L  0000011010000rrr  none  imm  Addi       # CFPRM ch. 4 ADDI, p. 4-5
+eori     A    L  0000101010000rrr  none  imm  Eori       # CFPRM ch. 4 EORI, p. 4-36
+cmpi     B    B  0000110000000rrr  none  imm  Cmpi       # CFPRM ch. 4 CMPI, p. 4-30 (.B from ISA_B)
+cmpi     B    W  0000110001000rrr  none  imm  Cmpi       # CFPRM ch. 4 CMPI, p. 4-30 (.W from ISA_B)
+cmpi     A    L  0000110010000rrr  none  imm  Cmpi       # CFPRM ch. 4 CMPI, p. 4-30
+# Bit number static: longword for Dn, byte for memory.
+btst     A    L  0000100000mmmeee  Dn                          w  BtstImmEa  # CFPRM ch. 4 BTST, p. 4-24
+btst     A    B  0000100000mmmeee  (An),(An)+,-(An),(d16,An)   w  BtstImmEa  # CFPRM ch. 4 BTST, p. 4-24
+bchg     A    L  0000100001mmmeee  Dn                          w  BchgImmEa  # CFPRM ch. 4 BCHG, p. 4-16
+bchg     A    B  0000100001mmmeee  (An),(An)+,-(An),(d16,An)   w  BchgImmEa  # CFPRM ch. 4 BCHG, p. 4-16
+bclr     A    L  0000100010mmmeee  Dn                          w  BclrImmEa  # CFPRM ch. 4 BCLR, p. 4-18
+bclr     A    B  0000100010mmmeee  (An),(An)+,-(An),(d16,An)   w  BclrImmEa  # CFPRM ch. 4 BCLR, p. 4-18
+bset     A    L  0000100011mmmeee  Dn                          w  BsetImmEa  # CFPRM ch. 4 BSET, p. 4-22
+bset     A    B  0000100011mmmeee  (An),(An)+,-(An),(d16,An)   w  BsetImmEa  # CFPRM ch. 4 BSET, p. 4-22
+# Bit number dynamic, in Dy.
+btst     A    L  0000RRR100mmmeee  Dn  -  BtstDnEa  # CFPRM ch. 4 BTST, p. 4-25
+btst     A    B  0000RRR100mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L,(d16,PC),(d8,PC,Xi)  -  BtstDnEa  # CFPRM ch. 4 BTST, p. 4-25
+bchg     A    L  0000RRR101mmmeee  Dn  -  BchgDnEa  # CFPRM ch. 4 BCHG, p. 4-16
+bchg     A    B  0000RRR101mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  BchgDnEa  # CFPRM ch. 4 BCHG, p. 4-16
+bclr     A    L  0000RRR110mmmeee  Dn  -  BclrDnEa  # CFPRM ch. 4 BCLR, p. 4-18
+bclr     A    B  0000RRR110mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  BclrDnEa  # CFPRM ch. 4 BCLR, p. 4-18
+bset     A    L  0000RRR111mmmeee  Dn  -  BsetDnEa  # CFPRM ch. 4 BSET, p. 4-22
+bset     A    B  0000RRR111mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  BsetDnEa  # CFPRM ch. 4 BSET, p. 4-22
+
+# ---- lines 1-3: MOVE (size 01 byte, 11 word, 10 longword) ---------------------------------------------
+# Source/destination combinations from the table on p. 4-48; #imm to (d16,Ax) for .B and .W from ISA_B.
+# Byte forms leave out An: "address registers cannot be used for byte-size operands" (CFPRM 1.9.1, p. 1-20).
+move     A    B  0001EEEMMMmmmeee  Dn,(An),(An)+,-(An)>Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     A    B  0001EEEMMMmmmeee  (d16,An),(d16,PC)>Dn,(An),(An)+,-(An),(d16,An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     A    B  0001EEEMMMmmmeee  (d8,An,Xi),(d8,PC,Xi),abs.W,abs.L,#imm>Dn,(An),(An)+,-(An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     B    B  0001EEEMMMmmmeee  #imm>(d16,An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48 (MOVEI, Table 3-16)
+move     A    W  0011EEEMMMmmmeee  Dn,An,(An),(An)+,-(An)>Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     A    W  0011EEEMMMmmmeee  (d16,An),(d16,PC)>Dn,(An),(An)+,-(An),(d16,An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     A    W  0011EEEMMMmmmeee  (d8,An,Xi),(d8,PC,Xi),abs.W,abs.L,#imm>Dn,(An),(An)+,-(An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     B    W  0011EEEMMMmmmeee  #imm>(d16,An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48 (MOVEI, Table 3-16)
+move     A    L  0010EEEMMMmmmeee  Dn,An,(An),(An)+,-(An)>Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     A    L  0010EEEMMMmmmeee  (d16,An),(d16,PC)>Dn,(An),(An)+,-(An),(d16,An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+move     A    L  0010EEEMMMmmmeee  (d8,An,Xi),(d8,PC,Xi),abs.W,abs.L,#imm>Dn,(An),(An)+,-(An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
+movea    A    W  0011RRR001mmmeee  all  -  Movea  # CFPRM ch. 4 MOVEA, p. 4-49
+movea    A    L  0010RRR001mmmeee  all  -  Movea  # CFPRM ch. 4 MOVEA, p. 4-49
+
+# ---- line 4: miscellaneous ----------------------------------------------------------------------------
+negx     A    L  0100000010000rrr  none  -  Negx         # CFPRM ch. 4 NEGX, p. 4-62
+move     A    W  0100000011000rrr  none  -  MoveFromSr   # CFPRM ch. 8 MOVE from SR, p. 8-9
+strldsr  C    W  0100000011100111  none  ext,imm  Strldsr  # CFPRM ch. 8 STRLDSR, p. 8-16 (second word 0x46FC)
+lea      A    L  0100RRR111mmmeee  control  -  Lea      # CFPRM ch. 4 LEA, p. 4-42
+clr      A    B  0100001000mmmeee  Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Clr  # CFPRM ch. 4 CLR, p. 4-27
+clr      A    W  0100001001mmmeee  Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Clr  # CFPRM ch. 4 CLR, p. 4-27
+clr      A    L  0100001010mmmeee  Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Clr  # CFPRM ch. 4 CLR, p. 4-27
+move     A    W  0100001011000rrr  none  -  MoveFromCcr  # CFPRM ch. 4 MOVE from CCR, p. 4-53
+neg      A    L  0100010010000rrr  none  -  Neg          # CFPRM ch. 4 NEG, p. 4-61
+move     A    B  0100010011mmmeee  Dn,#imm  -  MoveToCcr  # CFPRM ch. 4 MOVE to CCR, p. 4-54
+not      A    L  0100011010000rrr  none  -  Not          # CFPRM ch. 4 NOT, p. 4-64
+move     A    W  0100011011mmmeee  Dn,#imm  -  MoveToSr   # CFPRM ch. 8 MOVE to SR, p. 8-11
+swap     A    W  0100100001000rrr  none  -  Swap         # CFPRM ch. 4 SWAP, p. 4-81
+pea      A    L  0100100001mmmeee  control  -  Pea       # CFPRM ch. 4 PEA, p. 4-68
+ext      A    W  0100100010000rrr  none  -  Ext          # CFPRM ch. 4 EXT, p. 4-37 (opmode 010, byte to word)
+ext      A    L  0100100011000rrr  none  -  Ext          # CFPRM ch. 4 EXT, p. 4-37 (opmode 011, word to longword)
+extb     A    L  0100100111000rrr  none  -  Extb         # CFPRM ch. 4 EXTB, p. 4-37 (opmode 111, byte to longword)
+movem    A    L  0100100011mmmeee  (An),(d16,An)  ext  MovemRegsEa  # CFPRM ch. 4 MOVEM, p. 4-50 (dr 0)
+movem    A    L  0100110011mmmeee  (An),(d16,An)  ext  MovemEaRegs  # CFPRM ch. 4 MOVEM, p. 4-51 (dr 1)
+# guess: TST's size field on p. 4-85 lists "11 word operation", which looks carried over from MOVE's size codes;
+# the ch. 9 opcode map (p. 9-6) gives 0x4AC0-0x4AFF to TAS, HALT, PULSE and ILLEGAL, so size 11 is not a TST.
+tst      A    B  0100101000mmmeee  data  -  Tst          # CFPRM ch. 4 TST, p. 4-85 (Ax not for byte)
+tst      A    W  0100101001mmmeee  all   -  Tst          # CFPRM ch. 4 TST, p. 4-85
+tst      A    L  0100101010mmmeee  all   -  Tst          # CFPRM ch. 4 TST, p. 4-85
+tas      B    B  0100101011mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Tas  # CFPRM ch. 4 TAS, p. 4-82
+halt     A    -  0100101011001000  none  -  Halt         # CFPRM ch. 8 HALT, p. 8-7
+pulse    A    -  0100101011001100  none  -  Pulse        # CFPRM ch. 4 PULSE, p. 4-69
+illegal  A    -  0100101011111100  none  -  Illegal      # CFPRM ch. 4 ILLEGAL, p. 4-39
+# MULS.L and MULU.L share this opword; extension bit 11 selects signed.
+mul      A    L  0100110000mmmeee  Dn,(An),(An)+,-(An),(d16,An)  ext  MulL  # CFPRM ch. 4 MULS, p. 4-56; MULU, p. 4-58
+# DIVS.L, DIVU.L, REMS.L and REMU.L share this opword; extension bit 11 selects signed, and Dw = Dx
+# (extension bits 2-0 = 14-12) selects the quotient form.
+div      Div  L  0100110001mmmeee  Dn,(An),(An)+,-(An),(d16,An)  ext  DivL  # CFPRM ch. 4 DIVS, p. 4-32; DIVU, p. 4-34; REMS, p. 4-70; REMU, p. 4-71
+sats     B    L  0100110010000rrr  none  -  Sats         # CFPRM ch. 4 SATS, p. 4-73
+trap     A    -  010011100100vvvv  none  -  Trap         # CFPRM ch. 4 TRAP, p. 4-84
+link     A    W  0100111001010rrr  none  w  Link         # CFPRM ch. 4 LINK, p. 4-43
+unlk     A    -  0100111001011rrr  none  -  Unlk         # CFPRM ch. 4 UNLK, p. 4-86
+move     Mmu  L  0100111001100rrr  none  -  MoveToUsp    # CFPRM ch. 8 MOVE to USP, p. 8-12; RM 4.3.9
+move     Mmu  L  0100111001101rrr  none  -  MoveFromUsp  # CFPRM ch. 8 MOVE from USP, p. 8-10; RM 4.3.9
+nop      A    -  0100111001110001  none  -  Nop          # CFPRM ch. 4 NOP, p. 4-63
+stop     A    -  0100111001110010  none  w  Stop         # CFPRM ch. 8 STOP, p. 8-17
+rte      A    -  0100111001110011  none  -  Rte          # CFPRM ch. 8 RTE, p. 8-15
+rts      A    -  0100111001110101  none  -  Rts          # CFPRM ch. 4 RTS, p. 4-72
+movec    A    L  0100111001111011  none  ext  Movec      # CFPRM ch. 8 MOVEC, p. 8-13 (Ry to Rc only)
+jsr      A    -  0100111010mmmeee  control  -  Jsr       # CFPRM ch. 4 JSR, p. 4-41
+jmp      A    -  0100111011mmmeee  control  -  Jmp       # CFPRM ch. 4 JMP, p. 4-40
+
+# ---- line 5: ADDQ, SUBQ, Scc, TPF ---------------------------------------------------------------------
+addq     A    L  0101qqq010mmmeee  Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Addq  # CFPRM ch. 4 ADDQ, p. 4-6
+subq     A    L  0101qqq110mmmeee  Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Subq  # CFPRM ch. 4 SUBQ, p. 4-79
+scc      A    B  0101cccc11000rrr  none  -  Scc         # CFPRM ch. 4 Scc, p. 4-74
+tpf      A    W  0101000111111010  none  w  Tpf         # CFPRM ch. 4 TPF, p. 4-83 (opmode 010)
+tpf      A    L  0101000111111011  none  l  Tpf         # CFPRM ch. 4 TPF, p. 4-83 (opmode 011)
+tpf      A    -  0101000111111100  none  -  Tpf         # CFPRM ch. 4 TPF, p. 4-83 (opmode 100)
+
+# ---- line 6: branches; displacement 0x00 selects a 16-bit word, 0xFF a 32-bit longword (ISA_B) ---------
+bra      A    B  01100000dddddddd  none  -  Bra         # CFPRM ch. 4 BRA, p. 4-20
+bra      A    W  0110000000000000  none  w  Bra         # CFPRM ch. 4 BRA, p. 4-20
+# guess: Table 3-16 leaves the ISA_C column of BRA.L blank, but p. 4-20 has .L from ISA_B on, ISA_C has Bcc.L
+# and BSR.L (Table 3-16; RM Table 3-4), and BRA is the always-true branch of the same encoding.
+bra      B    L  0110000011111111  none  l  Bra         # CFPRM ch. 4 BRA, p. 4-20
+bsr      A    B  01100001dddddddd  none  -  Bsr         # CFPRM ch. 4 BSR, p. 4-23
+bsr      A    W  0110000100000000  none  w  Bsr         # CFPRM ch. 4 BSR, p. 4-23
+bsr      B    L  0110000111111111  none  l  Bsr         # CFPRM ch. 4 BSR, p. 4-23
+bcc      A    B  0110ccccdddddddd  none  -  Bcc         # CFPRM ch. 4 Bcc, p. 4-14 (conditions 0000/0001 are BRA/BSR)
+bcc      A    W  0110cccc00000000  none  w  Bcc         # CFPRM ch. 4 Bcc, p. 4-14
+bcc      B    L  0110cccc11111111  none  l  Bcc         # CFPRM ch. 4 Bcc, p. 4-14
+
+# ---- line 7: MOVEQ, MVS, MVZ --------------------------------------------------------------------------
+moveq    A    L  0111RRR0qqqqqqqq  none  -  Moveq       # CFPRM ch. 4 MOVEQ, p. 4-52
+# guess (MVS.B, MVZ.B, CMP.B): the p. 4-59/4-60/4-28 tables list Ay without a size note, but CFPRM 1.9.1 (p. 1-20)
+# says address registers cannot be byte-size operands, so the byte forms leave An out (TST.B does, p. 4-85).
+mvs      B    B  0111RRR100mmmeee  data  -  Mvs         # CFPRM ch. 4 MVS, p. 4-59; 1.9.1, p. 1-20
+mvs      B    W  0111RRR101mmmeee  all  -  Mvs          # CFPRM ch. 4 MVS, p. 4-59
+mvz      B    B  0111RRR110mmmeee  data  -  Mvz         # CFPRM ch. 4 MVZ, p. 4-60; 1.9.1, p. 1-20
+mvz      B    W  0111RRR111mmmeee  all  -  Mvz          # CFPRM ch. 4 MVZ, p. 4-60
+
+# ---- line 8: OR, DIV.W --------------------------------------------------------------------------------
+or       A    L  1000RRR010mmmeee  data  -  OrEaDn      # CFPRM ch. 4 OR, p. 4-66
+or       A    L  1000RRR110mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  OrDnEa  # CFPRM ch. 4 OR, p. 4-66
+divu     Div  W  1000RRR011mmmeee  data  -  DivuW       # CFPRM ch. 4 DIVU, p. 4-34
+divs     Div  W  1000RRR111mmmeee  data  -  DivsW       # CFPRM ch. 4 DIVS, p. 4-32
+
+# ---- line 9: SUB, SUBX, SUBA --------------------------------------------------------------------------
+sub      A    L  1001RRR010mmmeee  all  -  SubEaDn      # CFPRM ch. 4 SUB, p. 4-76
+sub      A    L  1001RRR110mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  SubDnEa  # CFPRM ch. 4 SUB, p. 4-76
+subx     A    L  1001RRR110000rrr  none  -  Subx        # CFPRM ch. 4 SUBX, p. 4-80
+suba     A    L  1001RRR111mmmeee  all  -  Suba         # CFPRM ch. 4 SUBA, p. 4-77
+
+# ---- line A: EMAC, MOV3Q ------------------------------------------------------------------------------
+# MAC and MSAC share each opword; extension bit 8 selects MSAC. Extension bits 1-0 select the EMAC_B
+# dual-accumulate forms, which this core does not implement (RM ch. 5); the opword is the same.
+mac      Emac -  1010RRR0ax00rrrr  none  ext  Mac      # CFPRM ch. 6 MAC, p. 6-4; MSAC, p. 6-29
+mac      Emac L  1010RRR0axmmmeee  (An),(An)+,-(An),(d16,An)  ext  MacLoad  # CFPRM ch. 6 MAC with load, p. 6-7; MSAC with load, p. 6-31
+move     Emac L  10100aa100mmmeee  Dn,An,#imm  -  MoveToAcc        # CFPRM ch. 6 MOVE to ACC, p. 6-22
+move     Emac L  10100aa1000100yy  none  -  MoveAccAcc             # CFPRM ch. 6 MOVE ACC to ACC, p. 6-20
+move     Emac L  10100aa11000rrrr  none  -  MoveFromAcc            # CFPRM ch. 6 MOVE from ACC, p. 6-15
+movclr   Emac L  10100aa11100rrrr  none  -  Movclr                 # CFPRM ch. 6 MOVCLR, p. 6-12
+move     Emac L  1010100100mmmeee  Dn,An,#imm  -  MoveToMacsr      # CFPRM ch. 6 MOVE to MACSR, p. 6-25
+move     Emac L  101010011000rrrr  none  -  MoveFromMacsr          # CFPRM ch. 6 MOVE from MACSR, p. 6-18
+move     Emac L  1010100111000000  none  -  MoveMacsrCcr           # CFPRM ch. 6 MOVE MACSR to CCR, p. 6-21
+move     Emac L  1010101100mmmeee  Dn,An,#imm  -  MoveToAccext01   # CFPRM ch. 6 MOVE to ACCext01, p. 6-23
+move     Emac L  101010111000rrrr  none  -  MoveFromAccext01       # CFPRM ch. 6 MOVE from ACCext01, p. 6-16
+move     Emac L  1010110100mmmeee  Dn,An,#imm  -  MoveToMask       # CFPRM ch. 6 MOVE to MASK, p. 6-26
+move     Emac L  101011011000rrrr  none  -  MoveFromMask           # CFPRM ch. 6 MOVE from MASK, p. 6-19
+move     Emac L  1010111100mmmeee  Dn,An,#imm  -  MoveToAccext23   # CFPRM ch. 6 MOVE to ACCext23, p. 6-24
+move     Emac L  101011111000rrrr  none  -  MoveFromAccext23       # CFPRM ch. 6 MOVE from ACCext23, p. 6-17
+mov3q    B    L  1010qqq101mmmeee  Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Mov3q  # CFPRM ch. 4 MOV3Q, p. 4-46
+
+# ---- line B: CMP, CMPA, EOR ---------------------------------------------------------------------------
+# guess: no Ay source for CMP.B, as for MVS.B and MVZ.B above (CFPRM 1.9.1, p. 1-20).
+cmp      B    B  1011RRR000mmmeee  data  -  Cmp         # CFPRM ch. 4 CMP, p. 4-28 (.B from ISA_B); 1.9.1, p. 1-20
+cmp      B    W  1011RRR001mmmeee  all  -  Cmp          # CFPRM ch. 4 CMP, p. 4-28 (.W from ISA_B)
+cmp      A    L  1011RRR010mmmeee  all  -  Cmp          # CFPRM ch. 4 CMP, p. 4-28
+cmpa     B    W  1011RRR011mmmeee  all  -  Cmpa         # CFPRM ch. 4 CMPA, p. 4-29 (.W from ISA_B)
+cmpa     A    L  1011RRR111mmmeee  all  -  Cmpa         # CFPRM ch. 4 CMPA, p. 4-29
+eor      A    L  1011RRR110mmmeee  Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Eor  # CFPRM ch. 4 EOR, p. 4-35
+
+# ---- line C: AND, MUL.W -------------------------------------------------------------------------------
+and      A    L  1100RRR010mmmeee  data  -  AndEaDn     # CFPRM ch. 4 AND, p. 4-9
+and      A    L  1100RRR110mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  AndDnEa  # CFPRM ch. 4 AND, p. 4-9
+mulu     A    W  1100RRR011mmmeee  data  -  MuluW       # CFPRM ch. 4 MULU, p. 4-57
+muls     A    W  1100RRR111mmmeee  data  -  MulsW       # CFPRM ch. 4 MULS, p. 4-55
+
+# ---- line D: ADD, ADDX, ADDA --------------------------------------------------------------------------
+add      A    L  1101RRR010mmmeee  all  -  AddEaDn      # CFPRM ch. 4 ADD, p. 4-3
+add      A    L  1101RRR110mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  AddDnEa  # CFPRM ch. 4 ADD, p. 4-3
+addx     A    L  1101RRR110000rrr  none  -  Addx        # CFPRM ch. 4 ADDX, p. 4-7
+adda     A    L  1101RRR111mmmeee  all  -  Adda         # CFPRM ch. 4 ADDA, p. 4-4
+
+# ---- line E: shifts (longword; i/r bit 5; count 0 means 8) --------------------------------------------
+asr      A    L  1110qqq010000rrr  none  -  AsrImm      # CFPRM ch. 4 ASR, p. 4-12
+asr      A    L  1110RRR010100rrr  none  -  AsrReg      # CFPRM ch. 4 ASR, p. 4-12
+asl      A    L  1110qqq110000rrr  none  -  AslImm      # CFPRM ch. 4 ASL, p. 4-12
+asl      A    L  1110RRR110100rrr  none  -  AslReg      # CFPRM ch. 4 ASL, p. 4-12
+lsr      A    L  1110qqq010001rrr  none  -  LsrImm      # CFPRM ch. 4 LSR, p. 4-45
+lsr      A    L  1110RRR010101rrr  none  -  LsrReg      # CFPRM ch. 4 LSR, p. 4-45
+lsl      A    L  1110qqq110001rrr  none  -  LslImm      # CFPRM ch. 4 LSL, p. 4-45
+lsl      A    L  1110RRR110101rrr  none  -  LslReg      # CFPRM ch. 4 LSL, p. 4-45
+
+# ---- line F: FPU (not on this chip), cache, debug, CAU ------------------------------------------------
+# Every FPU arithmetic, FMOVE, FMOVEM and FMOVE-to/from-FPcr instruction is this opword plus a command
+# word; the EA union is that of the ch. 7 tables (no #imm, so the command word never changes the length).
+fpu      Fpu  -  1111001000mmmeee  Dn,An,(An),(An)+,-(An),(d16,An),(d16,PC)  ext  FpuOp  # CFPRM ch. 7 FABS p. 7-12, FMOVE p. 7-25, FMOVE to FPIAR p. 7-31, FMOVEM p. 7-34; ch. 9 p. 9-17
+fbcc     Fpu  W  1111001010pppppp  none  w  Fbcc         # CFPRM ch. 7 FBcc, p. 7-15 (FNOP is FBF.W #0, p. 7-39)
+fbcc     Fpu  L  1111001011pppppp  none  l  Fbcc         # CFPRM ch. 7 FBcc, p. 7-15
+fsave    Fpu  -  1111001100mmmeee  (An),(d16,An)  -  Fsave             # CFPRM ch. 8 FSAVE, p. 8-6
+frestore Fpu  -  1111001101mmmeee  (An),(d16,An),(d16,PC)  -  Frestore # CFPRM ch. 8 FRESTORE, p. 8-4
+intouch  B    -  1111010000101rrr  none  -  Intouch      # CFPRM ch. 8 INTOUCH, p. 8-8
+cpushl   A    -  11110100kk101rrr  none  -  Cpushl       # CFPRM ch. 8 CPUSHL, p. 8-2 (cache 00 is INTOUCH)
+wddata   A    B  1111101100mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Wddata  # CFPRM ch. 4 WDDATA, p. 4-87
+wddata   A    W  1111101101mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Wddata  # CFPRM ch. 4 WDDATA, p. 4-87
+wddata   A    L  1111101110mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Wddata  # CFPRM ch. 4 WDDATA, p. 4-87
+wdebug   A    L  1111101111mmmeee  (An),(d16,An)  ext  Wdebug  # CFPRM ch. 8 WDEBUG, p. 8-18 (extension word 0x0003)
+# guess: neither manual gives the coprocessor opword encoding. RM 26.3.2 names cp0ld.l/cp0st.l with
+# <ea> in {Rn, (An), -(An), (An)+, (d16,An)} and a 9-bit command; the bit layout below (coprocessor 0,
+# bit 8 store, bits 7-6 = 10 longword, then an extension word holding Rn, ET and the command) is what the
+# GNU assembler emits for -mcpu=54418, the only available source for it.
+cp0ld    Cau  L  1111110010mmmeee  Dn,An,(An),(An)+,-(An),(d16,An)  ext  Cp0ld  # CFPRM: not listed; RM 26.3.2, Table 26-5
+cp0st    Cau  L  1111110110mmmeee  Dn,An,(An),(An)+,-(An),(d16,An)  ext  Cp0st  # CFPRM: not listed; RM 26.3.2, Table 26-5
