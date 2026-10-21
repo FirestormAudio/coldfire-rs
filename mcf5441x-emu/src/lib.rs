@@ -8,6 +8,7 @@ pub mod irq;
 pub mod isa;
 pub mod machine;
 pub mod mem;
+pub mod parts;
 mod sched;
 pub mod soc;
 pub mod stop;
