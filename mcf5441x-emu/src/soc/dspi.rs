@@ -23,6 +23,8 @@ const RXFR15: u32 = 0xB8;
 
 /// MCR (RM Table 40-4).
 const MSTR: u32 = 1 << 31;
+const DCONF: u32 = 3 << 28;
+const MTFE: u32 = 1 << 26;
 const ROOE: u32 = 1 << 24;
 const MDIS: u32 = 1 << 14;
 const DIS_TXF: u32 = 1 << 13;
@@ -105,11 +107,15 @@ pub trait SpiDevice: Any {
 /// clear: PCSn then idles low, the active-low part's selected level (guess: the frame asserting another PCS, or
 /// none, still reaches it). A frame reaching no part reads all ones. A part is deselected at the end of a frame
 /// without CONT (also when it was selected by an idle-low PCS, as in the older model; on the wire it stays
-/// selected), and before a frame that reaches another part or none (RM 40.4.4.5).
+/// selected), and before a frame that reaches another part or none (RM 40.4.4.5). The RM brings out PCS0-PCS3 on
+/// DSPI0, PCS0-PCS2 on DSPI1 and PCS0 alone on DSPI2 and DSPI3 (RM Table 40-4); the model takes the PUSHR field's
+/// eight, and which of them hold parts is the board's business.
 ///
 /// Refused with [`Stop::Unmodelled`] (the detail names the DSPI and the feature): a 1- or 2-byte access, a POPR
-/// read of an empty RX FIFO, a push while halted (MCR\[HALT\]) or disabled (MCR\[MDIS\]), in slave mode or with a
-/// FIFO disabled, a frame through CTAR2-CTAR7 (PUSHR\[CTAS\] of 2 or more), a frame size other than 8 or 16 bits,
+/// read of an empty RX FIFO, a push while halted (MCR\[HALT\]), a push to a full TX FIFO (it
+/// fills only while EOQF stops the DSPI; the chip ignores the push, RM 40.4.2.4.1), a frame pushed or going out
+/// while disabled (MCR\[MDIS\]), in slave mode, with a DCONF other than SPI, with the modified transfer format
+/// (MCR\[MTFE\]) or with a FIFO disabled, a frame through CTAR2-CTAR7 (PUSHR\[CTAS\] of 2 or more), a frame size other than 8 or 16 bits,
 /// LSB first, a frame selecting more than one attached part, an RX overflow with MCR\[ROOE\] set, and whatever
 /// an attached part reports with [`SpiDevice::take_unmodelled`]. A refused push changes nothing, unless a part
 /// refused it: the part has then seen the frame.
@@ -274,26 +280,41 @@ impl Dspi {
         }
     }
 
-    fn push(&mut self, v: u32, cx: &mut DeviceCx) {
-        let what = if self.mcr & HALT != 0 {
-            Some("PUSHR while halted (MCR HALT)")
-        } else if self.mcr & MDIS != 0 {
-            Some("PUSHR while disabled (MCR MDIS)")
+    /// Why the MCR's configuration cannot shift frames, if it cannot.
+    fn mode(&self) -> Option<String> {
+        let what = if self.mcr & MDIS != 0 {
+            "frames while disabled (MCR MDIS)"
         } else if self.mcr & MSTR == 0 {
-            Some("slave mode (MCR MSTR clear) is not modelled")
+            "slave mode (MCR MSTR clear) is not modelled"
+        } else if self.mcr & DCONF != 0 {
+            "MCR DCONF other than SPI is not modelled"
+        } else if self.mcr & MTFE != 0 {
+            "the modified transfer format (MCR MTFE) is not modelled"
         } else if self.mcr & (DIS_TXF | DIS_RXF) != 0 {
-            Some("disabled FIFOs (MCR DIS_TXF, DIS_RXF) are not modelled")
+            "disabled FIFOs (MCR DIS_TXF, DIS_RXF) are not modelled"
         } else {
-            None
+            return None;
         };
-        if let Some(what) = what {
-            return cx.refuse(Stop::Unmodelled, format!("DSPI: {what}"));
+        Some(format!("DSPI: {what}"))
+    }
+
+    fn push(&mut self, v: u32, cx: &mut DeviceCx) {
+        if self.mcr & HALT != 0 {
+            return cx.refuse(Stop::Unmodelled, "DSPI: PUSHR while halted (MCR HALT)");
+        }
+        if let Some(d) = self.mode() {
+            return cx.refuse(Stop::Unmodelled, d);
         }
         if let Err(d) = self.check(v) {
             return cx.refuse(Stop::Unmodelled, d);
         }
         if self.tx_count == FIFO {
-            return;
+            // the chip ignores the push (RM 40.4.2.4.1): the frame would be lost without a trace. The FIFO only
+            // fills while the DSPI is stopped, and a push while halted is refused above, so EOQF stopped it.
+            return cx.refuse(
+                Stop::Unmodelled,
+                "DSPI: PUSHR with the TX FIFO full (stopped: EOQF set)",
+            );
         }
         self.tx[(self.tx_next + self.tx_count) % FIFO] = v;
         self.tx_count += 1;
@@ -303,6 +324,9 @@ impl Dspi {
     /// Shift out the TX FIFO's frames while the DSPI runs.
     fn run(&mut self, cx: &mut DeviceCx) {
         while self.running() && self.tx_count > 0 {
+            if let Some(d) = self.mode() {
+                return cx.refuse(Stop::Unmodelled, d);
+            }
             let v = self.tx[self.tx_next];
             let (bits, part) = match self.check(v) {
                 Ok(f) => f,
@@ -392,6 +416,8 @@ impl Dspi {
             self.flags |= EOQF;
         }
         if !cont && part.is_some() {
+            // guess: a part reached only because its PCS idles low is deselected here too, as the older model did;
+            // on the wire its select stays low
             ok &= self.deselect(cx);
         }
         ok

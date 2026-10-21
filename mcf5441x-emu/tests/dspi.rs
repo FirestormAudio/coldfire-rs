@@ -482,3 +482,44 @@ fn device_of_the_wrong_type_panics() {
     dspi.attach(3, Box::new(Other));
     let _ = dspi.device::<SpiNor>(3);
 }
+
+#[test]
+fn a_push_to_a_full_tx_fifo_is_refused() {
+    // stopped behind EOQF (RM 40.4.1), the TX FIFO fills; the chip ignores a push to a full FIFO (RM 40.4.2.4.1),
+    // which would lose the frame silently: the model refuses it, naming why the DSPI is stopped
+    let mut b = board(&[], JEDEC_64K);
+    b.w(PUSHR, PCS1 | EOQ | 0x06);
+    for _ in 0..16 {
+        b.w(PUSHR, PCS1 | CONT | 0x05);
+    }
+    assert_eq!(
+        b.r(SR) & (TFFF | 0xF000),
+        0xF000,
+        "TFFF clear, TXCTR reads 15"
+    );
+    let d = b.refused(PUSHR, Size::Long, Some(PCS1 | 0x05));
+    assert!(
+        d.contains("DSPI") && d.contains("TX FIFO full") && d.contains("EOQF"),
+        "{d}"
+    );
+    assert_eq!(b.dspi().frames().len(), 1);
+}
+
+#[test]
+fn unmodelled_modes_are_refused_also_when_a_queue_restarts() {
+    // DCONF other than SPI (RM Table 40-4) and the modified timing format are not modelled
+    for (mcr, what) in [(0x9003_0000, "DCONF"), (0x8403_0000, "MTFE")] {
+        let mut b = board(&[], JEDEC_64K);
+        b.w(MCR, mcr);
+        let d = b.refused(PUSHR, Size::Long, Some(PCS1 | 0x9F));
+        assert!(d.contains("DSPI") && d.contains(what), "{d}");
+    }
+    // frames waiting behind EOQF meet the mode in force when they go out: here slave mode
+    let mut b = board(&[], JEDEC_64K);
+    b.w(PUSHR, PCS1 | EOQ | 0x06);
+    b.w(PUSHR, PCS1 | 0x05);
+    b.w(MCR, 0x0003_0000);
+    let d = b.refused(SR, Size::Long, Some(EOQF));
+    assert!(d.contains("slave mode"), "{d}");
+    assert_eq!(b.dspi().frames().len(), 1);
+}

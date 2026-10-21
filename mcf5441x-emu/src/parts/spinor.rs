@@ -39,9 +39,11 @@ fn address_bytes(op: u8) -> Option<u32> {
 /// Faults a test injects into a [`SpiNor`], and the knobs of its timing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NorFaults {
-    /// Page bases whose every program fails with P_ERR, writing nothing.
+    /// Page bases whose every program fails with P_ERR, writing nothing. Entries are page bases (multiples of
+    /// [`SpiNor::page_size`]): any other address never matches.
     pub fail_program: BTreeSet<u32>,
-    /// Page bases whose next program fails with P_ERR, writing nothing; the entry is then removed.
+    /// Page bases whose next program fails with P_ERR, writing nothing; the entry is then removed. Page bases only,
+    /// as for [`NorFaults::fail_program`].
     pub fail_program_once: BTreeSet<u32>,
     /// Bytes with bits stuck at 0: address → mask of the bits that still work. Applied by programs and erases.
     pub stuck: BTreeMap<u32, u8>,
@@ -235,6 +237,8 @@ impl SpiNor {
         if op == DYBWR {
             let v = self.data.first().copied().unwrap_or(0xFF);
             self.faults.dyb.insert(self.sector_base(addr), v);
+            // guess: DYBWR leaves WIP clear, as in the older model (the S25FL-S datasheet facts at hand do not say
+            // how long a DYB write keeps WIP set)
             return;
         }
         let erase = op == SE || op == SE4;
@@ -253,6 +257,15 @@ impl SpiNor {
             // S25FL-S datasheet: the page is 512 bytes on the uniform 256 KiB sector parts (the older model always
             // wrapped at 256)
             let page = addr & !(self.page - 1);
+            debug_assert!(
+                self.faults
+                    .fail_program
+                    .iter()
+                    .chain(&self.faults.fail_program_once)
+                    .all(|p| p % self.page == 0),
+                "NorFaults page entries must be multiples of the {}-byte page",
+                self.page
+            );
             if self.faults.fail_program.contains(&page)
                 || self.faults.fail_program_once.remove(&page)
             {
