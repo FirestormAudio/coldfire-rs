@@ -176,7 +176,9 @@ fault as unmapped.
   MCF54415; the DDR itself is RAM. `Ddrmc::set_init_completes(false)` models a DRAM that never finishes initializing.
 - **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, locked unless the host says otherwise
   (`Pll::set_locked(false)` drops LOCK and LOCKS, and sets LOLF when PLL_CR enables it; LOCKS stays clear when the
-  lock returns, as RM 8.3.4 has it).
+  lock returns, as RM 8.3.4 has it). With LOLEN in PLL_CR clear the loss is not detected and LOCK stays set (RM Table
+  8-5). A loss with LOLEN and LOLRE or LOLIRQ set stops the next run with `Stop::Unmodelled`: the loss-of-lock reset
+  and interrupt request are not modelled.
 - **NFC** (RM ch. 22): page reads into the buffer from a [`NandArray`](soc::NandArray), with the ECC status byte
   as the RM describes it; the reset values measured on an MCF54415.
 
@@ -229,7 +231,7 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 - Interrupts the models do not raise are never asserted. Setting the enables of the SSI's, the DSPI's and the NFC's
   interrupts and of the eDMA error interrupt is refused (see each model); the DDR controller's INTMASK and the PLL's
   LOCIRQ and LOLIRQ are stored, but neither model ever raises its interrupt, and neither is wired to an interrupt
-  controller.
+  controller; a PLL loss of lock that would request the interrupt (or a reset) stops the run instead.
 - DMA requests nothing drives: the UART transmit requests (and every request line of a block that is not modelled,
   or whose model does not request DMA) are never asserted. On the built chip, SERQ on such a channel is refused,
   naming the channel; a software start (START, SSRT) works on any channel.

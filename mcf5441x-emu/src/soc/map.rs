@@ -289,7 +289,8 @@ impl Chip {
 ///
 /// The interrupt sources the models leave unwired are not driven: SSI, DSPI and NFC raise no interrupts (their
 /// enables are refused, see each model); the DDR controller and the PLL store their interrupt enables (DDR INTMASK,
-/// PLL_CR LOCIRQ and LOLIRQ) but never raise an interrupt, and neither is wired to an interrupt controller.
+/// PLL_CR LOCIRQ and LOLIRQ) but never raise an interrupt, and neither is wired to an interrupt controller; a PLL
+/// loss of lock that would request its interrupt (or a reset) stops the run ([`Pll::set_locked`]).
 ///
 /// The eDMA ([`Edma::with_driven`]) takes SERQ only on the request lines in the table's last column (the
 /// software channels of RM Table 19-6 among them): on any other channel (the UART transmit requests, the DSPIs',

@@ -32,8 +32,9 @@ const PLL_SR: u32 = 0x8;
 const LOCK: u32 = 1 << 4;
 const LOCKS: u32 = 1 << 5;
 const LOLF: u32 = 1 << 6;
-/// PLL_CR LOLIRQ and LOLEN (RM Figure 8-3).
+/// PLL_CR LOLIRQ, LOLRE and LOLEN (RM Figure 8-3).
 const LOLIRQ: u32 = 1 << 14;
+const LOLRE: u32 = 1 << 13;
 const LOLEN: u32 = 1 << 12;
 /// Test values: REFDIV 0, FBKDIV 26; OUTDIV5 3, OUTDIV4 2, OUTDIV3 3, OUTDIV2 2, OUTDIV1 1.
 const TEST_CR: u32 = 0x0000_001A;
@@ -571,15 +572,24 @@ fn take_writes_drain_and_record_off_logs_nothing() {
 #[test]
 fn unlocked_pll_reads_no_lock() {
     let mut r = rig();
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR | LOLEN);
     assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK | LOCKS);
     r.m.device_mut::<Pll>(r.pll).set_locked(false);
     assert_eq!(r.read(PLL + PLL_SR, Size::Long), 0);
     assert_eq!(r.read(PLL + PLL_SR, Size::Byte), 0);
-    r.write(PLL + PLL_CR, Size::Long, TEST_CR);
     assert_eq!(
         r.read(PLL + PLL_CR, Size::Long),
-        TEST_CR,
+        TEST_CR | LOLEN,
         "the rest is unchanged"
+    );
+    // without LOLRE or LOLIRQ the loss stops nothing
+    assert_eq!(
+        r.m.run(Limit {
+            max_instructions: Some(0),
+            ..Limit::default()
+        })
+        .kind,
+        Stop::InstructionLimit
     );
     r.m.device_mut::<Pll>(r.pll).set_locked(true);
     // RM 8.3.4: LOCKS is sticky; it stays cleared after the PLL re-locks
@@ -607,10 +617,68 @@ fn loss_of_lock_sets_lolf_when_enabled() {
     assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOLF | LOCK);
     r.write(PLL + PLL_SR + 3, Size::Byte, LOLF);
     assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK, "cleared by a one");
-    // without LOLEN, LOLIRQ has no effect
+    // without LOLEN, LOLIRQ has no effect, and LOCK stays set (RM Table 8-5)
     r.write(PLL + PLL_CR, Size::Long, TEST_CR | LOLIRQ);
     r.m.device_mut::<Pll>(r.pll).set_locked(false);
-    assert_eq!(r.read(PLL + PLL_SR, Size::Long), 0);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK);
+}
+
+#[test]
+fn without_lolen_lock_stays_set_until_reset() {
+    // RM Table 8-5 (LOCK) and RM 8.3.3: with PLL_CR[LOLEN] clear, LOCK is time-based and remains set until reset;
+    // LOLIRQ and LOLRE have no effect (RM Figure 8-3)
+    let mut r = rig();
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR | LOLIRQ | LOLRE);
+    r.m.device_mut::<Pll>(r.pll).set_locked(false);
+    // guess: LOCKS stays set too, no loss of lock being detected
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK | LOCKS);
+    let stop = r.m.run(Limit {
+        max_instructions: Some(0),
+        ..Limit::default()
+    });
+    assert_eq!(stop.kind, Stop::InstructionLimit, "{}", stop.detail);
+    // guess: setting LOLEN later does not detect a loss made while it was clear
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR | LOLEN);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK | LOCKS);
+}
+
+/// Lose lock with PLL_CR = `cr`: the run that follows stops before its first instruction; returns the detail.
+fn loss_of_lock_stop(cr: u32) -> (String, u32) {
+    let mut r = rig();
+    r.write(PLL + PLL_CR, Size::Long, cr);
+    r.m.device_mut::<Pll>(r.pll).set_locked(false);
+    let stop = r.m.run(Limit::default());
+    assert_eq!(stop.kind, Stop::Unmodelled, "{}", stop.detail);
+    assert_eq!(r.m.instructions(), 0, "no instruction ran");
+    // it stops the run once
+    let again = r.m.run(Limit {
+        max_instructions: Some(0),
+        ..Limit::default()
+    });
+    assert_eq!(again.kind, Stop::InstructionLimit, "{}", again.detail);
+    (stop.detail, r.read(PLL + PLL_SR, Size::Long))
+}
+
+#[test]
+fn loss_of_lock_with_its_interrupt_enabled_stops_the_run() {
+    // RM 8.3.4.2: LOLIRQ requests an interrupt (INTC2 source 12, RM Table 17-17), which the model does not wire
+    let (detail, sr) = loss_of_lock_stop(TEST_CR | LOLIRQ | LOLEN);
+    assert_eq!(
+        detail,
+        "PLL: loss-of-lock interrupt request (INTC2 source 12) not modelled"
+    );
+    assert_eq!(sr, LOLF);
+}
+
+#[test]
+fn loss_of_lock_with_its_reset_enabled_stops_the_run() {
+    // RM 8.3.4.1: LOLRE requests a reset, which the model does not have; it is reported before the interrupt
+    let (detail, sr) = loss_of_lock_stop(TEST_CR | LOLRE | LOLEN);
+    assert_eq!(detail, "PLL: loss-of-lock reset not modelled");
+    assert_eq!(sr, 0);
+    let (detail, sr) = loss_of_lock_stop(TEST_CR | LOLIRQ | LOLRE | LOLEN);
+    assert_eq!(detail, "PLL: loss-of-lock reset not modelled");
+    assert_eq!(sr, LOLF);
 }
 
 #[test]
