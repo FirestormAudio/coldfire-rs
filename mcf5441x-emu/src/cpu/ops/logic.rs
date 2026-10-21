@@ -70,7 +70,7 @@ pub fn and_dn_ea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, F
 pub fn or_dn_ea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     dn_ea(cpu, mem, d, or)
 }
-/// EOR Dy,<ea>x.
+/// EOR Dy,`<ea>`x.
 pub fn eor(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     dn_ea(cpu, mem, d, xor)
 }
@@ -93,7 +93,7 @@ pub fn not(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     Ok(Flow::Next)
 }
 
-/// CLR.sz <ea>: writes zero; N=0 Z=1 V=0 C=0, X unchanged.
+/// CLR.sz `<ea>`: writes zero; N=0 Z=1 V=0 C=0, X unchanged.
 pub fn clr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     ea::store(cpu, mem, &d.ea, d.size, 0)?;
     cpu.flags.logic(d.size, 0);
@@ -109,7 +109,7 @@ pub fn tas(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> 
     Ok(Flow::Next)
 }
 
-/// TST.sz <ea>.
+/// TST.sz `<ea>`.
 pub fn tst(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let v = ea::load(cpu, mem, &d.ea, d.size)?;
     cpu.flags.logic(d.size, v);

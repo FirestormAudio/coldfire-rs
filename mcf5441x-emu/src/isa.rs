@@ -92,26 +92,26 @@ ops! {
     Eori,
     /// CMPI.sz #imm,Dx
     Cmpi,
-    /// BTST #n,<ea>
+    /// BTST #n,`<ea>`
     BtstImmEa,
-    /// BCHG #n,<ea>
+    /// BCHG #n,`<ea>`
     BchgImmEa,
-    /// BCLR #n,<ea>
+    /// BCLR #n,`<ea>`
     BclrImmEa,
-    /// BSET #n,<ea>
+    /// BSET #n,`<ea>`
     BsetImmEa,
-    /// BTST Dy,<ea>
+    /// BTST Dy,`<ea>`
     BtstDnEa,
-    /// BCHG Dy,<ea>
+    /// BCHG Dy,`<ea>`
     BchgDnEa,
-    /// BCLR Dy,<ea>
+    /// BCLR Dy,`<ea>`
     BclrDnEa,
-    /// BSET Dy,<ea>
+    /// BSET Dy,`<ea>`
     BsetDnEa,
     // lines 1-3
-    /// MOVE.sz <ea>y,<ea>x
+    /// MOVE.sz `<ea>`y,`<ea>`x
     Move,
-    /// MOVEA.sz <ea>y,Ax
+    /// MOVEA.sz `<ea>`y,Ax
     Movea,
     // line 4
     /// NEGX.L Dx
@@ -120,35 +120,35 @@ ops! {
     MoveFromSr,
     /// STRLDSR #imm
     Strldsr,
-    /// LEA <ea>y,Ax
+    /// LEA `<ea>`y,Ax
     Lea,
-    /// CLR.sz <ea>x
+    /// CLR.sz `<ea>`x
     Clr,
     /// MOVE.W CCR,Dx
     MoveFromCcr,
     /// NEG.L Dx
     Neg,
-    /// MOVE.B <ea>y,CCR
+    /// MOVE.B `<ea>`y,CCR
     MoveToCcr,
     /// NOT.L Dx
     Not,
-    /// MOVE.W <ea>y,SR
+    /// MOVE.W `<ea>`y,SR
     MoveToSr,
     /// SWAP.W Dx
     Swap,
-    /// PEA <ea>y
+    /// PEA `<ea>`y
     Pea,
     /// EXT.W / EXT.L Dx
     Ext,
     /// EXTB.L Dx
     Extb,
-    /// MOVEM.L #list,<ea>x
+    /// MOVEM.L #list,`<ea>`x
     MovemRegsEa,
-    /// MOVEM.L <ea>y,#list
+    /// MOVEM.L `<ea>`y,#list
     MovemEaRegs,
-    /// TST.sz <ea>y
+    /// TST.sz `<ea>`y
     Tst,
-    /// TAS.B <ea>x
+    /// TAS.B `<ea>`x
     Tas,
     /// HALT
     Halt,
@@ -156,9 +156,9 @@ ops! {
     Pulse,
     /// ILLEGAL
     Illegal,
-    /// MULS.L / MULU.L <ea>y,Dx (extension bit 11 selects signed)
+    /// MULS.L / MULU.L `<ea>`y,Dx (extension bit 11 selects signed)
     MulL,
-    /// DIVS.L / DIVU.L / REMS.L / REMU.L <ea>y,Dw:Dx (extension word selects)
+    /// DIVS.L / DIVU.L / REMS.L / REMU.L `<ea>`y,Dw:Dx (extension word selects)
     DivL,
     /// SATS.L Dx
     Sats,
@@ -182,14 +182,14 @@ ops! {
     Rts,
     /// MOVEC.L Ry,Rc
     Movec,
-    /// JSR <ea>y
+    /// JSR `<ea>`y
     Jsr,
-    /// JMP <ea>y
+    /// JMP `<ea>`y
     Jmp,
     // line 5
-    /// ADDQ.L #q,<ea>x
+    /// ADDQ.L #q,`<ea>`x
     Addq,
-    /// SUBQ.L #q,<ea>x
+    /// SUBQ.L #q,`<ea>`x
     Subq,
     /// Scc.B Dx
     Scc,
@@ -205,34 +205,34 @@ ops! {
     // line 7
     /// MOVEQ.L #imm,Dx
     Moveq,
-    /// MVS.sz <ea>y,Dx
+    /// MVS.sz `<ea>`y,Dx
     Mvs,
-    /// MVZ.sz <ea>y,Dx
+    /// MVZ.sz `<ea>`y,Dx
     Mvz,
     // line 8
-    /// OR.L <ea>y,Dx
+    /// OR.L `<ea>`y,Dx
     OrEaDn,
-    /// OR.L Dy,<ea>x
+    /// OR.L Dy,`<ea>`x
     OrDnEa,
-    /// DIVU.W <ea>y,Dx
+    /// DIVU.W `<ea>`y,Dx
     DivuW,
-    /// DIVS.W <ea>y,Dx
+    /// DIVS.W `<ea>`y,Dx
     DivsW,
     // line 9
-    /// SUB.L <ea>y,Dx
+    /// SUB.L `<ea>`y,Dx
     SubEaDn,
-    /// SUB.L Dy,<ea>x
+    /// SUB.L Dy,`<ea>`x
     SubDnEa,
     /// SUBX.L Dy,Dx
     Subx,
-    /// SUBA.L <ea>y,Ax
+    /// SUBA.L `<ea>`y,Ax
     Suba,
     // line A
     /// MAC / MSAC Ry,Rx,ACCx (extension bit 8 selects MSAC)
     Mac,
-    /// MAC / MSAC Ry,Rx,<ea>y,Rw,ACCx
+    /// MAC / MSAC Ry,Rx,`<ea>`y,Rw,ACCx
     MacLoad,
-    /// MOVE.L <ea>y,ACCx
+    /// MOVE.L `<ea>`y,ACCx
     MoveToAcc,
     /// MOVE.L ACCy,ACCx
     MoveAccAcc,
@@ -240,50 +240,50 @@ ops! {
     MoveFromAcc,
     /// MOVCLR.L ACCy,Rx
     Movclr,
-    /// MOVE.L <ea>y,MACSR
+    /// MOVE.L `<ea>`y,MACSR
     MoveToMacsr,
     /// MOVE.L MACSR,Rx
     MoveFromMacsr,
     /// MOVE.L MACSR,CCR
     MoveMacsrCcr,
-    /// MOVE.L <ea>y,ACCext01
+    /// MOVE.L `<ea>`y,ACCext01
     MoveToAccext01,
     /// MOVE.L ACCext01,Rx
     MoveFromAccext01,
-    /// MOVE.L <ea>y,MASK
+    /// MOVE.L `<ea>`y,MASK
     MoveToMask,
     /// MOVE.L MASK,Rx
     MoveFromMask,
-    /// MOVE.L <ea>y,ACCext23
+    /// MOVE.L `<ea>`y,ACCext23
     MoveToAccext23,
     /// MOVE.L ACCext23,Rx
     MoveFromAccext23,
-    /// MOV3Q.L #q,<ea>x
+    /// MOV3Q.L #q,`<ea>`x
     Mov3q,
     // line B
-    /// CMP.sz <ea>y,Dx
+    /// CMP.sz `<ea>`y,Dx
     Cmp,
-    /// CMPA.sz <ea>y,Ax
+    /// CMPA.sz `<ea>`y,Ax
     Cmpa,
-    /// EOR.L Dy,<ea>x
+    /// EOR.L Dy,`<ea>`x
     Eor,
     // line C
-    /// AND.L <ea>y,Dx
+    /// AND.L `<ea>`y,Dx
     AndEaDn,
-    /// AND.L Dy,<ea>x
+    /// AND.L Dy,`<ea>`x
     AndDnEa,
-    /// MULU.W <ea>y,Dx
+    /// MULU.W `<ea>`y,Dx
     MuluW,
-    /// MULS.W <ea>y,Dx
+    /// MULS.W `<ea>`y,Dx
     MulsW,
     // line D
-    /// ADD.L <ea>y,Dx
+    /// ADD.L `<ea>`y,Dx
     AddEaDn,
-    /// ADD.L Dy,<ea>x
+    /// ADD.L Dy,`<ea>`x
     AddDnEa,
     /// ADDX.L Dy,Dx
     Addx,
-    /// ADDA.L <ea>y,Ax
+    /// ADDA.L `<ea>`y,Ax
     Adda,
     // line E
     /// ASR.L #q,Dx
@@ -307,17 +307,17 @@ ops! {
     FpuOp,
     /// FBcc.sz
     Fbcc,
-    /// FSAVE <ea>x
+    /// FSAVE `<ea>`x
     Fsave,
-    /// FRESTORE <ea>y
+    /// FRESTORE `<ea>`y
     Frestore,
     /// INTOUCH (Ay)
     Intouch,
     /// CPUSHL cache,(Ax)
     Cpushl,
-    /// WDDATA.sz <ea>y
+    /// WDDATA.sz `<ea>`y
     Wddata,
-    /// WDEBUG.L <ea>y
+    /// WDEBUG.L `<ea>`y
     Wdebug,
     /// CAU coprocessor load (cp0ld.l)
     Cp0ld,
@@ -350,7 +350,7 @@ pub enum Mode {
     PcDisp,
     /// (d8,PC,Xi*SF)
     PcIndex,
-    /// #<data>
+    /// #`<data>`
     Imm,
 }
 

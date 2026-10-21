@@ -1,7 +1,8 @@
-//! An exact MCF5441x (ColdFire V4e) emulator for host-side testing.
+#![doc = include_str!("../README.md")]
 
 pub mod cpu;
 pub mod device;
+pub mod elf;
 pub mod irq;
 pub mod isa;
 pub mod machine;

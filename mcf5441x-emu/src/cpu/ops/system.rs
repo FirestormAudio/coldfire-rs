@@ -31,7 +31,7 @@ pub fn move_from_sr(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, 
     Ok(Flow::Next)
 }
 
-/// MOVE.W <ea>y,SR (Dy or #imm): every implemented bit; clearing S enters user mode.
+/// MOVE.W `<ea>`y,SR (Dy or #imm): every implemented bit; clearing S enters user mode.
 pub fn move_to_sr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     supervisor!(cpu);
     let v = ea::load(cpu, mem, &d.ea, Size::Word)?;
@@ -47,7 +47,7 @@ pub fn move_from_ccr(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow,
     Ok(Flow::Next)
 }
 
-/// MOVE.B <ea>y,CCR (Dy or #imm): the low byte; the upper byte of SR is not altered.
+/// MOVE.B `<ea>`y,CCR (Dy or #imm): the low byte; the upper byte of SR is not altered.
 pub fn move_to_ccr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let v = ea::load(cpu, mem, &d.ea, Size::Byte)?;
     cpu.set_ccr(v as u8);
@@ -163,13 +163,13 @@ pub fn pulse(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> {
     Ok(Flow::Next)
 }
 
-/// WDDATA.sz <ea>y: the operand is read (for the DDATA pins) and dropped.
+/// WDDATA.sz `<ea>`y: the operand is read (for the DDATA pins) and dropped.
 pub fn wddata(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     ea::load(cpu, mem, &d.ea, d.size)?;
     Ok(Flow::Next)
 }
 
-/// WDEBUG.L <ea>y: writes a debug-module register, which this core does not model.
+/// WDEBUG.L `<ea>`y: writes a debug-module register, which this core does not model.
 pub fn wdebug(cpu: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> {
     supervisor!(cpu);
     Ok(Flow::Stop(Stop::Unmodelled))

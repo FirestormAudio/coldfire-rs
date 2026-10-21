@@ -33,12 +33,12 @@ fn quick_op(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, sub: bool) -> Result<F
     Ok(Flow::Next)
 }
 
-/// ADDQ.L #<data>,<ea>x: X N Z V C as ADD.
+/// ADDQ.L #`<data>`,`<ea>`x: X N Z V C as ADD.
 pub fn addq(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     quick_op(cpu, mem, d, false)
 }
 
-/// SUBQ.L #<data>,<ea>x: X N Z V C as SUB.
+/// SUBQ.L #`<data>`,`<ea>`x: X N Z V C as SUB.
 pub fn subq(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     quick_op(cpu, mem, d, true)
 }
@@ -62,7 +62,7 @@ fn calc(sub: bool, dst: u32, src: u32) -> u32 {
     }
 }
 
-/// ADD/SUB <ea>y,Dx.
+/// ADD/SUB `<ea>`y,Dx.
 #[inline(always)]
 fn ea_dn(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, sub: bool) -> Result<Flow, Fault> {
     let src = ea::load(cpu, mem, &d.ea, Size::Long)?;
@@ -74,7 +74,7 @@ fn ea_dn(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, sub: bool) -> Result<Flow
     Ok(Flow::Next)
 }
 
-/// ADD/SUB Dy,<ea>x.
+/// ADD/SUB Dy,`<ea>`x.
 #[inline(always)]
 fn dn_ea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, sub: bool) -> Result<Flow, Fault> {
     let src = cpu.d[d.operands[0] as usize & 7];
@@ -86,7 +86,7 @@ fn dn_ea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, sub: bool) -> Result<Flow
     Ok(Flow::Next)
 }
 
-/// ADDI/SUBI #<data>,Dx.
+/// ADDI/SUBI #`<data>`,Dx.
 #[inline(always)]
 fn imm_dn(cpu: &mut Cpu, d: &Decoded, sub: bool) -> Result<Flow, Fault> {
     let r = d.operands[1] as usize & 7;
@@ -97,7 +97,7 @@ fn imm_dn(cpu: &mut Cpu, d: &Decoded, sub: bool) -> Result<Flow, Fault> {
     Ok(Flow::Next)
 }
 
-/// ADDA/SUBA <ea>y,Ax: the whole register, no condition codes.
+/// ADDA/SUBA `<ea>`y,Ax: the whole register, no condition codes.
 #[inline(always)]
 fn to_an(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, sub: bool) -> Result<Flow, Fault> {
     let src = ea::load(cpu, mem, &d.ea, Size::Long)?;
@@ -181,7 +181,7 @@ pub fn subx(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     extended(cpu, d, true)
 }
 
-/// CMP.sz <ea>y,Dx.
+/// CMP.sz `<ea>`y,Dx.
 pub fn cmp(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let src = ea::load(cpu, mem, &d.ea, d.size)?;
     let dst = cpu.d[d.operands[0] as usize & 7] & ea::size_mask(d.size);
@@ -189,14 +189,14 @@ pub fn cmp(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> 
     Ok(Flow::Next)
 }
 
-/// CMPI.sz #<data>,Dx.
+/// CMPI.sz #`<data>`,Dx.
 pub fn cmpi(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let dst = cpu.d[d.operands[1] as usize & 7] & ea::size_mask(d.size);
     compare(cpu, d.size, d.operands[3], dst);
     Ok(Flow::Next)
 }
 
-/// CMPA.sz <ea>y,Ax: a word source is sign-extended; the comparison is always long.
+/// CMPA.sz `<ea>`y,Ax: a word source is sign-extended; the comparison is always long.
 pub fn cmpa(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let src = ea::sign_extend(d.size, ea::load(cpu, mem, &d.ea, d.size)?);
     let dst = cpu.a[d.operands[0] as usize & 7];

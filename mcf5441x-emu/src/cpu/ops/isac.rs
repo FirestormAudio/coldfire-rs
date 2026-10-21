@@ -6,7 +6,7 @@ use crate::cpu::ea;
 use crate::cpu::{Cpu, Decoded, Flow};
 use crate::mem::{Fault, Memory, Size};
 
-/// MOV3Q.L #<data>,<ea>x: data is -1 or 1 to 7 (the field value 0 means -1), sign-extended; N and Z from the
+/// MOV3Q.L #`<data>`,`<ea>`x: data is -1 or 1 to 7 (the field value 0 means -1), sign-extended; N and Z from the
 /// result, V and C cleared, X unchanged.
 pub fn mov3q(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let v = match d.operands[2] {
@@ -60,7 +60,7 @@ pub fn byterev(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault
     Ok(Flow::Next)
 }
 
-/// TPF, TPF.W #<data>, TPF.L #<data>: no operation; the decoder has already counted the extension words.
+/// TPF, TPF.W #`<data>`, TPF.L #`<data>`: no operation; the decoder has already counted the extension words.
 pub fn tpf(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> {
     Ok(Flow::Next)
 }

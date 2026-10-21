@@ -86,13 +86,13 @@ fn control_address(cpu: &mut Cpu, d: &Decoded) -> u32 {
     ea::address(cpu, &d.ea).unwrap_or(0)
 }
 
-/// JMP <ea>: the effective address -> PC.
+/// JMP `<ea>`: the effective address -> PC.
 pub fn jmp(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let target = control_address(cpu, d);
     Ok(jump(cpu, target))
 }
 
-/// JSR <ea>: push the address of the next instruction, then jump.
+/// JSR `<ea>`: push the address of the next instruction, then jump.
 pub fn jsr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let target = control_address(cpu, d);
     let ret = next_pc(cpu, d);
@@ -110,20 +110,20 @@ pub fn rts(cpu: &mut Cpu, mem: &mut Memory, _: &Decoded) -> Result<Flow, Fault> 
     Ok(Flow::Jump)
 }
 
-/// LEA <ea>y,Ax: the effective address -> Ax; the condition codes are not affected.
+/// LEA `<ea>`y,Ax: the effective address -> Ax; the condition codes are not affected.
 pub fn lea(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     cpu.a[d.operands[0] as usize & 7] = control_address(cpu, d);
     Ok(Flow::Next)
 }
 
-/// PEA <ea>y: push the effective address; the condition codes are not affected.
+/// PEA `<ea>`y: push the effective address; the condition codes are not affected.
 pub fn pea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let a = control_address(cpu, d);
     push(cpu, mem, a)?;
     Ok(Flow::Next)
 }
 
-/// LINK.W Ay,#<displacement>: push Ay, load the stack pointer into Ay, then add the sign-extended displacement
+/// LINK.W Ay,#`<displacement>`: push Ay, load the stack pointer into Ay, then add the sign-extended displacement
 /// to the stack pointer.
 pub fn link(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let r = d.operands[1] as usize & 7;
@@ -155,7 +155,7 @@ fn mask_reg(cpu: &mut Cpu, i: u32) -> &mut u32 {
     }
 }
 
-/// MOVEM.L #list,<ea>x: the selected registers, D0 first, to consecutive longwords from the effective address.
+/// MOVEM.L #list,`<ea>`x: the selected registers, D0 first, to consecutive longwords from the effective address.
 pub fn movem_regs_ea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let mask = d.operands[3] & 0xFFFF;
     let mut at = control_address(cpu, d);
@@ -167,7 +167,7 @@ pub fn movem_regs_ea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flo
     Ok(Flow::Next)
 }
 
-/// MOVEM.L <ea>y,#list: consecutive longwords from the effective address into the selected registers. All are
+/// MOVEM.L `<ea>`y,#list: consecutive longwords from the effective address into the selected registers. All are
 /// read before any register is written, so a fault part-way leaves the registers as they were (RM 3.3.4.16).
 pub fn movem_ea_regs(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let mask = d.operands[3] & 0xFFFF;
