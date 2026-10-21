@@ -8,8 +8,8 @@ use std::sync::Mutex;
 
 use mcf5441x_emu::elf::load_elf;
 use mcf5441x_emu::soc::usb::host::{POLL_US, TIMEOUT_US};
-use mcf5441x_emu::soc::{Chip, ChipOptions, HostError, Mcf5441x, UsbHost, UsbOtg, endpoints};
-use mcf5441x_emu::{DeviceId, Machine, Stop};
+use mcf5441x_emu::soc::{Chip, ChipOptions, HostError, Mcf5441x, Step, UsbHost, UsbOtg, endpoints};
+use mcf5441x_emu::{DeviceCx, DeviceId, Machine, Stop};
 
 /// DDR as examples/memory.x has it: 128 MB at 0x40000000, the stack at its top.
 const DDR: (u32, u32) = (0x4000_0000, 0x0800_0000);
@@ -105,12 +105,18 @@ fn opened(m: &mut Machine, host: &mut UsbHost) {
 
 /// A machine whose core runs `code` from the start of DDR and never starts the USB controller.
 fn silent(code: &[u8]) -> (Machine, UsbHost) {
+    let (m, host, _) = silent_usb(code);
+    (m, host)
+}
+
+/// [`silent`], with the controller's id.
+fn silent_usb(code: &[u8]) -> (Machine, UsbHost, DeviceId) {
     let (mut m, chip) = machine();
     m.mem.load(DDR.0, code).unwrap();
     m.cpu.pc = DDR.0;
     m.cpu.set_sr(0x2700);
     m.cpu.a[7] = STACK_TOP;
-    (m, UsbHost::new(chip.usb, US))
+    (m, UsbHost::new(chip.usb, US), chip.usb)
 }
 
 /// `bra.s *`: a core busy forever.
@@ -295,4 +301,69 @@ fn endpoints_parse_a_configuration() {
         [],
         "a cut-off descriptor is not read"
     );
+}
+
+#[test]
+fn a_device_halt_stops_the_host() {
+    // A controller script that finishes after 30 µs halts the run: while the core runs, and while it waits in STOP
+    // (the slice's idle_until).
+    for code in [&SPIN[..], &STOP[..]] {
+        let (mut m, mut host, usb) = silent_usb(code);
+        let script = |_: &mut UsbOtg, _: &mut DeviceCx| Step::Done(7);
+        m.device_mut::<UsbOtg>(usb)
+            .run_script(Box::new(script), 30 * US);
+        match host.connect(&mut m) {
+            Err(HostError::Stopped(r)) => assert_eq!(r.kind, Stop::Halt("usb host done"), "{r:?}"),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(m.now(), 30 * US);
+        assert_eq!(m.time_limit(), None);
+    }
+}
+
+/// The example opened with a URB of `urb` bytes; 512 bytes written, then read back. The IN packet sizes the
+/// controller sent by the time the read returned.
+fn urb_read(urb: Option<usize>) -> Option<Vec<u32>> {
+    let (mut m, mut host, usb) = example()?;
+    opened(&mut m, &mut host);
+    host.set_urb(urb);
+    let full = data(512);
+    host.write(&mut m, &full).unwrap();
+    assert_eq!(host.read(&mut m, 512).unwrap(), full);
+    Some(m.device::<UsbOtg>(usb).stats().in_sizes.clone())
+}
+
+#[test]
+fn a_urb_holds_a_full_packet_until_the_transfer_ends() {
+    // Held: the 512-byte packet reaches the reader only with the zero-length packet after it.
+    let Some(held) = urb_read(Some(1024)) else {
+        return;
+    };
+    assert_eq!(held, [512, 0]);
+    // Not held: without a URB, or with one the packet fills, the read returns before the zero-length packet.
+    assert_eq!(urb_read(None).unwrap(), [512]);
+    assert_eq!(urb_read(Some(512)).unwrap(), [512]);
+}
+
+#[test]
+fn a_full_speed_urb_holds_a_64_byte_packet() {
+    let Some((mut m, mut host, usb)) = example() else {
+        return;
+    };
+    m.device_mut::<UsbOtg>(usb).knobs().hs = false;
+    opened(&mut m, &mut host);
+    host.set_urb(Some(1024));
+    host.set_timeouts(2_000, 10);
+    // At full speed the bulk IN's packet size is clamped to 64, so the example's 64-byte echo (no zero-length
+    // packet after it: the class's size is 512) is a full packet and stays held.
+    let first = data(64);
+    host.write(&mut m, &first).unwrap();
+    assert_eq!(host.read(&mut m, 64), Err(HostError::Timeout("bulk IN")));
+    assert_eq!(m.device::<UsbOtg>(usb).stats().in_sizes, [64]);
+    // a short packet ends the transfer and releases both
+    host.write(&mut m, b"!").unwrap();
+    let mut both = first;
+    both.push(b'!');
+    assert_eq!(host.read(&mut m, 65).unwrap(), both);
+    assert_eq!(m.device::<UsbOtg>(usb).stats().in_sizes, [64, 1]);
 }

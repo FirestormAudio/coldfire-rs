@@ -99,7 +99,8 @@ pub fn endpoints(config: &[u8]) -> Vec<(u8, u8, u16)> {
 /// removes again). A core waiting after STOP with nothing able to interrupt it ([`Stop::HaltedForever`]) is
 /// waiting for the host: the slice moves the clock on with [`Machine::idle_until`] instead. Any other stop, and the
 /// caller's own time limit, ends the operation with [`HostError::Stopped`]. A halt the controller asks for during a
-/// transaction is reported by the next slice's run.
+/// transaction is reported by the next slice's run; when that transaction was the operation's last, the operation
+/// returns `Ok` and the halt is reported by the caller's next [`Machine::run`].
 #[derive(Debug, Clone)]
 pub struct UsbHost {
     usb: DeviceId,
@@ -204,6 +205,13 @@ impl UsbHost {
         if first.len() < 8 || first[1] != 1 {
             return Err(HostError::Protocol(format!(
                 "device descriptor {first:02x?} does not parse"
+            )));
+        }
+        if ![8, 16, 32, 64].contains(&first[7]) {
+            // USB 2.0 9.6.1: bMaxPacketSize0 is 8, 16, 32 or 64
+            return Err(HostError::Protocol(format!(
+                "bMaxPacketSize0 {} is not 8, 16, 32 or 64",
+                first[7]
             )));
         }
         self.mps0 = u16::from(first[7]);
