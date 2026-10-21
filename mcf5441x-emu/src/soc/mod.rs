@@ -25,7 +25,7 @@ pub use pit::Pit;
 pub use pll::Pll;
 pub use ssi::{Ssi, SsiConfig, SsiCounters};
 pub use stub::{StubBlock, StubMode, Unmodelled};
-pub use uart::{Uart, UartConfig};
+pub use uart::{PeerCx, SerialPeer, Uart, UartConfig};
 pub use usb::{HostScript, Step, Token, UsbConfig, UsbKnobs, UsbOtg, UsbStats};
 
 /// Whether a `size` access at `offset` runs past the end of the 32-bit register at `offset & !3`. The core splits

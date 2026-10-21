@@ -2,9 +2,11 @@
 
 use std::fmt;
 
+use std::any::Any;
+
 use crate::device::{Device, DeviceCx};
 use crate::mem::Size;
-use crate::stop::Stop;
+use crate::stop::{Stop, StopReason};
 
 const UMR: u32 = 0x00;
 const USR: u32 = 0x04;
@@ -47,11 +49,76 @@ pub struct UartConfig {
     pub ticks_per_byte: u64,
 }
 
+/// Whatever sits at the far end of a UART's TX and RX lines: a board's other microcontroller, a console.
+///
+/// A peer is [attached](Uart::attach) to its UART, which calls it as its characters go out and at the peer's own
+/// events; through [`PeerCx`] it sends characters to the UART's receiver and can end the run.
+pub trait SerialPeer: Any {
+    /// A character left the UART's shift register: it began shifting out at `cx.now`.
+    fn transmitted(&mut self, byte: u8, cx: &mut PeerCx);
+    /// The peer's own next event (absolute tick), if any.
+    fn next_event(&self) -> Option<u64> {
+        None
+    }
+    /// Called at an instruction boundary once the clock has reached [`SerialPeer::next_event`] (`cx.now` may be
+    /// past it). Afterwards the event should lie after `cx.now`, as for [`Device::advance`].
+    fn advance(&mut self, _cx: &mut PeerCx) {}
+}
+
+/// What a [`SerialPeer`] can reach: the receiver of its UART, and the run.
+pub struct PeerCx<'a> {
+    /// The clock: the tick a character began shifting out, or the tick being advanced to.
+    pub now: u64,
+    rx_pending: &'a mut Vec<(u64, Option<u8>)>,
+    ticks_per_byte: u64,
+    stop: &'a mut Option<StopReason>,
+}
+
+impl PeerCx<'_> {
+    /// Send a character to the UART's receiver, its start bit at `start`, as [`Uart::receive`] does: it arrives
+    /// [`UartConfig::ticks_per_byte`] later. `None` is a character with a framing error. Panics when `start` is
+    /// before `now`.
+    pub fn send(&mut self, start: u64, byte: Option<u8>) {
+        assert!(
+            start >= self.now,
+            "a peer sends at tick {start}, before the clock ({})",
+            self.now
+        );
+        schedule(self.rx_pending, self.ticks_per_byte, start, byte);
+    }
+
+    /// End the run, as [`DeviceCx::halt`] does: it stops at the next instruction boundary, with PC on the next
+    /// instruction. The first request in an instruction wins.
+    pub fn halt(&mut self, kind: Stop, detail: impl Into<String>) {
+        if self.stop.is_none() {
+            *self.stop = Some(StopReason {
+                kind,
+                pc: 0,
+                detail: detail.into(),
+            });
+        }
+    }
+}
+
+/// Put a character with its start bit at `start` on the receive line `rx_pending`.
+fn schedule(
+    rx_pending: &mut Vec<(u64, Option<u8>)>,
+    ticks_per_byte: u64,
+    start: u64,
+    b: Option<u8>,
+) {
+    let at = start + ticks_per_byte;
+    let i = rx_pending.partition_point(|&(t, _)| t <= at);
+    rx_pending.insert(i, (at, b));
+}
+
 /// One UART (RM ch. 41), with a 1-deep receiver and a transmitter with a holding and a shift register that sends
 /// one character per [`UartConfig::ticks_per_byte`].
 ///
 /// The host drives the receive line with [`Uart::receive`] and sees what is sent in [`Uart::sent`] (or through a
-/// hook, [`Uart::on_byte`]). The receiver and the transmitter start disabled (RM 41.3.5): a board whose boot
+/// hook, [`Uart::on_byte`]). A [`SerialPeer`] [attached](Uart::attach) to it is the other end of both lines: it
+/// hears each character as it begins shifting out, sends characters to the receiver, has events of its own (the
+/// UART's [`Device::next_event`] includes them) and can end the run. The receiver and the transmitter start disabled (RM 41.3.5): a board whose boot
 /// stages left them on writes UCR.
 ///
 /// Registers (byte registers; the access size is not checked and only the low byte of a write is used):
@@ -121,6 +188,7 @@ pub struct Uart {
     shift_end: u64,
     sent: Vec<(u64, u8)>,
     hook: Option<Box<dyn FnMut(u64, u8)>>,
+    peer: Option<Box<dyn SerialPeer>>,
     lost: u64,
     dropped: u64,
 }
@@ -158,6 +226,7 @@ impl Uart {
             shift_end: 0,
             sent: Vec::new(),
             hook: None,
+            peer: None,
             lost: 0,
             dropped: 0,
         }
@@ -168,9 +237,41 @@ impl Uart {
     /// arrive in the order given.
     pub fn receive(&mut self, bytes: &[(u64, Option<u8>)]) {
         for &(start, b) in bytes {
-            let at = start + self.config.ticks_per_byte;
-            let i = self.rx_pending.partition_point(|&(t, _)| t <= at);
-            self.rx_pending.insert(i, (at, b));
+            schedule(&mut self.rx_pending, self.config.ticks_per_byte, start, b);
+        }
+    }
+
+    /// Attach `peer` to the far end of the lines, replacing any earlier peer.
+    pub fn attach(&mut self, peer: Box<dyn SerialPeer>) {
+        self.peer = Some(peer);
+    }
+
+    /// The attached peer. Panics when there is none or it is not a `T`.
+    pub fn peer<T: SerialPeer>(&self) -> &T {
+        let peer: &dyn Any = self.peer.as_deref().expect("no peer attached");
+        peer.downcast_ref()
+            .unwrap_or_else(|| panic!("the peer is not a {}", std::any::type_name::<T>()))
+    }
+
+    /// The attached peer, mutably. Panics when there is none or it is not a `T`.
+    pub fn peer_mut<T: SerialPeer>(&mut self) -> &mut T {
+        let peer: &mut dyn Any = self.peer.as_deref_mut().expect("no peer attached");
+        peer.downcast_mut()
+            .unwrap_or_else(|| panic!("the peer is not a {}", std::any::type_name::<T>()))
+    }
+
+    /// The peer's context at `now`.
+    fn peer_cx<'a>(
+        rx_pending: &'a mut Vec<(u64, Option<u8>)>,
+        ticks_per_byte: u64,
+        now: u64,
+        cx: &'a mut DeviceCx,
+    ) -> PeerCx<'a> {
+        PeerCx {
+            now,
+            rx_pending,
+            ticks_per_byte,
+            stop: &mut *cx.stop,
         }
     }
 
@@ -301,16 +402,21 @@ impl Uart {
         self.holding.map(|(_, at)| at.max(self.shift_end))
     }
 
-    /// Bring the transmitter to `now`: move a held character into the shift register when it is due.
-    fn catch_up(&mut self, now: u64) {
+    /// Bring the transmitter to `cx.now`: move a held character into the shift register when it is due, and tell
+    /// the peer.
+    fn catch_up(&mut self, cx: &mut DeviceCx) {
         if let (Some(at), Some((b, _))) = (self.move_at(), self.holding)
-            && at <= now
+            && at <= cx.now
         {
             self.holding = None;
             self.shift_end = at + self.config.ticks_per_byte;
             self.sent.push((at, b));
             if let Some(f) = &mut self.hook {
                 f(at, b);
+            }
+            if let Some(p) = &mut self.peer {
+                let tpb = self.config.ticks_per_byte;
+                p.transmitted(b, &mut Self::peer_cx(&mut self.rx_pending, tpb, at, cx));
             }
         }
     }
@@ -342,7 +448,7 @@ impl Uart {
 
 impl Device for Uart {
     fn read(&mut self, offset: u32, _size: Size, cx: &mut DeviceCx) -> u32 {
-        self.catch_up(cx.now);
+        self.catch_up(cx);
         let v = match offset {
             UMR => {
                 let i = usize::from(self.umr2);
@@ -367,7 +473,7 @@ impl Device for Uart {
 
     fn write(&mut self, offset: u32, _size: Size, value: u32, cx: &mut DeviceCx) {
         let v = value as u8;
-        self.catch_up(cx.now);
+        self.catch_up(cx);
         match offset {
             UMR if !self.check_mode(v, cx) => {}
             UMR => {
@@ -389,19 +495,25 @@ impl Device for Uart {
     fn next_event(&self) -> Option<u64> {
         let rx = self.rx_pending.first().map(|&(t, _)| t);
         let tx = self.move_at();
-        match (rx, tx) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let peer = self.peer.as_ref().and_then(|p| p.next_event());
+        [rx, tx, peer].into_iter().flatten().min()
     }
 
+    /// The peer's event when due, then the transmitter (whose character the peer may answer), then the characters
+    /// that have arrived.
     fn advance(&mut self, now: u64, cx: &mut DeviceCx) {
+        if let Some(p) = &mut self.peer
+            && p.next_event().is_some_and(|t| t <= now)
+        {
+            let tpb = self.config.ticks_per_byte;
+            p.advance(&mut Self::peer_cx(&mut self.rx_pending, tpb, now, cx));
+        }
+        self.catch_up(cx);
         let due = self.rx_pending.partition_point(|&(t, _)| t <= now);
         let later = self.rx_pending.split_off(due);
         for (_, b) in std::mem::replace(&mut self.rx_pending, later) {
             self.arrive(b);
         }
-        self.catch_up(now);
         self.drive(cx);
     }
 
@@ -410,10 +522,15 @@ impl Device for Uart {
     }
 
     /// Its own source, when UIMR enables the request a pending character or the character in the holding register
-    /// will raise.
+    /// will raise. A character the peer could still send counts as pending: the peer has an event of its own, or
+    /// a character in the holding register will reach it.
     /// The receive DMA's interrupts are listed by the eDMA.
     fn wake_sources(&self, out: &mut Vec<(usize, u8)>) -> bool {
-        let rx = self.uimr & 2 != 0 && !self.rx_pending.is_empty();
+        let from_peer = self
+            .peer
+            .as_ref()
+            .is_some_and(|p| p.next_event().is_some() || self.holding.is_some());
+        let rx = self.uimr & 2 != 0 && (!self.rx_pending.is_empty() || from_peer);
         let tx = self.uimr & 1 != 0 && self.holding.is_some();
         if rx || tx {
             out.push((self.config.controller, self.config.source));
