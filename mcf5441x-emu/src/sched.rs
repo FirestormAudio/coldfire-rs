@@ -120,10 +120,6 @@ impl Devices {
         }
     }
 
-    pub(crate) fn has_controllers(&self) -> bool {
-        !self.controllers.is_empty()
-    }
-
     fn controllers(&self) -> impl Iterator<Item = &dyn InterruptController> + '_ {
         self.controllers.iter().map(|&i| match &self.models[i] {
             Model::Controller(c) => &**c,
@@ -131,13 +127,15 @@ impl Devices {
         })
     }
 
-    /// The highest request over all controllers.
-    // guess: RM ch. 17 orders sources within one controller (the higher-numbered source wins) but not equal levels
-    // across controllers; the higher vector wins, which continues that order from INTC0 to INTC2.
+    /// The highest request over all controllers. At equal levels the controller added first wins: RM 17.3.2 gives
+    /// INTC0 the highest priority and INTC2 the lowest, so the chip's controllers are added in that order.
     pub(crate) fn pending(&self, lines: &IrqLines, allow_level7: bool) -> Option<Irq> {
         self.controllers()
             .filter_map(|c| c.pending(lines, allow_level7))
-            .max_by_key(|irq| (irq.level, irq.vector))
+            .fold(None, |best: Option<Irq>, irq| match best {
+                Some(b) if b.level >= irq.level => Some(b),
+                _ => Some(irq),
+            })
     }
 
     /// Whether any controller holds the level-7 line up.

@@ -283,7 +283,7 @@ impl Machine {
             }
             // STOP: nothing to take yet, so jump the clock to the next event (or the time limit before it).
             match event {
-                Some(t) if self.mem.has_controllers() => {
+                Some(t) if self.can_wake() => {
                     let t = t.max(self.mem.now);
                     self.mem.now = self.time_limit.map_or(t, |limit| t.min(limit));
                 }
@@ -298,6 +298,22 @@ impl Machine {
                 }
             }
         }
+    }
+
+    /// Whether any request a device could raise would be taken while the core waits after STOP: some controller,
+    /// with every one of its sources asserted, reports a level above SR\[I\], or level 7 when the level-7 line is
+    /// not already held (a held line gives no new edge).
+    ///
+    /// While the core waits, SR is fixed and no instruction runs, so no controller register is written: a device
+    /// event can only change the request lines, which this assumes all asserted. The probe is exact as long as a
+    /// controller's masks and levels change only through its registers.
+    // guess: an interrupt controller that changes its own masks or levels in `advance` (none is modelled: the chip's
+    // INTC has no timed behaviour) could wake a core this reports as unable to wake.
+    fn can_wake(&self) -> bool {
+        let ipl = (self.cpu.sr() >> 8) as u8 & 7;
+        self.mem
+            .pending_with(&crate::irq::IrqLines::all(), !self.level7_line)
+            .is_some_and(|irq| irq.level == 7 || irq.level > ipl)
     }
 
     /// The request the core takes now, if any, and whether another request is held off by SR\[I\]. Samples the

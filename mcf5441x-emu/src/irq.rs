@@ -12,6 +12,8 @@ use crate::device::Device;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IrqLines {
     asserted: Vec<u64>,
+    /// Every source of every controller reads as asserted: the lines as they could become.
+    all: bool,
 }
 
 impl IrqLines {
@@ -35,7 +37,18 @@ impl IrqLines {
 
     /// The asserted sources of `controller`, one bit per source.
     pub fn asserted(&self, controller: usize) -> u64 {
+        if self.all {
+            return !0;
+        }
         self.asserted.get(controller).copied().unwrap_or(0)
+    }
+
+    /// Lines with every source of every controller asserted.
+    pub(crate) fn all() -> IrqLines {
+        IrqLines {
+            asserted: Vec::new(),
+            all: true,
+        }
     }
 }
 

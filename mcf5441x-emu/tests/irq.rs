@@ -279,13 +279,15 @@ fn a_second_level_7_source_while_one_is_held_is_not_a_new_edge() {
 
 #[test]
 fn stop_with_only_a_held_level_7_line_halts() {
-    // The held line was taken once; with no device event to come, nothing can wake the STOP.
+    // The held line was taken once and no new edge can come while it is held, even though a timer keeps
+    // re-asserting the source that holds it: nothing can wake the STOP.
     let (mut m, end) = level7(
         "move.w #0x2000,%sr\n\
          move.l #0x105,(%a2)\n\
          stop #0x2000\n\
          after: nop",
     );
+    m.add_timer(periodic(5));
     let r = m.run(until(end));
     assert_eq!(r.kind, Stop::HaltedForever, "{r:?}");
     assert_eq!(r.pc, end - 2, "PC is past the STOP");
@@ -336,22 +338,78 @@ fn stop_fast_forwards_to_the_timer() {
     assert_eq!((m.cpu.d[4], m.cpu.d[7], m.now()), (1, 1, 1005));
 }
 
+/// A timer asserting `source` of controller 0 every 100 ticks from tick 100.
+fn periodic(source: u8) -> Box<Timer> {
+    Box::new(Timer {
+        at: Some(100),
+        period: Some(100),
+        source,
+        fired: Vec::new(),
+    })
+}
+
 #[test]
-fn stop_with_a_masked_periodic_timer_waits_until_the_time_limit() {
-    // A periodic timer whose source is masked keeps the STOP waiting until the time limit.
+fn stop_with_a_masked_periodic_timer_halts() {
+    // The timer keeps scheduling events, but its source is masked in the controller and nothing can unmask it
+    // while the core waits: no event can wake the STOP, with or without a time limit.
     let src = "stop #0x2000\nend: nop";
     let (mut m, l) = prepare(src, &["end"]);
     m.add_interrupt_controller(INTC, 0x4000, Box::new(TestIntc::new(0)));
-    let id = m.add_timer(Box::new(Timer {
-        at: Some(100),
-        period: Some(100),
-        source: 6,
-        fired: Vec::new(),
-    }));
+    let id = m.add_timer(periodic(6));
+    let r = m.run(until(l[0]));
+    assert_eq!((r.kind, r.pc), (Stop::HaltedForever, BASE + 4), "{r:?}");
+    assert_eq!(m.now(), 1);
+    assert!(m.device::<Timer>(id).fired.is_empty());
+
+    // The same with the source unmasked but at a level not above the STOP's mask.
+    let src = "stop #0x2300\nend: nop";
+    let (mut m, l) = prepare(src, &["end"]);
+    let mut intc = TestIntc::new(0);
+    intc.enable(6, 3);
+    m.add_interrupt_controller(INTC, 0x4000, Box::new(intc));
+    m.add_timer(periodic(6));
     m.set_time_limit(Some(450));
     let r = m.run(until(l[0]));
-    assert_eq!((r.kind, m.now()), (Stop::TimeLimit, 450), "{r:?}");
-    assert_eq!(m.device::<Timer>(id).fired, [100, 200, 300, 400]);
+    assert_eq!(r.kind, Stop::HaltedForever, "{r:?}");
+}
+
+#[test]
+fn stop_with_an_unmasked_periodic_timer_wakes() {
+    // A level above the STOP's mask: the first event wakes it.
+    let src = "stop #0x2000\nend: nop\nhandler: moveq #6,%d1\nmove.b %d1,0xFC04801C\nrte";
+    let (mut m, l) = prepare(src, &["end", "handler"]);
+    set_vector(&mut m, 70, l[1]);
+    let mut intc = TestIntc::new(0);
+    intc.enable(6, 3);
+    m.add_interrupt_controller(INTC, 0x4000, Box::new(intc));
+    let id = m.add_timer(periodic(6));
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.device::<Timer>(id).fired, [100]);
+    assert_eq!(m.now(), 103);
+}
+
+#[test]
+fn equal_levels_on_two_controllers_go_to_the_first() {
+    // RM 17.3.2: INTC0 has the highest priority; at the same level its request is serviced first.
+    let src = "move.w #0x2000,%sr\nnop\nend: nop\n\
+               h0: move.l %d7,%d5\naddq.l #1,%d7\nmoveq #6,%d1\nmove.b %d1,0xFC04801C\nrte\n\
+               h1: move.l %d7,%d6\naddq.l #1,%d7\nmoveq #6,%d1\nmove.b %d1,0xFC04C01C\nrte";
+    let (mut m, l) = prepare(src, &["end", "h0", "h1"]);
+    set_vector(&mut m, 70, l[1]);
+    set_vector(&mut m, 64 + 64 + 6, l[2]);
+    // Controllers rank in the order they are added: INTC0 first.
+    for (index, base) in [(0, INTC), (1, INTC + 0x4000)] {
+        let mut intc = TestIntc::new(index);
+        intc.enable(6, 3);
+        m.add_interrupt_controller(base, 0x4000, Box::new(intc));
+        m.mem.irq_lines_mut().set(index, 6, true);
+    }
+    m.cpu.d[5] = 0xFF;
+    m.cpu.d[6] = 0xFF;
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0, 1, 2));
 }
 
 #[test]

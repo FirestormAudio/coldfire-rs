@@ -381,8 +381,13 @@ impl Memory {
             .advance_due(self.now, &mut self.irq, &mut self.stop);
     }
 
-    pub(crate) fn has_controllers(&self) -> bool {
-        self.devices.has_controllers()
+    /// The highest request over all controllers for the request lines `lines`.
+    pub(crate) fn pending_with(
+        &self,
+        lines: &IrqLines,
+        allow_level7: bool,
+    ) -> Option<crate::irq::Irq> {
+        self.devices.pending(lines, allow_level7)
     }
 
     /// The highest request over all controllers, ignoring level 7 unless `allow_level7`.
