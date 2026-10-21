@@ -88,3 +88,40 @@ pub fn run_ok(src: &str, setup: impl FnOnce(&mut mcf5441x_emu::Machine)) -> mcf5
     assert_eq!(r.kind, mcf5441x_emu::Stop::UntilPc, "{src}: {r:?}");
     m
 }
+
+/// The vector table [`prepare`] sets up.
+pub const VBR: u32 = 0x4020_0000;
+
+/// Assemble `src` at `BASE` into a machine with RAM at `0x40100000..0x41100000`, A7 = `STACK` (supervisor mode, the
+/// reset SR 0x2700) and VBR = [`VBR`]; returns it and the addresses of `labels`.
+pub fn prepare(src: &str, labels: &[&str]) -> (mcf5441x_emu::Machine, Vec<u32>) {
+    let tail: String = labels.iter().map(|l| format!(".long {l}\n")).collect();
+    let code = assemble(&format!("{src}\n.balign 2\n{tail}"), BASE);
+    let (code, tail) = code.split_at(code.len() - 4 * labels.len());
+    let addrs = tail
+        .chunks(4)
+        .map(|c| u32::from_be_bytes(c.try_into().unwrap()))
+        .collect();
+    let mut m = mcf5441x_emu::Machine::new();
+    m.mem.map_ram(0x4010_0000, 0x0100_0000);
+    m.mem.load(BASE, code).unwrap();
+    m.cpu.pc = BASE;
+    m.cpu.a[7] = STACK;
+    m.cpu.vbr = VBR;
+    (m, addrs)
+}
+
+/// A run bounded only by `pc`.
+pub fn until(pc: u32) -> mcf5441x_emu::Limit {
+    mcf5441x_emu::Limit {
+        until_pc: Some(pc),
+        ..Default::default()
+    }
+}
+
+/// Point vector `v` of the table at [`VBR`] to `handler`.
+pub fn set_vector(m: &mut mcf5441x_emu::Machine, v: u32, handler: u32) {
+    m.mem
+        .write(VBR + 4 * v, mcf5441x_emu::Size::Long, handler)
+        .unwrap();
+}
