@@ -88,6 +88,11 @@ impl Machine {
                 }
                 Ok(Flow::ExceptionAfterPush(v)) => {
                     self.cpu.pc = pc;
+                    // The push stands only when the exception is taken; a run that stops on it leaves the
+                    // registers as before the instruction, so it can resume (the pushed longword stays in memory).
+                    if self.policy.stop_on[v as usize] {
+                        self.cpu.a = saved;
+                    }
                     if let Some(r) = self.take(v, pc) {
                         return r;
                     }

@@ -47,6 +47,9 @@ fn set_vector(m: &mut Machine, v: u32, handler: u32) {
     m.mem.write(VBR + 4 * v, Size::Long, handler).unwrap();
 }
 
+/// FS = 0100 in a frame's first longword: FS[3:2] in bits 27-26, FS[1:0] in bits 17-16 (RM Figure 3-10).
+const FS_FETCH: u32 = 0b01 << 26;
+
 /// The first longword of a frame (CFPRM Figure 11-1): format, vector, SR.
 fn fv(format: u32, vector: u32, sr: u16) -> u32 {
     (format << 28) | (vector << 18) | sr as u32
@@ -439,14 +442,13 @@ fn odd_pc_is_an_address_error() {
     assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE), "{r:?}");
     assert_eq!(m.cpu.a[7], STACK - 4);
 
-    // guess: RM 3.3.4.2 says JSR pushes the return address before the target is checked, and does not say the
-    // push is undone; it stays (A7 - 4) even when the run stops on the exception.
+    // JSR: when the run stops on the exception, the registers are as before the JSR (A7 unchanged) so the run can
+    // resume; the pushed longword may stay in memory below A7.
     let (mut m, l) = prepare("jsr (%a2)\nend:", &["end"]);
     m.cpu.a[2] = BASE + 0x201;
     let r = m.run(until(l[0]));
     assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE), "{r:?}");
-    assert_eq!(m.cpu.a[7], STACK - 4);
-    assert_eq!(long(&mut m, STACK - 4), BASE + 2);
+    assert_eq!(m.cpu.a[7], STACK);
 
     // guess: a PC that is already odd (here set from outside; RTE can restore one) faults at the fetch, and the
     // stacked PC is the odd address itself.
@@ -467,7 +469,8 @@ fn address_error_frames_for_rts_and_jsr() {
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.cpu.a[7], STACK - 12);
-    assert_eq!(long(&mut m, STACK - 12), fv(4, 3, 0x2700));
+    // guess: FS = 0100 "error on instruction fetch" (RM Table 3-7); see `ADDRESS_ERROR_FS` in the source.
+    assert_eq!(long(&mut m, STACK - 12), fv(4, 3, 0x2700) | FS_FETCH);
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 0x301);
 
@@ -479,8 +482,27 @@ fn address_error_frames_for_rts_and_jsr() {
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.cpu.a[7], STACK - 12);
+    assert_eq!(
+        long(&mut m, STACK - 12),
+        fv(4, 3, 0x2700) | FS_FETCH,
+        "guess: FS 0100"
+    );
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 2);
+
+    // A PC that is already odd: the stacked PC is the odd address (guess, see `odd_pc_is_an_address_error`).
+    let (mut m, l) = prepare("nop\nend: nop\nhandler: nop", &["handler"]);
+    set_vector(&mut m, 3, l[0]);
+    m.policy.stop_on[3] = false;
+    m.cpu.pc = BASE + 1;
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(
+        long(&mut m, STACK - 8),
+        fv(4, 3, 0x2700) | FS_FETCH,
+        "guess: FS 0100"
+    );
+    assert_eq!(long(&mut m, STACK - 4), BASE + 1);
 }
 
 /// RM 3.3.4.14: a fault while processing an exception halts the core.
@@ -507,7 +529,7 @@ fn unmapped_vector_table_stops_unmapped() {
     assert_eq!((m.cpu.a[7], m.cpu.sr()), (STACK, 0x2700));
 }
 
-/// R8 / RM Table 3-12: misaligned operand accesses are split into aligned ones, not address errors.
+/// RM Table 3-12: misaligned operand accesses are split into aligned ones, not address errors.
 #[test]
 fn odd_long_read_is_performed_misaligned() {
     let (mut m, l) = prepare("move.l (%a0),%d0\nmove.w %d0,(%a1)\nend:", &["end"]);

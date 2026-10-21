@@ -21,8 +21,8 @@ pub enum Flow {
     /// before it (RM 3.3.4.16), and the machine stops or vectors according to its
     /// [`ExceptionPolicy`](crate::cpu::ExceptionPolicy).
     Exception(u8),
-    /// As [`Flow::Exception`], but the instruction's register updates stand: JSR and BSR push their return address
-    /// before the target takes an address error (RM 3.3.4.2).
+    /// As [`Flow::Exception`], but when the exception is taken (not stopped on) the instruction's register updates
+    /// stand: JSR and BSR push their return address before the target takes an address error (RM 3.3.4.2).
     ExceptionAfterPush(u8),
     /// STOP: the instruction is complete (PC past it) and the core waits for an interrupt.
     Wait,

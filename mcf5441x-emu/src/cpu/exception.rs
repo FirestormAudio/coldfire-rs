@@ -18,6 +18,13 @@ pub mod vector {
     pub const TRAP_0: u8 = 32;
 }
 
+// guess: RM Table 3-7 / CFPRM Table 11-2 give FS encodings for access errors and say FS is defined for address
+// errors too, but list none specific to an address error; 0000 is "not an access or address error", so it cannot be
+// right. Every address error on this core comes from the instruction stream (an odd PC, or an index extension word
+// RM 3.3.4.2 rejects), so it takes 0100 "error on instruction fetch".
+/// The fault status written into an address-error frame: 0100.
+pub const ADDRESS_ERROR_FS: u32 = 0b0100;
+
 /// Bits 31-20 of VBR; bits 19-0 are not implemented and read as zero (RM 3.2.8).
 pub const VBR_MASK: u32 = 0xFFF0_0000;
 
@@ -50,7 +57,8 @@ pub fn stacks_next_pc(vector: u8) -> bool {
 
 impl Cpu {
     /// Take exception `vector` with `return_pc` in the frame (CFPRM ch. 11 steps 1-4): enter supervisor mode with
-    /// T clear, write the two-longword frame (format `4 + SSP[1:0]`, vector, the SR before the exception, then
+    /// T clear, write the two-longword frame (format `4 + SSP[1:0]`, fault status ([`ADDRESS_ERROR_FS`] for an
+    /// address error, else 0), vector, the SR before the exception, then
     /// `return_pc`) at the SSP aligned down to 4, and continue at the handler read from `VBR + 4 * vector`.
     ///
     /// On an error nothing in the core changes (memory may hold part of the frame). A handler address with bit 0
@@ -88,11 +96,20 @@ impl Cpu {
             self.other_sp
         };
         let format = 4 | (ssp & 3);
+        let fs = if vector == vector::ADDRESS_ERROR {
+            ADDRESS_ERROR_FS
+        } else {
+            0
+        };
         let frame = (ssp & !3).wrapping_sub(8);
         mem.write(
             frame,
             Size::Long,
-            (format << 28) | ((vector as u32) << 18) | old as u32,
+            (format << 28)
+                | ((fs >> 2) << 26)
+                | ((vector as u32) << 18)
+                | ((fs & 3) << 16)
+                | old as u32,
         )?;
         mem.write(frame.wrapping_add(4), Size::Long, return_pc)?;
         let handler = mem.read(

@@ -1,7 +1,8 @@
 //! Program flow (CFPRM ch. 4): BRA, BSR, Bcc, JMP, JSR, RTS, LEA, PEA, LINK, UNLK, MOVEM and NOP.
 //!
 //! A jump, branch or return to an odd address takes an address error (vector 3) with PC on the jump (RM 3.3.4.2,
-//! Table 3-5 "Fault"); RTS leaves its return address on the stack, and JSR and BSR have already pushed theirs.
+//! Table 3-5 "Fault"); RTS leaves its return address on the stack, and JSR and BSR have already pushed theirs
+//! (the push stands when the exception is taken, not when the run stops on it).
 
 use crate::cpu::ea;
 use crate::cpu::exception::vector::ADDRESS_ERROR;
@@ -41,7 +42,7 @@ fn jump(cpu: &mut Cpu, target: u32) -> Flow {
 
 // guess (BSR): RM 3.3.4.2 describes JSR only; BSR, the other call, is taken to push first in the same way.
 /// Push the return address, then continue at `target`; an odd target takes the address error with the push
-/// standing.
+/// standing if the exception is taken.
 #[inline(always)]
 fn call(cpu: &mut Cpu, mem: &mut Memory, ret: u32, target: u32) -> Result<Flow, Fault> {
     push(cpu, mem, ret)?;
