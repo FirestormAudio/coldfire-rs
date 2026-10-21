@@ -101,12 +101,14 @@ impl DeviceCx<'_> {
     /// Refuse the access in flight: it fails, and the instruction making it does not complete. The run stops with
     /// `kind` and `detail`, PC on that instruction and the registers as they were before it, as for an access to
     /// unmapped memory; a later run tries the instruction again. This is how a model stops on a register access
-    /// to a feature it does not model. The first refusal in a call wins.
+    /// to a feature it does not model. The first refusal in a call wins. Only the instruction is rolled back: a
+    /// device that refuses a register write may already have acted on it (run minor loops, set an ERQ bit), and
+    /// those effects stay.
     ///
     /// A bus master's access refused this way fails with [`Fault::Device`](crate::Fault::Device) and also asks the
     /// run to stop as [`DeviceCx::halt`] does, so the detail is kept whatever the master does with the error. A
     /// host-side [`Machine::access`](crate::Machine::access) refused this way returns that error and leaves no stop
-    /// pending. Called outside an access (from [`Device::advance`], [`Device::service`],
+    /// pending, including one a bus master's refused access inside it asked for. Called outside an access (from [`Device::advance`], [`Device::service`],
     /// [`InterruptController::acknowledge`](crate::InterruptController::acknowledge) or
     /// [`Machine::with_device`](crate::Machine::with_device)), it acts as [`DeviceCx::halt`].
     pub fn refuse(&mut self, kind: Stop, detail: impl Into<String>) {

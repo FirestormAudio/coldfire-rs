@@ -18,6 +18,8 @@ const INTC: [u32; 3] = [0xFC04_8000, 0xFC04_C000, 0xFC05_0000];
 const IACK: u32 = 0xFC05_4000;
 /// The eDMA's registers and TCDs (RM ch. 19) take the first 8 KB of its slot.
 const EDMA: (u32, u32) = (0xFC04_4000, 0x2000);
+/// The eDMA channels RM Table 19-6 lists as "available for software": no peripheral drives them.
+const SOFTWARE_DMA: [u8; 6] = [30, 31, 42, 43, 46, 47];
 /// PIT0-PIT3 (RM Table 1-3): INTC2 sources 13-16 (RM Table 17-17).
 const PIT: u32 = 0xFC08_0000;
 const PIT_SOURCE: u8 = 13;
@@ -157,7 +159,7 @@ pub struct Chip {
 /// |---|---|---|---|---|
 /// | 0xFC04_8000, 0xFC04_C000, 0xFC05_0000 | 0x4000 | INTC0-2 ([`Intc::chip`], added in that order) | | |
 /// | 0xFC05_4000 | 0x4000 | global IACK | | |
-/// | 0xFC04_4000 | 0x2000 | eDMA (bus master) | its own routes, see [`Edma`] | |
+/// | 0xFC04_4000 | 0x2000 | eDMA (bus master) | its own routes, see [`Edma`] | software: 30, 31, 42, 43, 46, 47 |
 /// | 0xFC08_0000 + 0x4000 n | 0x4000 | PIT0-3 | INTC2 13-16 | |
 /// | 0xFC06_0000 + 0x4000 n | 0x4000 | UART0-3 | INTC0 26-29 | receive 2, 4, 6, 16 |
 /// | 0xEC06_0000 + 0x4000 n | 0x4000 | UART4-7 | INTC1 48-51 | receive 18, 20, 22, 32 |
@@ -176,8 +178,13 @@ pub struct Chip {
 /// named as the table names it, and so is RGPIO at 0x8C00_0000-0x8FFF_FFFF: an access stops the run with
 /// [`Stop::Unmodelled`](crate::Stop::Unmodelled) and the detail `"<module> +<offset>"`.
 ///
-/// The interrupt sources the models leave unwired (SSI, DSPI, NFC, the DDR controller and the PLL raise no
-/// interrupts; their enables are refused, see each model) are not driven.
+/// The interrupt sources the models leave unwired are not driven: SSI, DSPI and NFC raise no interrupts (their
+/// enables are refused, see each model); the DDR controller and the PLL store their interrupt enables (DDR INTMASK,
+/// PLL_CR LOCIRQ and LOLIRQ) but never raise an interrupt, and neither is wired to an interrupt controller.
+///
+/// The eDMA ([`Edma::with_driven`]) takes SERQ only on the request lines in the table's last column (the
+/// software channels of RM Table 19-6 among them): on any other channel (the UART transmit requests, the DSPIs',
+/// the timers', ...) nothing would ever request, and SERQ is refused. A software start works on every channel.
 ///
 /// Not mapped: the SRAM (the board maps it where its RAMBAR puts it, RM ch. 7), the DDR (its size is the
 /// board's), the FlexBus chip-select windows, and the reserved slots, which fault as unmapped.
@@ -200,7 +207,15 @@ impl Mcf5441x {
         ];
         let iack = m.add_device(IACK, SLOT, Box::new(iack));
 
-        let edma = m.add_bus_master(EDMA.0, EDMA.1, Box::new(Edma::new()));
+        // SERQ is taken on the request lines the models below drive and on the software channels only.
+        let driven = UART
+            .iter()
+            .map(|u| u.3)
+            .chain(SSI.iter().flat_map(|s| [s.1, s.2]))
+            .chain([ESDHC_DMA])
+            .chain(SOFTWARE_DMA)
+            .fold(0u64, |mask, ch| mask | 1 << ch);
+        let edma = m.add_bus_master(EDMA.0, EDMA.1, Box::new(Edma::with_driven(driven)));
 
         let pit = [0u8, 1, 2, 3].map(|n| {
             let base = PIT + SLOT * u32::from(n);

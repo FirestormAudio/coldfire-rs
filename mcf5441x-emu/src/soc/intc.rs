@@ -200,7 +200,8 @@ enum Reg {
 /// - SIMR/CIMR (bytes, read 0): set or clear IMR bit `value & 63`, or every bit with SALL/CALL (0x40). Written
 ///   together (a word at SIMR) the clear is applied first, so SIMR wins (RM 17.2.6).
 /// - ICR0-63 (bytes at 0x40-0x7F, reset 0): the level in bits 2:0; an access of any size covers consecutive
-///   ICRs, big-endian. The byte registers SIMR, CIMR, CLMASK and SLMASK pack the same way.
+///   ICRs, big-endian. The byte registers SIMR, CIMR, CLMASK and SLMASK pack the same way (guess: the RM gives
+///   them as 8-bit registers only; a word or longword over them is the model's extension).
 /// - ICONFIG (16-bit), CLMASK and SLMASK (bytes, reset 0x0F): INTC0 only, shared by the controllers of one
 ///   [`Intc::chip`]. CLMASK and SLMASK values other than 0-7 and 0x0F are reserved and refused.
 /// - SWIACK and L1IACK-L7IACK (bytes at 0xE0 + 4n, read-only): see [`GlobalIack`]'s registers; these look at this
@@ -260,6 +261,8 @@ impl Intc {
                 Reg::Iconfig
             }
             0x1C..0x20 if end <= 0x20 => {
+                // guess: a word or longword over SIMR, CIMR, CLMASK and SLMASK is one access per byte register,
+                // big-endian; the RM gives them as 8-bit registers only.
                 if self.index != 0 {
                     for (o, name) in [(0x1E, "CLMASK"), (0x1F, "SLMASK")] {
                         if (offset..end).contains(&o) {

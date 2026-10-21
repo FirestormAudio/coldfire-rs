@@ -185,6 +185,8 @@ fn frames_pop_two_words_every_2750_cycles() {
 
 #[test]
 fn empty_fifo_underruns_with_silence_and_tue() {
+    // guess: the frame sends silence and empties the FIFO, where RM Table 35-8 re-transmits the previous data on
+    // an underrun. Not measured.
     let mut b = board();
     b.configure(1, 0);
     b.w(CR, RUN);

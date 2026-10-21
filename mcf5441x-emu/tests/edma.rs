@@ -5,7 +5,7 @@ mod common;
 
 use std::collections::VecDeque;
 
-use mcf5441x_emu::soc::{Edma, Intc};
+use mcf5441x_emu::soc::{Edma, Intc, Unmodelled};
 use mcf5441x_emu::{Device, DeviceCx, DeviceId, Fault, Limit, Machine, Size, Stop, StopReason};
 
 const EDMA: u32 = 0xFC04_4000;
@@ -795,7 +795,8 @@ fn start_channel(m: &mut Machine, saddr: u32, daddr: u32) {
 
 #[test]
 fn software_start_runs_one_minor_loop() {
-    // the aligned control case, measured on an MCF54415: the data moves and DONE is set; START clears
+    // the aligned control case, measured on an MCF54415: the data moves and DONE is set. START clears as the
+    // channel begins (RM Table 19-31)
     let (mut m, _, _) = board(1);
     start_channel(&mut m, 0x4030_0000, 0x4030_0100);
     assert_eq!(
@@ -971,4 +972,65 @@ fn a_core_in_stop_wakes_on_the_interrupt_of_a_dma_it_waits_for() {
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.mem.peek(0x4030_0000, 1).unwrap(), [ARRIVAL as u8]);
     assert!(m.now() >= 1000);
+}
+
+#[test]
+fn a_permissive_edma_takes_serq_on_any_channel() {
+    // Edma::new() has every request line as driven: SERQ on a channel nobody drives just waits
+    let (mut m, _, _) = board(1);
+    for ch in [3, 39, 58] {
+        w(&mut m, SERQ, Size::Byte, ch);
+    }
+    no_halt(&mut m);
+}
+
+#[test]
+fn serq_outside_the_driven_lines_is_refused_but_software_start_runs() {
+    let mut m = Machine::new();
+    m.mem.map_ram(RAM, 0x0100_0000);
+    m.add_bus_master(EDMA, 0x2000, Box::new(Edma::with_driven(1 << 2)));
+    w(&mut m, SERQ, Size::Byte, 2);
+    assert_eq!(
+        refused(&mut m, SERQ, Size::Byte, Some(1)),
+        "eDMA: channel 1: its peripheral request is not modelled"
+    );
+    // a software start needs no peripheral request: START works on any channel
+    start_channel(&mut m, 0x4030_0000, 0x4030_0100);
+    assert_eq!(
+        m.mem.peek(0x4030_0100, 4).unwrap(),
+        [0x11, 0x22, 0x33, 0x44]
+    );
+    assert_eq!(get(&mut m, 1, CSR), DONE);
+    no_halt(&mut m);
+}
+
+#[test]
+fn a_host_access_refused_by_a_bus_error_leaves_no_halt_pending() {
+    // the served transfer's write reaches a block that refuses it: the SERQ fails with the eDMA's detail, and
+    // nothing is left for the next run
+    const BLOCK: u32 = 0xFC0E_8000;
+    let (mut m, _, port) = board(5);
+    m.add_device(BLOCK, 0x1000, Box::new(Unmodelled::new("a block")));
+    tcd(
+        &mut m,
+        5,
+        &[
+            (SADDR, PORT + RX),
+            (ATTR, 0x0202),
+            (SOFF, 0),
+            (NBYTES, 4),
+            (DADDR, BLOCK),
+            (DOFF, 0),
+            (CITER, 1),
+            (BITER, 1),
+        ],
+    );
+    push(&mut m, port, 7);
+    let d = refused(&mut m, SERQ, Size::Byte, Some(5));
+    assert!(
+        d.contains("eDMA channel 5") && d.contains("bus error writing"),
+        "{d}"
+    );
+    w(&mut m, CERQ, Size::Byte, 5);
+    no_halt(&mut m);
 }

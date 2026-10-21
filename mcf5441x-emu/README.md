@@ -112,7 +112,7 @@ assert_eq!(m.access(0xFC06_000C, mcf5441x_emu::Size::Byte, None), Ok(u32::from(b
 |---|---|---|---|
 | 0xFC04_8000, 0xFC04_C000, 0xFC05_0000 | INTC0, INTC1, INTC2 | | |
 | 0xFC05_4000 | global IACK registers | | |
-| 0xFC04_4000 (8 KB) | eDMA, a bus master | channels 0-15: INTC0 8-23; 16-55: INTC1 8-47; 56-63: INTC2 0 | |
+| 0xFC04_4000 (8 KB) | eDMA, a bus master | channels 0-15: INTC0 8-23; 16-55: INTC1 8-47; 56-63: INTC2 0 | software: 30, 31, 42, 43, 46, 47 |
 | 0xFC08_0000 + 0x4000 n | PIT0-PIT3 | INTC2 13-16 | |
 | 0xFC06_0000 + 0x4000 n | UART0-UART3 | INTC0 26-29 | receive: 2, 4, 6, 16 |
 | 0xEC06_0000 + 0x4000 n | UART4-UART7 | INTC1 48-51 | receive: 18, 20, 22, 32 |
@@ -147,14 +147,17 @@ fault as unmapped.
   accesses read all ones and write nothing (measured on an MCF54415).
 - **eDMA** (RM ch. 19): 64 channels served at their peripheral's request or by START/SSRT, 8- and 32-bit
   transfers, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR and D_REQ; misaligned addresses are configuration
-  errors with ES as measured on an MCF54415.
+  errors with ES as measured on an MCF54415. On the built chip SERQ is taken only on the request lines a model
+  drives (the table's last column) and the channels RM Table 19-6 leaves to software (30, 31, 42, 43, 46, 47);
+  START and SSRT work on every channel.
 - **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character
   per character time (a status read 3 ticks after a write to an idle transmitter sees TXRDY again: measured on an
   MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing
   errors; the receive DMA request.
 - **SSI0-1** (RM ch. 35): I2S master or network mode with transmit and receive FIFO 0, one frame per frame period,
   the watermark DMA requests; 24-bit words send bits 23:0 of a FIFO word (measured on an MCF54415); an underrun sends
-  silence. The host supplies the received samples and reads what was sent.
+  silence and empties the FIFO (where the RM re-transmits the previous data). The host supplies the received samples
+  and reads what was sent.
 - **DSPI0-3** (RM ch. 40): master mode, 8- and 16-bit frames through CTAR0/1, the FIFOs, EOQ and the transfer counter;
   frames take no time. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select.
 - **eSDHC** (RM ch. 25): commands, responses and block reads through DATPORT, drained by eDMA channel 59, with an
@@ -165,15 +168,15 @@ fault as unmapped.
 - **DDR controller** (RM ch. 21): the registers, with the reset values and the INTSTATUS after START measured on an
   MCF54415; the DDR itself is RAM.
 - **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, always locked.
-- **NFC** (RM ch. 22): page reads into the buffer from a [`NandArray`](soc::NandArray), with the ECC status byte and
-  the reset values measured on an MCF54415.
+- **NFC** (RM ch. 22): page reads into the buffer from a [`NandArray`](soc::NandArray), with the ECC status byte
+  as the RM describes it; the reset values measured on an MCF54415.
 
 ### What refuses
 
 A feature a model leaves out is a tripwire, not a silent difference: the access that reaches it is refused (the
 instruction does not complete, PC stays on it) and the run stops with `Stop::Unmodelled`, the detail naming the
-block and the feature. Among them: eDMA scatter/gather, channel linking, other transfer sizes and error
-interrupts; UART FIFO-full receive requests, multidrop and loopback modes; SSI configurations outside I2S master or
+block and the feature. Among them: eDMA scatter/gather, channel linking, other transfer sizes, error interrupts
+and SERQ on a channel nothing drives; UART FIFO-full receive requests, multidrop and loopback modes; SSI configurations outside I2S master or
 network mode with FIFO 0, and its own interrupts; DSPI slave mode, CTAR2-7, interrupt and DMA requests, a push to a
 full FIFO; eSDHC write commands, its internal DMA and a clock divider change with the clock on; USB host mode, little-
 endian buffers and full-speed bulk packets over 64 bytes; NFC commands other than page reads, and its interrupt; access
@@ -204,15 +207,24 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
   the SCM and CCM stubs that hold the power-management registers gate nothing.
 - Time: one instruction is one tick, so code runs at one instruction per tick of whatever clock the board's options
   scale to; transfers, frames and register accesses take no bus time.
-- Interrupts the models do not raise (SSI, DSPI, NFC, the DDR controller, the PLL, the eDMA error interrupt) are never
-  asserted; where a model has their enables, setting them is refused (see each model).
+- Interrupts the models do not raise are never asserted. Setting the enables of the SSI's, the DSPI's and the NFC's
+  interrupts and of the eDMA error interrupt is refused (see each model); the DDR controller's INTMASK and the PLL's
+  LOCIRQ and LOLIRQ are stored, but neither model ever raises its interrupt, and neither is wired to an interrupt
+  controller.
+- DMA requests nothing drives: the UART transmit requests (and every request line of a block that is not modelled,
+  or whose model does not request DMA) are never asserted. On the built chip, SERQ on such a channel is refused,
+  naming the channel; a software start (START, SSRT) works on any channel.
+- Bus masters' accesses are not split: a misaligned access from the eDMA or USB reaches a device whole. The chip's
+  models refuse one that crosses a register.
 
 Open guesses (each a `guess:` comment in the code and its test): the PIT's expiry one count after PCNTR reads 0 and
 the prescaler's partial count on a PRE change; the UART hand-over to the shift register taking the shortest of the
 measured 2 to 9 instructions; the DSPI's FIFO counters with 16 entries and the deselect of a part reached by an
 idle-low select; the eSDHC's RSTA reset of the registers not measured and a data timeout one tick after the data
-phase; USB detach 100 µs after RS clears; the DDR controller's PADCR bit 9; the NFC's address increment after a
-single-page read and the ECC status in bypass mode; the PLL relocking at once; the NOR flash's WEL and WIP timing
+phase; USB detach 100 µs after RS clears; the SSI's underrun sending silence and emptying the FIFO, where RM Table
+35-8 re-transmits the previous data; the word and longword accesses over the INTC's 8-bit SIMR, CIMR, CLMASK and
+SLMASK; the DDR controller's PADCR bit 9; the NFC's address increment after a single-page read and its ECC status
+byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once; the NOR flash's WEL and WIP timing
 around a failed program.
 
 ## Running a program

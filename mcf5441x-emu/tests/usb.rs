@@ -574,6 +574,23 @@ fn run_cleared_detaches_after_100_us() {
 }
 
 #[test]
+fn run_set_again_within_100_us_stays_attached() {
+    // guess: the PHY drops the pull-up 100 µs after RS clears; setting RS again before then keeps it
+    let mut t = rig();
+    t.start();
+    t.usb(|u, cx| {
+        u.bus_reset_start(cx);
+        u.bus_reset_end(cx);
+    });
+    t.w(USBCMD, 0);
+    let at = t.m.now();
+    assert!(t.m.idle_until(at + 50 * US).is_none());
+    t.w(USBCMD, 1);
+    assert!(t.m.idle_until(at + 200 * US).is_none());
+    assert_ne!(t.r(PORTSC1) & CCS, 0);
+}
+
+#[test]
 fn a_controller_reset_before_the_detach_is_counted() {
     let mut t = rig();
     t.start();

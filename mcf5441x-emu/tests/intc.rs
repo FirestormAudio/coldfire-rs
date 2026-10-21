@@ -256,7 +256,8 @@ fn intc_register_basics() {
     assert_eq!(r(&mut m, INTC2 + IMRH, Size::Long), 0x1234_5678);
     assert_eq!(r(&mut m, INTC2 + IMRL, Size::Long), 0x9ABC_DEF0);
     // A word write to SIMR and CIMR together: SIMR wins (RM 17.2.6).
-    // guess: the CIMR byte is applied first, then the SIMR byte.
+    // guess: a word over the 8-bit SIMR and CIMR writes both (the RM gives only 8-bit accesses); the CIMR byte
+    // is applied first, then the SIMR byte.
     w(&mut m, INTC2 + IMRL, Size::Long, 0);
     w(&mut m, INTC2 + SIMR, Size::Word, 3 << 8 | 3);
     assert_eq!(r(&mut m, INTC2 + IMRL, Size::Long), 1 << 3);
@@ -455,7 +456,8 @@ fn level_mask_registers_are_only_in_intc0() {
     // ICONFIG keeps only ELVLPRI and EMASK (RM Table 17-9).
     w(&mut m, INTC0 + ICONFIG, Size::Word, 0xFFFF);
     assert_eq!(r(&mut m, INTC0 + ICONFIG, Size::Word), 0xFE20);
-    // CLMASK and SLMASK pack with SIMR and CIMR in a longword read.
+    // CLMASK and SLMASK pack with SIMR and CIMR in a longword read. guess: the RM gives the four as 8-bit
+    // registers only; a longword over them is the model's extension.
     w(&mut m, INTC0 + CLMASK, Size::Byte, 6);
     assert_eq!(r(&mut m, INTC0 + SIMR, Size::Long), 0x0000_0605);
 }

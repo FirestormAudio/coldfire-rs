@@ -59,6 +59,10 @@ impl DmaLines {
 /// is seen by the next instruction fetched, as with a write by the core. A device reached through it gets a
 /// [`DeviceCx`] with the master's clock and lines (and its own `Bus` when it is a bus master too).
 ///
+/// Accesses are not split: a misaligned word or longword reaches a device as one access at its offset (only the
+/// core splits misaligned accesses, RM Table 3-12), so it may run across two of the device's registers. The chip's
+/// models refuse such an access; a device of the board's should check for it.
+///
 /// It borrows the master's [`DeviceCx`] (see [`DeviceCx::bus`]): the lines it drives are the ones the master sees
 /// in `cx.irq` and `cx.dma` once the bus is dropped.
 pub struct Bus<'b> {
@@ -81,9 +85,9 @@ impl<'b> Bus<'b> {
         })
     }
 
-    /// Read a big-endian value of `size` at `addr`, zero-extended. An access is made as it is, even when it is
-    /// not aligned to its size (only the core splits misaligned accesses, RM Table 3-12). An access a device
-    /// refuses fails with [`Fault::Device`] and stops the run as [`DeviceCx::halt`] does.
+    /// Read a big-endian value of `size` at `addr`, zero-extended. An access is made as it is, not split, even
+    /// when it is not aligned to its size (only the core splits misaligned accesses, RM Table 3-12). An access a
+    /// device refuses fails with [`Fault::Device`] and stops the run as [`DeviceCx::halt`] does.
     pub fn read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
         if let Some(v) = self.space.ram_read(addr, size) {
             return Ok(v);

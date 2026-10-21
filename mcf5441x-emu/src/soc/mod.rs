@@ -28,8 +28,23 @@ pub use stub::{StubBlock, StubMode, Unmodelled};
 pub use uart::{Uart, UartConfig};
 pub use usb::{HostScript, Step, Token, UsbConfig, UsbKnobs, UsbOtg, UsbStats};
 
+/// Whether a `size` access at `offset` runs past the end of the 32-bit register at `offset & !3`. The core splits
+/// misaligned accesses (RM Table 3-12), so its accesses never do; a bus master's access is made whole
+/// ([`Bus`](crate::Bus)), and a block refuses one that crosses a register.
+fn crosses_register(offset: u32, size: crate::mem::Size) -> bool {
+    (offset & 3) + size.bytes() > 4
+}
+
+/// The detail of a refused access that crosses a register of `block`.
+fn crossing(block: &str, offset: u32, size: crate::mem::Size, what: &str) -> String {
+    format!(
+        "{block}: {}-byte {what} at +{offset:#x} crosses a 32-bit register",
+        size.bytes()
+    )
+}
+
 /// The bits a `size` access at `offset` covers in the big-endian 32-bit register at `offset & !3`, as (shift,
-/// mask). The core splits misaligned accesses (RM Table 3-12), so an access never crosses a register.
+/// mask). The access must not cross the register ([`crosses_register`]).
 fn lanes(offset: u32, size: crate::mem::Size) -> (u32, u32) {
     let bytes = size.bytes();
     let shift = (4 - (offset & 3) - bytes) * 8;

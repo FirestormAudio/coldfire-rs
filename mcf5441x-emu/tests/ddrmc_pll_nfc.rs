@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use mcf5441x_emu::soc::{Ddrmc, NandArray, Nfc, Pll};
-use mcf5441x_emu::{DeviceId, Fault, Machine, Size, Stop};
+use mcf5441x_emu::{Device, DeviceId, Fault, Limit, Machine, Size, Stop};
 
 const DDR: u32 = 0xFC0B_8000;
 const PLL: u32 = 0xFC0C_0000;
@@ -406,6 +406,53 @@ fn nfc_row_address_auto_increments() {
     r.nfc_w(CMD2, READ_PAGE);
     assert_eq!(r.nfc_r(RAR), 0x1100_0201);
     assert_eq!(r.m.device::<Nfc>(r.nfc).reads(), [0xFF]);
+}
+
+#[test]
+fn nfc_row_address_increment_wraps_within_the_row_bits() {
+    // guess: as above; the row (RAR bits 23:0) wraps and the chip selects (bits 31:24) are kept
+    let mut r = rig();
+    r.nfc_w(CFG, CFG_READ | AIAD);
+    r.nfc_w(RAI, 1);
+    r.nfc_w(RAR, 0xFFFF_FFFF);
+    r.nfc_w(CMD2, READ_PAGE);
+    assert_eq!(r.nfc_r(RAR), 0xFF00_0000);
+    assert_eq!(r.m.device::<Nfc>(r.nfc).reads(), [0xFF_FFFF]);
+}
+
+/// A longword read, or a write, at `off` made by a bus master straight into device `id`: the detail it halts with.
+fn crossing<T: Device>(r: &mut Rig, id: DeviceId, off: u32, write: bool) -> String {
+    r.m.with_device::<T, _>(id, |d, cx| {
+        if write {
+            d.write(off, Size::Long, 0x1234_5678, cx);
+        } else {
+            d.read(off, Size::Long, cx);
+        }
+    });
+    let stop = r.m.run(Limit::default());
+    assert_eq!(stop.kind, Stop::Unmodelled, "{}", stop.detail);
+    stop.detail
+}
+
+#[test]
+fn accesses_crossing_a_register_are_refused() {
+    // only the core splits misaligned accesses (RM Table 3-12): a bus master's reaches the block whole
+    let mut r = rig();
+    let (ddr, pll, nfc) = (r.ddr, r.pll, r.nfc);
+    for write in [false, true] {
+        let d = crossing::<Ddrmc>(&mut r, ddr, 0x26, write);
+        assert!(
+            d.starts_with("DDR controller:") && d.contains("crosses"),
+            "{d}"
+        );
+        let d = crossing::<Pll>(&mut r, pll, 0x3, write);
+        assert!(d.starts_with("PLL:") && d.contains("crosses"), "{d}");
+        let d = crossing::<Nfc>(&mut r, nfc, 0x3EFE, write);
+        assert!(d.starts_with("NFC:") && d.contains("crosses"), "{d}");
+    }
+    assert_eq!(r.m.device::<Pll>(pll).writes(), []);
+    assert_eq!(r.m.device::<Ddrmc>(ddr).writes(), []);
+    assert_eq!(r.read(DDR + CR09, Size::Long), 0);
 }
 
 #[test]

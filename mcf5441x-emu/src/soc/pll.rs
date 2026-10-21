@@ -1,6 +1,6 @@
 //! The PLL's registers in the clock module (RM ch. 8).
 
-use super::{lane_merge, lane_read};
+use super::{crosses_register, crossing, lane_merge, lane_read};
 use crate::device::{Device, DeviceCx};
 use crate::mem::Size;
 use crate::stop::Stop;
@@ -28,8 +28,10 @@ const LOCK: u32 = 1 << 4;
 ///   and LOC is status (RM Table 8-5); the model never loses lock or clock, so they read 0 and no write changes SR.
 ///   guess: there is no relock time; a new CR or DR leaves the PLL locked.
 ///
-/// The rest of the window reads 0 and ignores writes. Nothing derives a clock from the dividers: time is the
-/// board's, in ticks. Every accepted write is recorded ([`Pll::writes`]).
+/// The rest of the window reads 0 and ignores writes. An access that crosses a register (from a bus master) is
+/// refused with [`Stop::Unmodelled`]. The interrupt enables PLL_CR\[LOCIRQ\] and \[LOLIRQ\] are stored, but the
+/// model never loses clock or lock, so no interrupt is raised (and none is wired). Nothing derives a clock from
+/// the dividers: time is the board's, in ticks. Every accepted write is recorded ([`Pll::writes`]).
 #[derive(Debug)]
 pub struct Pll {
     cr: u32,
@@ -63,11 +65,18 @@ impl Pll {
 }
 
 impl Device for Pll {
-    fn read(&mut self, offset: u32, size: Size, _cx: &mut DeviceCx) -> u32 {
+    fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32 {
+        if crosses_register(offset, size) {
+            cx.refuse(Stop::Unmodelled, crossing("PLL", offset, size, "read"));
+            return 0;
+        }
         lane_read(self.register(offset & !3), offset, size)
     }
 
     fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx) {
+        if crosses_register(offset, size) {
+            return cx.refuse(Stop::Unmodelled, crossing("PLL", offset, size, "write"));
+        }
         let reg = offset & !3;
         if reg == PLL_DR && size != Size::Long {
             return cx.refuse(

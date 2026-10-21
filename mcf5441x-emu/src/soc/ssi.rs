@@ -99,10 +99,11 @@ pub struct SsiCounters {
 /// words. Each frame pops a word per slot from transmit FIFO 0 and records the words sent, each its low word-length
 /// bits sign-extended, with the tick ([`Ssi::capture`]): for 24-bit words bits 23:0 of a FIFO word are sent
 /// (measured on an MCF54415, with TCR\[TXBIT0\] clear). A frame that finds fewer words than slots underruns: it
-/// sends silence, sets ISR\[TUE0\] and empties the FIFO (the odd word goes with the frame). While RE is set too, the
-/// frame then pushes the words of the received line ([`Ssi::set_source`]: one per slot, cut or padded with 0) into
-/// receive FIFO 0, each masked to the word length and sign-extended to 32 bits when RCR\[RXEXT\] is set; a frame
-/// that does not fit is dropped, setting ISR\[ROE0\].
+/// sends silence, sets ISR\[TUE0\] and empties the FIFO (the odd word goes with the frame). guess: this differs
+/// from the RM, which re-transmits the previous data on an underrun (RM Table 35-8); not measured. While RE is set
+/// too, the frame then pushes the words of the received line ([`Ssi::set_source`]: one per slot, cut or padded with
+/// 0) into receive FIFO 0, each masked to the word length and sign-extended to 32 bits when RCR\[RXEXT\] is set; a
+/// frame that does not fit is dropped, setting ISR\[ROE0\].
 ///
 /// Clearing TE with SSI_EN kept stops the frames at once and sets ISR\[TFRC\] at the end of the frame in progress
 /// (RM Table 35-8); setting TE again starts a frame period afresh and clears TFRC. Clearing SSI_EN resets the status
@@ -387,6 +388,8 @@ impl Ssi {
             let words = words.into_iter().map(|w| self.signed(w)).collect();
             self.capture.push((t, words));
         } else {
+            // guess: silence and an emptied FIFO; RM Table 35-8 says the previous data is re-transmitted on an
+            // underrun. Not measured.
             self.tue = true;
             self.starved = true;
             self.counters.underruns += 1;

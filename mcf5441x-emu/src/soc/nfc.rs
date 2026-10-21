@@ -85,7 +85,9 @@ pub struct NandArray {
 /// modelled.
 ///
 /// The buffer is one byte array taking accesses of any size, big-endian (RM 22.4.1: the CPU sees each buffer at
-/// a contiguous address outside boot mode; guess: the gaps between the buffers read and write like the rest).
+/// a contiguous address outside boot mode; guess: the gaps between the buffers read and write like the rest). An
+/// access that runs from the buffer into the registers (only a bus master's can, the core splits misaligned
+/// accesses) is refused with [`Stop::Unmodelled`].
 ///
 /// Registers (32-bit accesses only; anything else is refused with [`Stop::Unmodelled`]), with their reset values
 /// (RM Table 22-3, all measured on an MCF54415):
@@ -112,8 +114,8 @@ pub struct NandArray {
 ///    bad row, else 0 (RM 22.4.2 and Table 22-19); without it, writes nothing (RM Table 22-17). With
 ///    CFG\[ECCMODE\] 0 (ECC bypass) the byte is 0 even for a bad row (guess: the RM leaves bypass's status open;
 ///    nothing is corrected, so nothing is found uncorrectable);
-/// 4. with CFG\[AIAD\] set, adds RAI to RAR's row bytes (guess: RM Figure 22-18 does it after each page, also
-///    when there is only one);
+/// 4. with CFG\[AIAD\] set, adds RAI to RAR's row bytes, wrapping within them (guess: RM Figure 22-18 does it
+///    after each page, also when there is only one);
 /// 5. with CFG\[AIBN\] set (as at reset), moves CMD2\[BUFNO\] on by one, modulo 4 (RM Figure 22-18), so a command
 ///    restarted as it stands reads into buffer 1 and is refused;
 /// 6. sets ISR\[DONE\] and ISR\[IDLE\]. The read takes no time.
@@ -237,7 +239,7 @@ impl Nfc {
             self.buffer[at] = if failed { CORFAIL } else { 0 };
         }
         if self.cfg & AIAD != 0 {
-            self.rar = self.rar & 0xFF00_0000 | (self.rar + self.rai) & 0x00FF_FFFF;
+            self.rar = self.rar & 0xFF00_0000 | self.rar.wrapping_add(self.rai) & 0x00FF_FFFF;
         }
         if self.cfg & AIBN != 0 {
             let bufno = ((self.cmd2 >> 1 & 3) + 1) & 3;
@@ -294,8 +296,25 @@ impl Nfc {
     }
 }
 
+/// Whether an access of `size` at `offset` runs from the buffer into the registers. Only the core splits misaligned
+/// accesses (RM Table 3-12); a bus master's access reaches the block whole.
+fn crosses(offset: u32, size: Size) -> bool {
+    offset < REGS && offset + size.bytes() > REGS
+}
+
+fn crossing(offset: u32, size: Size, what: &str) -> String {
+    format!(
+        "NFC: {}-byte {what} at +{offset:#x} crosses from the buffer into the registers",
+        size.bytes()
+    )
+}
+
 impl Device for Nfc {
     fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32 {
+        if crosses(offset, size) {
+            cx.refuse(Stop::Unmodelled, crossing(offset, size, "read"));
+            return 0;
+        }
         if offset < REGS {
             let at = offset as usize;
             let bytes = &self.buffer[at..at + size.bytes() as usize];
@@ -331,6 +350,9 @@ impl Device for Nfc {
     }
 
     fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx) {
+        if crosses(offset, size) {
+            return cx.refuse(Stop::Unmodelled, crossing(offset, size, "write"));
+        }
         if offset < REGS {
             let at = offset as usize;
             let n = size.bytes() as usize;

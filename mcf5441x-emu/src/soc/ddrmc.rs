@@ -1,8 +1,9 @@
 //! The DDR SDRAM memory controller, DDRMC (RM ch. 21): its registers only; the DDR memory itself is RAM.
 
-use super::{lane_merge, lane_read};
+use super::{crosses_register, crossing, lane_merge, lane_read};
 use crate::device::{Device, DeviceCx};
 use crate::mem::Size;
+use crate::stop::Stop;
 
 /// DDR_CR09 START (RM Table 21-14).
 const CR09: u32 = 0x24;
@@ -55,8 +56,10 @@ const PADCR_RESET: u32 = 0x200;
 ///   1 (guess: the figure shows it read-only, "must be set").
 ///
 /// The rest of the window reads 0 and ignores writes. Narrow accesses read and write the big-endian byte lanes of a
-/// register (guess: the RM gives only 32-bit widths). No interrupt is raised (the controller's interrupt and
-/// INTMASK are not modelled). Every write is recorded ([`Ddrmc::writes`]).
+/// register (guess: the RM gives only 32-bit widths); one that crosses a register (from a bus master) is refused
+/// with [`Stop::Unmodelled`]. No interrupt is raised: CR26\[INTMASK\] is stored like the rest of CR26, but the
+/// model never asserts the controller's interrupt and it is wired to no interrupt source. Every write is recorded
+/// ([`Ddrmc::writes`]).
 #[derive(Debug)]
 pub struct Ddrmc {
     cr: [u32; 64],
@@ -109,11 +112,24 @@ impl Ddrmc {
 }
 
 impl Device for Ddrmc {
-    fn read(&mut self, offset: u32, size: Size, _cx: &mut DeviceCx) -> u32 {
+    fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32 {
+        if crosses_register(offset, size) {
+            cx.refuse(
+                Stop::Unmodelled,
+                crossing("DDR controller", offset, size, "read"),
+            );
+            return 0;
+        }
         lane_read(self.register(offset & !3), offset, size)
     }
 
-    fn write(&mut self, offset: u32, size: Size, value: u32, _cx: &mut DeviceCx) {
+    fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx) {
+        if crosses_register(offset, size) {
+            return cx.refuse(
+                Stop::Unmodelled,
+                crossing("DDR controller", offset, size, "write"),
+            );
+        }
         self.writes.push((offset, size, value));
         let reg = offset & !3;
         let new = lane_merge(self.register(reg), offset, size, value);

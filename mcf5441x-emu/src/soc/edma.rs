@@ -107,6 +107,8 @@ enum Activation {
 /// - error interrupts: SEEI, or a nonzero write to EEIH/EEIL (INTC0 source 24 is not driven)
 /// - writing TCD CSR E_SG or MAJOR_E_LINK (scatter/gather, channel linking; with DONE set they are forced to 0,
 ///   RM Table 19-31)
+/// - SERQ on a channel whose request line nothing drives ([`Edma::with_driven`]; [`Edma::new`] takes every line
+///   as driven)
 ///
 /// and, when a channel is activated (refused when the activation comes from a register write, a halt when it
 /// comes from a request served at the boundary):
@@ -128,6 +130,8 @@ pub struct Edma {
     err: u64,
     /// ES without VLD: ERRCHN and the error bits of the last error.
     es: u32,
+    /// The channels whose request lines something drives: SERQ is refused on the others.
+    driven: u64,
 }
 
 impl Default for Edma {
@@ -157,14 +161,25 @@ fn mod_add(addr: u32, off: i32, modulo: u32) -> u32 {
 
 impl Edma {
     /// An eDMA in its reset state: no request enabled, no interrupt or error, TCDs zero (the RM leaves most of the
-    /// TCD undefined at reset).
+    /// TCD undefined at reset). Every channel's request line counts as driven (see [`Edma::with_driven`]).
     pub fn new() -> Edma {
         Edma {
+            driven: u64::MAX,
             tcd: vec![0; 64 * 32],
             erq: 0,
             int: 0,
             err: 0,
             es: 0,
+        }
+    }
+
+    /// An eDMA in its reset state whose peripheral requests are modelled only on the channels in `driven` (bit
+    /// `n` is channel `n`): SERQ on any other channel is refused with [`Stop::Unmodelled`], since its request
+    /// would never come. A software start (TCD CSR\[START\], SSRT) needs no request and works on every channel.
+    pub fn with_driven(driven: u64) -> Edma {
+        Edma {
+            driven,
+            ..Edma::new()
         }
     }
 
@@ -411,6 +426,10 @@ impl Edma {
             return;
         }
         match offset {
+            SERQ if self.driven & 1 << ch == 0 => cx.refuse(
+                Stop::Unmodelled,
+                format!("eDMA: channel {ch}: its peripheral request is not modelled"),
+            ),
             SERQ => {
                 self.erq |= 1 << ch;
                 cx.dma.set_enabled(self.erq);

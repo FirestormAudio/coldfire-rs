@@ -233,7 +233,8 @@ pub struct UsbStats {
 /// - USBCMD (0x0008_0000): stored. RST resets the controller (every register to its reset value; OTGSC keeps its
 ///   VBUS bits) and reads 0. Setting RS is refused unless USBMODE selects device mode with ES = 1 (big-endian
 ///   buffers): host mode and little-endian buffers are not modelled. Clearing RS while attached detaches 100 µs
-///   later (PORTSC1\[CCS\] clears; guess: the PHY takes a while to drop the pull-up). A setup clears SUTW.
+///   later (PORTSC1\[CCS\] clears; guess: the PHY takes a while to drop the pull-up), unless RS is set again
+///   before then. A setup clears SUTW.
 /// - USBSTS (0x80): write 1 to clear. The model sets UI, UEI, PCI, SEI and URI.
 /// - USBINTR (0), USBMODE (0), BURSTSIZE (0x0101): stored.
 /// - DEVICEADDR (0): USBADR (31:25) only; this part has no USBADRA (RM Table 24-25), so an address takes effect at
@@ -855,6 +856,10 @@ impl UsbOtg {
         if self.running() && v & RS == 0 && self.portsc & CCS != 0 {
             // guess: the PHY drops the pull-up 100 µs after RS clears
             self.detach_at = Some(now + 100 * self.config.ticks_per_us);
+        }
+        if v & RS != 0 {
+            // guess: setting RS again before the detach keeps the pull-up
+            self.detach_at = None;
         }
         self.usbcmd = v;
         Ok(())

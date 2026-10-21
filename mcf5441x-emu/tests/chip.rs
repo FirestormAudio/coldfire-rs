@@ -607,3 +607,37 @@ fn uart_rx_through_edma_on_the_built_chip() {
     );
     assert_eq!(m.device::<Uart>(chip.uart[8]).lost(), 0);
 }
+
+#[test]
+fn serq_on_a_channel_nothing_drives_is_refused() {
+    // UART transmit requests (RM Table 19-6: channel 3 is UART0 transmit) are never driven by the UART model:
+    // enabling one is refused, the channel named. A line a model drives, and a channel RM Table 19-6 lists as
+    // "available for software" (30, 31, 42, 43, 46, 47), take SERQ.
+    let (mut m, _) = built();
+    assert_eq!(
+        m.access(EDMA + 0x18, Size::Byte, Some(3)),
+        Err(Fault::Device(Stop::Unmodelled))
+    );
+    let detail = m.take_refusal().expect("a refusal").detail;
+    assert_eq!(
+        detail,
+        "eDMA: channel 3: its peripheral request is not modelled"
+    );
+    let (_, _, _, rx) = UART[0];
+    let driven = [rx, SSI[0].1, SSI[0].2, SSI[1].1, SSI[1].2, ESDHC_CH];
+    for ch in driven.into_iter().chain([30, 31, 42, 43, 46, 47]) {
+        w(&mut m, EDMA + 0x18, Size::Byte, u32::from(ch));
+    }
+    for ch in UART.map(|u| u.3) {
+        w(&mut m, EDMA + 0x18, Size::Byte, u32::from(ch));
+    }
+    for ch in [0, 12, 13, 39, 56, 58, 63] {
+        assert_eq!(
+            m.access(EDMA + 0x18, Size::Byte, Some(ch)),
+            Err(Fault::Device(Stop::Unmodelled)),
+            "channel {ch}"
+        );
+        let d = m.take_refusal().expect("a refusal").detail;
+        assert!(d.contains(&format!("channel {ch}:")), "{d}");
+    }
+}
