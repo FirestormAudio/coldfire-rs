@@ -63,6 +63,7 @@ const READ_PAGE: u32 = 0x007E_E001;
 const ECCSRAM: u32 = 1 << 21;
 const DMAREQ: u32 = 1 << 20;
 const AIAD: u32 = 1 << 5;
+const AIBN: u32 = 1 << 4;
 const CFG_READ: u32 = 0x000E_0001 | ECCSRAM;
 /// The ECC status byte goes to buffer byte 0x3F8 (ECCAD 0x7F).
 const ECCAD: u32 = 0x7F;
@@ -176,7 +177,8 @@ fn ddr_init_done_follows_start() {
     r.write(DDR + CR09, Size::Long, 0x0000_0100);
     assert_eq!(r.read(DDR + CR27, Size::Long), 0, "no START, no init");
     r.write(DDR + CR09, Size::Long, START | 0x100);
-    // INTSTATUS bit 3, with bit 8 the OR of bits 7:0 (RM Table 21-32).
+    // INTSTATUS bit 3, with bit 8 the OR of bits 7:0 (RM Table 21-32): 0x108, measured on an MCF54415 after
+    // the controller's initialization.
     assert_eq!(r.read(DDR + CR27, Size::Long), INT_ANY | INIT_DONE);
     assert_eq!(r.read(DDR + CR09, Size::Long), START | 0x100);
     // CR27 is read-only: a write changes nothing.
@@ -222,6 +224,9 @@ fn ddr_writes_are_recorded_in_order() {
     // landing in its byte lanes.
     assert_eq!(r.read(DDR + RCR, Size::Long), 0);
     assert_eq!(r.read(DDR + PADCR, Size::Long), 0x0001_0201);
+    // guess: PADCR bit 9 reads 1 and cannot be cleared (RM Figure 21-56 shows it read-only).
+    r.write(DDR + PADCR, Size::Long, 0x0003_0001);
+    assert_eq!(r.read(DDR + PADCR, Size::Long), 0x0003_0201);
     assert_eq!(r.read(DDR + 0x08, Size::Long), 0x0102_0007);
     assert_eq!(r.read(DDR + 0x0A, Size::Word), 0x0007);
     assert_eq!(r.read(DDR + 0x09, Size::Byte), 0x02);
@@ -367,6 +372,28 @@ fn nfc_bad_row_reports_ecc_failure() {
     // Byte 0x3F8 lies past the payload, so the read leaves it alone.
     assert_eq!(r.buffer(ECCAD * 8, 1), [0x55]);
     assert_eq!(r.m.device::<Nfc>(r.nfc).reads(), [4, 4]);
+    // guess: with ECCMODE 0 (bypass) nothing is corrected or found uncorrectable: the status byte is 0.
+    r.nfc_w(CFG, ECCAD << 22 | ECCSRAM | 1);
+    r.nfc_w(CMD2, READ_PAGE);
+    assert_eq!(r.buffer(ECCAD * 8, 1), [0]);
+}
+
+#[test]
+fn nfc_buffer_number_auto_increments() {
+    // With CFG[AIBN] set (as at reset), a read moves CMD2[BUFNO] on by one (RM Figure 22-18), so restarting the
+    // command reads into buffer 1, which the model refuses.
+    let mut r = rig();
+    r.nfc_w(CFG, CFG_READ | AIBN);
+    r.nfc_w(CMD2, READ_PAGE);
+    let cmd2 = r.nfc_r(CMD2);
+    assert_eq!(cmd2, READ_PAGE & !1 | 1 << 1, "BUFNO 1");
+    let d = r.refused(NFC_REGS + CMD2, Size::Long, Some(cmd2 | 1));
+    assert!(d.contains("buffer 1"), "{d}");
+    // Without AIBN, BUFNO stays.
+    r.nfc_w(CFG, CFG_READ);
+    r.nfc_w(CMD2, READ_PAGE);
+    assert_eq!(r.nfc_r(CMD2), READ_PAGE & !1);
+    assert_eq!(r.m.device::<Nfc>(r.nfc).reads(), [0, 0]);
 }
 
 #[test]

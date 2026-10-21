@@ -19,8 +19,9 @@ const READ_ONLY: [u32; 5] = [CR27, 0x78, 0xB0, 0xD4, 0xDC];
 /// DDR_RCR; RST is write-only and reads 0 (RM Table 21-58).
 const RCR: u32 = 0x180;
 const RCR_RST: u32 = 1 << 30;
-/// DDR_PADCR.
+/// DDR_PADCR; bit 9 is reserved and reads 1 (RM Figure 21-56).
 const PADCR: u32 = 0x1AC;
+const PADCR_ONES: u32 = 1 << 9;
 
 /// Reset values of CR00..CR63 that are not 0, measured on an MCF54415 with the controller's clock on. RM Table 21-4
 /// agrees on CR13, CR20, CR21, CR23 and CR44; it lists 0 for CR03 and CR22.
@@ -47,10 +48,11 @@ const PADCR_RESET: u32 = 0x200;
 ///   - the read-only CR27, CR30, CR44 (VERSION, 0x2040), CR53 and CR55 (RM Table 21-4) ignore writes;
 ///   - CR27 INTSTATUS bit 3 (DRAM initialization complete) sets when a write sets CR09\[START\] while it was clear
 ///     (the controller's initialization takes no time; guess: rewriting START while set does not restart it), with
-///     bit 8 the OR of bits 7:0 (RM Table 21-32), and CR25\[INTACK\] (write-only, reads 0) clears the INTSTATUS
+///     bit 8 the OR of bits 7:0 (RM Table 21-32): 0x108 after START, measured on an MCF54415. And CR25\[INTACK\] (write-only, reads 0) clears the INTSTATUS
 ///     bits it names (RM Table 21-30).
 /// - DDR_RCR (+0x180, 0): RST is write-only and reads 0 (RM Table 21-58); the rest reads back.
-/// - DDR_PADCR (+0x1AC, 0x200; guess: RM Figure 21-56's bit 9, where Table 21-4 says 0): reads back.
+/// - DDR_PADCR (+0x1AC, 0x200; guess: RM Figure 21-56's bit 9, where Table 21-4 says 0): reads back, bit 9 always
+///   1 (guess: the figure shows it read-only, "must be set").
 ///
 /// The rest of the window reads 0 and ignores writes. Narrow accesses read and write the big-endian byte lanes of a
 /// register (guess: the RM gives only 32-bit widths). No interrupt is raised (the controller's interrupt and
@@ -130,7 +132,7 @@ impl Device for Ddrmc {
             }
             0..=0xFC => self.cr[(reg / 4) as usize] = new,
             RCR => self.rcr = new & !RCR_RST,
-            PADCR => self.padcr = new,
+            PADCR => self.padcr = new | PADCR_ONES,
             _ => {}
         }
     }

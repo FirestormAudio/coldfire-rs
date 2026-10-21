@@ -53,6 +53,8 @@ const ECCSRAM: u32 = 1 << 21;
 const DMAREQ: u32 = 1 << 20;
 const BTMD: u32 = 1 << 6;
 const AIAD: u32 = 1 << 5;
+const AIBN: u32 = 1 << 4;
+const ECCMODE: u32 = 7 << 17;
 const PAGECNT: u32 = 0xF;
 /// NFC_ISR (RM Table 22-18).
 const WERR: u32 = 1 << 31;
@@ -107,10 +109,17 @@ pub struct NandArray {
 /// 1. records the row ([`Nfc::reads`]);
 /// 2. puts the row's data, padded with 0xFF, in the buffer from byte 0 up to the array's `payload`;
 /// 3. with CFG\[ECCSRAM\] set, writes the ECC status byte at buffer byte `CFG[ECCAD] * 8`: 0x80 (CORFAIL) for a
-///    bad row, else 0 (RM 22.4.2 and Table 22-19); without it, writes nothing (RM Table 22-17);
+///    bad row, else 0 (RM 22.4.2 and Table 22-19); without it, writes nothing (RM Table 22-17). With
+///    CFG\[ECCMODE\] 0 (ECC bypass) the byte is 0 even for a bad row (guess: the RM leaves bypass's status open;
+///    nothing is corrected, so nothing is found uncorrectable);
 /// 4. with CFG\[AIAD\] set, adds RAI to RAR's row bytes (guess: RM Figure 22-18 does it after each page, also
 ///    when there is only one);
-/// 5. sets ISR\[DONE\] and ISR\[IDLE\]. The read takes no time.
+/// 5. with CFG\[AIBN\] set (as at reset), moves CMD2\[BUFNO\] on by one, modulo 4 (RM Figure 22-18), so a command
+///    restarted as it stands reads into buffer 1 and is refused;
+/// 6. sets ISR\[DONE\] and ISR\[IDLE\]. The read takes no time.
+///
+/// SECSZ is stored but not used: how many bytes a read puts in the buffer is the array's `payload` (SECSZ counts
+/// the ECC bytes as well, which the model does not have, so the two cannot be compared).
 #[derive(Debug)]
 pub struct Nfc {
     array: NandArray,
@@ -224,14 +233,15 @@ impl Nfc {
         self.buffer[n..payload].fill(0xFF);
         if self.cfg & ECCSRAM != 0 {
             let at = (self.cfg >> 22 & 0x1FF) as usize * 8;
-            self.buffer[at] = if self.array.bad.contains(&row) {
-                CORFAIL
-            } else {
-                0
-            };
+            let failed = self.cfg & ECCMODE != 0 && self.array.bad.contains(&row);
+            self.buffer[at] = if failed { CORFAIL } else { 0 };
         }
         if self.cfg & AIAD != 0 {
             self.rar = self.rar & 0xFF00_0000 | (self.rar + self.rai) & 0x00FF_FFFF;
+        }
+        if self.cfg & AIBN != 0 {
+            let bufno = ((self.cmd2 >> 1 & 3) + 1) & 3;
+            self.cmd2 = self.cmd2 & !6 | bufno << 1;
         }
         self.isr |= DONE | IDLE;
     }
