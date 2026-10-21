@@ -8,6 +8,7 @@ pub mod pit;
 pub mod ssi;
 pub mod stub;
 pub mod uart;
+pub mod usb;
 
 pub use dspi::{Dspi, SpiDevice};
 pub use edma::Edma;
@@ -17,3 +18,4 @@ pub use pit::Pit;
 pub use ssi::{Ssi, SsiConfig, SsiCounters};
 pub use stub::{StubBlock, StubMode, Unmodelled};
 pub use uart::{Uart, UartConfig};
+pub use usb::{HostScript, Step, Token, UsbConfig, UsbKnobs, UsbOtg, UsbStats};
