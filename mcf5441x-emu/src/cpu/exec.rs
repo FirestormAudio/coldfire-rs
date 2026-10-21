@@ -27,7 +27,7 @@ pub fn unmodelled(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Faul
 
 /// The handler for `op`.
 pub const fn handler(op: Op) -> Handler {
-    use ops::{arith, bits, isac, logic, moves, muldiv, shift};
+    use ops::{arith, bits, flow, isac, logic, moves, muldiv, shift};
     match op {
         Op::Move => moves::move_,
         Op::Movea => moves::movea,
@@ -95,6 +95,19 @@ pub const fn handler(op: Op) -> Handler {
         Op::Bitrev => isac::bitrev,
         Op::Byterev => isac::byterev,
         Op::Tpf => isac::tpf,
+        Op::Nop => flow::nop,
+        Op::Bra => flow::bra,
+        Op::Bsr => flow::bsr,
+        Op::Bcc => flow::bcc,
+        Op::Jmp => flow::jmp,
+        Op::Jsr => flow::jsr,
+        Op::Rts => flow::rts,
+        Op::Lea => flow::lea,
+        Op::Pea => flow::pea,
+        Op::Link => flow::link,
+        Op::Unlk => flow::unlk,
+        Op::MovemRegsEa => flow::movem_regs_ea,
+        Op::MovemEaRegs => flow::movem_ea_regs,
         _ => unmodelled,
     }
 }

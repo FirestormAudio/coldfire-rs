@@ -408,10 +408,12 @@ fn unmapped_access_stops() {
 
 #[test]
 fn unimplemented_op_stops_unmodelled_with_its_mnemonic() {
-    let (mut m, end) = prepare("nop\nend:");
+    // A CAU instruction (CP0LD (A2), opword 0xFC92 plus its extension word): the table recognises it but the
+    // core does not execute it, which is not expected to change with the integer instructions.
+    let (mut m, end) = prepare(".short 0xfc92, 0x0000\nend:");
     let r = m.run(until(end));
     assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
-    assert!(r.detail.contains("nop"), "{r:?}");
+    assert!(r.detail.contains("cp0ld"), "{r:?}");
 }
 
 #[test]

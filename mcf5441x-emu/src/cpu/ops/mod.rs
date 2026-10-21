@@ -2,6 +2,7 @@
 
 pub mod arith;
 pub mod bits;
+pub mod flow;
 pub mod isac;
 pub mod logic;
 pub mod moves;

@@ -14,7 +14,8 @@ use crate::mem::{Fault, Memory, Size};
 /// | 0    | the `R` field (register in bits 11-9)                                                     |
 /// | 1    | the `r` field (register in the low bits)                                                  |
 /// | 2    | the first other opword field (`q`, `c`, `d`, `v`, `a`, `k` or `p`); MOVEQ's is sign-extended |
-/// | 3    | the last extension before the EA extension words (`w`, `ext` as read; `l`; `imm` by size)  |
+/// | 3    | the last extension before the EA extension words (`w`, `ext` as read; `l`; `imm` by size);  |
+/// |      | for BRA, BSR and Bcc the sign-extended displacement                                       |
 ///
 /// `ea` is the `m`/`e` field and `ea2` the `M`/`E` field (MOVE's destination), [`Ea::NONE`] when absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +151,15 @@ pub fn decode(mem: &mut Memory, pc: u32) -> Result<(Decoded, &'static Form), Dec
     }
     if form.id == Op::Moveq {
         operands[2] = sign_extend(Size::Byte, operands[2]);
+    }
+    if matches!(form.id, Op::Bra | Op::Bsr | Op::Bcc) {
+        // Slot 3 holds the branch displacement, sign-extended: the opword's byte, or the word or longword that
+        // follows it (CFPRM ch. 4 Bcc: byte 0x00 means a word follows, 0xFF a longword).
+        operands[3] = match size {
+            Size::Byte => sign_extend(Size::Byte, opword as u32),
+            Size::Word => sign_extend(Size::Word, operands[3]),
+            Size::Long => operands[3],
+        };
     }
 
     let ea = s.ea(f.ea(opword), size, pc)?;
