@@ -181,3 +181,26 @@ fn divide_by_zero_raises_vector_5() {
         assert_eq!(m.instructions(), 1, "{insn}");
     }
 }
+
+#[test]
+fn divide_by_zero_leaves_the_address_register() {
+    // A zero divisor read through (Ay)+ or -(Ay) must not move Ay: the exception frame points at the divide.
+    // (insn, A1 going in, address of the zero divisor)
+    let rows: [(&str, u32, u32); 4] = [
+        ("divu.w (%a1)+,%d0", MEM, MEM),
+        ("divs.l -(%a1),%d0", MEM + 4, MEM),
+        ("remu.l (%a1)+,%d2:%d0", MEM, MEM),
+        ("divs.w -(%a1),%d0", MEM + 2, MEM),
+    ];
+    for (insn, a1, at) in rows {
+        let (m, r) = run(insn, |m| {
+            m.cpu.a[1] = a1;
+            m.mem.write(at, Size::Long, 0).unwrap();
+            m.mem.write(MEM + 4, Size::Long, 0).unwrap();
+            m.cpu.d[0] = 100;
+        });
+        assert_eq!(r.kind, Stop::Exception(5), "{insn}");
+        assert_eq!(m.cpu.a[1], a1, "{insn}: A1 is unchanged");
+        assert_eq!(m.cpu.d[0], 100, "{insn}");
+    }
+}

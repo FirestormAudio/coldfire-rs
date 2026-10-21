@@ -52,8 +52,10 @@ fn overflow(cpu: &mut Cpu) -> Result<Flow, Fault> {
 /// DIVS.W and DIVU.W `<ea>y,Dx`: 32-bit Dx / 16-bit source; remainder in the upper word, quotient in the lower.
 #[inline(always)]
 fn div_w(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, signed: bool) -> Result<Flow, Fault> {
+    let before = cpu.a;
     let src = ea::load(cpu, mem, &d.ea, Size::Word)?;
     if src == 0 {
+        cpu.a = before;
         return Ok(cpu.raise(DIVIDE_BY_ZERO));
     }
     let r = d.operands[0] as usize & 7;
@@ -85,10 +87,13 @@ pub fn divu_w(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Faul
 /// is Dx (quotient into Dx) or another register (remainder into Dw, Dx unchanged). N and Z follow the quotient
 /// in both forms (CFPRM ch. 4 REMS, REMU condition codes).
 pub fn div_l(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
+    let before = cpu.a;
     let src = ea::load(cpu, mem, &d.ea, Size::Long)?;
     let ext = d.operands[3];
     let (x, w) = ((ext >> 12) as usize & 7, ext as usize & 7);
     if src == 0 {
+        // The frame points at the divide, so the (Ay)+ / -(Ay) update is undone.
+        cpu.a = before;
         return Ok(cpu.raise(DIVIDE_BY_ZERO));
     }
     let dividend = cpu.d[x];
