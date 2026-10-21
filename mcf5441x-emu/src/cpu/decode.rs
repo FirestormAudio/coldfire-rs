@@ -152,6 +152,12 @@ pub fn decode(mem: &mut Memory, pc: u32) -> Result<(Decoded, &'static Form), Dec
         .map_or(0, |x| (opword as u32 >> x.shift) & ((1 << x.width) - 1));
     for ext in form.ext.iter() {
         operands[3] = match ext {
+            // guess (STRLDSR): CFPRM ch. 8 gives the encoding as 0x40E7, 0x46FC, #imm and does not say what
+            // another second word does; it is taken to be an illegal instruction, as an unassigned opword is.
+            Ext::Ext if form.id == Op::Strldsr => match s.word()? {
+                0x46FC => 0x46FC,
+                _ => return Err(DecodeError::Vector(4)),
+            },
             Ext::Word | Ext::Ext => s.word()?,
             Ext::Long => s.long()?,
             Ext::Imm => s.imm(size)?,

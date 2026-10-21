@@ -75,7 +75,7 @@ impl Cpu {
             asid: 0,
             acr: [0; 8],
             mmubar: 0,
-            rgpiobar: 0,
+            rgpiobar: 0x8C00_0034,
             rambar: 0,
             emac: Emac::new(),
             sys: 0x2700,

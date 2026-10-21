@@ -332,6 +332,13 @@ fn andi_ori_eori_to_sr_are_illegal() {
 
 #[test]
 fn movec_writes_the_control_registers() {
+    // Reset values (RM Table 3-1).
+    let (m, _) = prepare("end:", &["end"]);
+    assert_eq!(
+        (m.cpu.cacr, m.cpu.asid, m.cpu.mmubar, m.cpu.rgpiobar),
+        (0, 0, 0, 0x8C00_0034)
+    );
+
     // ACR4-7 and RGPIOBAR (RM Table 3-1) are hand-encoded: the assembler does not name them.
     let src = "move.l #0x11,%d1\nmovec %d1,%cacr\nmove.l #0x22,%d1\nmovec %d1,%asid\n\
                move.l #0x33,%a1\nmovec %a1,%acr0\nmovec %a1,%acr3\n.short 0x4e7b,0x900c\n.short 0x4e7b,0x900f\n\
@@ -403,6 +410,20 @@ fn move_usp_and_s_bit_swap_stacks() {
 }
 
 #[test]
+fn move_usp_with_eusp_clear() {
+    // guess: CFPRM ch. 8 says MOVE to/from USP execute correctly when CACR[EUSP] is set and is silent when it is
+    // clear; both reach OTHER_A7 either way, and A7 itself is untouched.
+    let (mut m, l) = prepare(
+        "move.l #0x40800000,%a0\nmove.l %a0,%usp\nmove.l %usp,%a1\nend:",
+        &["end"],
+    );
+    assert_eq!(m.cpu.cacr & EUSP, 0);
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!((m.cpu.other_sp, m.cpu.a[1], m.cpu.a[7]), (USP, USP, STACK));
+}
+
+#[test]
 fn strldsr_pushes_sr_and_loads_the_immediate() {
     // STRLDSR #0x2700 is hand-encoded: the assembler accepts it only for ISA_A+ parts.
     let (mut m, l) = prepare(".short 0x40e7,0x46fc,0x2700\nend:", &["end"]);
@@ -412,6 +433,13 @@ fn strldsr_pushes_sr_and_loads_the_immediate() {
     assert_eq!(m.cpu.a[7], STACK - 4);
     assert_eq!(long(&mut m, STACK - 4), 0x0000_2315, "zero-filled SR");
     assert_eq!(m.cpu.sr(), 0x2700);
+
+    // guess: CFPRM ch. 8 gives the encoding as 0x40E7, 0x46FC, #imm and does not say what another second word
+    // does; 0x40E7 followed by anything else is an illegal instruction, with nothing pushed.
+    let (mut m, l) = prepare(".short 0x40e7,0x46fd,0x2700\nend:", &["end"]);
+    let r = m.run(until(l[0]));
+    assert_eq!((r.kind, r.pc), (Stop::Illegal, BASE), "{r:?}");
+    assert_eq!((m.cpu.a[7], m.cpu.sr()), (STACK, 0x2700));
 
     // An immediate with S clear is a privilege violation; nothing is pushed.
     let (mut m, l) = prepare(".short 0x40e7,0x46fc,0x0700\nend:", &["end"]);
@@ -489,6 +517,27 @@ fn address_error_frames_for_rts_and_jsr() {
     );
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 2);
+
+    // BSR to an odd target.
+    // guess: RM 3.3.4.2 describes JSR only; BSR is taken to push the return address first in the same way, so the
+    // frame sits below the pushed return address. The branch is hand-encoded (BSR.W, displacement 0x201).
+    let (mut m, l) = prepare(".short 0x6100,0x0201\nend: nop\nhandler: nop", &["handler"]);
+    set_vector(&mut m, 3, l[0]);
+    m.policy.stop_on[3] = false;
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK - 12);
+    assert_eq!(
+        long(&mut m, STACK - 12),
+        fv(4, 3, 0x2700) | FS_FETCH,
+        "guess: FS 0100"
+    );
+    assert_eq!(long(&mut m, STACK - 8), BASE);
+    assert_eq!(
+        long(&mut m, STACK - 4),
+        BASE + 4,
+        "guess: pushed before the error"
+    );
 
     // A PC that is already odd: the stacked PC is the odd address (guess, see `odd_pc_is_an_address_error`).
     let (mut m, l) = prepare("nop\nend: nop\nhandler: nop", &["handler"]);

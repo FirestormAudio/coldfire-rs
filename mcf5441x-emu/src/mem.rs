@@ -227,7 +227,7 @@ impl Memory {
             return self.device_write(addr, size, value);
         };
         self.ram[i].data[off..off + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
-        let (first, last) = (addr >> PAGE_SHIFT, (addr + n as u32 - 1) >> PAGE_SHIFT);
+        let (first, last) = (addr >> PAGE_SHIFT, (addr + (n as u32 - 1)) >> PAGE_SHIFT);
         if self.has_code(first) || self.has_code(last) {
             self.code_written(first, last);
         }
@@ -455,7 +455,7 @@ impl Memory {
         self.devices.level7(&self.irq)
     }
 
-    /// Copy `bytes` into RAM; fails with the first address that is not covered by a single RAM region. Devices are
+    /// Copy `bytes` into RAM; fails with `Unmapped` at `addr`, the start of the copy, unless a single RAM region covers all of `bytes`. Devices are
     /// not written.
     pub fn load(&mut self, addr: u32, bytes: &[u8]) -> Result<(), Fault> {
         if bytes.is_empty() {

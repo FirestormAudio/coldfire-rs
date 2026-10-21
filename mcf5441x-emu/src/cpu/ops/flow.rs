@@ -125,10 +125,13 @@ pub fn pea(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> 
 
 /// LINK.W Ay,#`<displacement>`: push Ay, load the stack pointer into Ay, then add the sign-extended displacement
 /// to the stack pointer.
+// guess (LINK A7): CFPRM ch. 4 gives "SP - 4 -> SP; Ay -> (SP); SP -> Ay; SP + dn -> SP" and does not call out
+// Ay = A7; read in that order, the value pushed is the decremented SP.
 pub fn link(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let r = d.operands[1] as usize & 7;
     let sp = cpu.a[7].wrapping_sub(4);
-    mem.write(sp, Size::Long, cpu.a[r])?;
+    let pushed = if r == 7 { sp } else { cpu.a[r] };
+    mem.write(sp, Size::Long, pushed)?;
     cpu.a[7] = sp;
     cpu.a[r] = sp;
     cpu.a[7] = sp.wrapping_add(ea::sign_extend(Size::Word, d.operands[3]));
@@ -136,6 +139,8 @@ pub fn link(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault>
 }
 
 /// UNLK Ax: Ax -> SP, pop Ax.
+// guess (UNLK A7): CFPRM ch. 4 does not call out Ax = A7; the popped longword is loaded last, so it wins over the
+// incremented SP.
 pub fn unlk(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let r = d.operands[1] as usize & 7;
     let sp = cpu.a[r];

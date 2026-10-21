@@ -432,7 +432,16 @@ impl Machine {
             // STOP: nothing to take yet, so jump the clock to the next event (or the time limit before it).
             match event {
                 Some(t) if self.can_wake() => {
-                    let t = t.max(self.mem.now);
+                    if t <= self.mem.now {
+                        // Every due event was just advanced; one still due would be advanced forever.
+                        return Err(self.stop(
+                            Stop::Halt("device event not advanced"),
+                            format!(
+                                "a device's next event stays at tick {t}, not after the clock ({}); the device must move its event forward in `advance`",
+                                self.mem.now
+                            ),
+                        ));
+                    }
                     self.mem.now = self.time_limit.map_or(t, |limit| t.min(limit));
                 }
                 _ => {

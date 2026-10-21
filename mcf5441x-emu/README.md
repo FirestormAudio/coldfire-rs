@@ -22,8 +22,10 @@ accumulator extensions (ACCext01 and ACCext23), and PAV/overflow behaviour when 
 
 - The FPU. This chip has none: FPU opcodes take the line-F exception (vector 11).
 - The CAU (cryptographic acceleration unit): its instructions stop the run with `Stop::Unmodelled` and the detail `CAU`.
-- MMU translation: the MMU registers accept writes, addresses are never translated.
-- Caches: CACR and ACR accept writes and have no effect.
+- MMU translation: MOVEC accepts a write to MMUBAR, the memory-mapped MMU registers are not mapped, and addresses are
+  never translated.
+- Caches: there is no cache model. CACR\[EUSP\] selects the separate user stack pointer; the rest of CACR and the ACRs
+  accept writes and have no effect.
 - Cycle timing: one instruction is one tick of the machine clock.
 
 ## Speed
@@ -58,8 +60,8 @@ block entries (`take_profile`).
 ## Running a program
 
 [`load_elf`](elf::load_elf) reads a 32-bit big-endian m68k ELF executable: each `PT_LOAD` segment goes to its physical
-address with the rest of its memory size zeroed (a `.bss` segment with no file data is zeroed too), and the entry point is returned. Anything else is an
-[`elf::ElfError`].
+address with the rest of its memory size zeroed (a `.bss` segment with no file data is zeroed too), and the entry
+point is returned. Anything else is an [`elf::ElfError`].
 
 ```no_run
 // Needs a linked program on disk, so this is compiled but not run.

@@ -27,7 +27,7 @@ pub enum ElfError {
     /// A program header is malformed: the program header entries are too small, or a segment is longer in the
     /// file than in memory.
     BadHeader,
-    /// A segment does not fit in mapped RAM; holds the first address that is not covered.
+    /// A segment does not fit in mapped RAM; holds the start address of the segment (or zero-fill chunk) that could not be placed.
     Unmapped { addr: u32 },
 }
 

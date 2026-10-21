@@ -111,6 +111,27 @@ fn fpu_and_cau_opwords_are_recognised_as_such() {
     assert_eq!(isa::decode(mem(BASE + 4).unwrap()).unwrap().isa, Isa::Fpu);
     assert_eq!(isa::length(&mem, BASE + 4), Some(6));
 
+    // guess: TST's size field on CFPRM p. 4-85 lists "11 word operation", which looks carried over from MOVE's size
+    // codes; the opcode map (CFPRM ch. 9) gives 0x4AC0-0x4AFF to TAS, HALT, PULSE and ILLEGAL, so size 11 is not a
+    // TST.
+    for opword in [0x4A00u16, 0x4A40, 0x4A80] {
+        assert_eq!(
+            isa::decode(opword).map(|f| f.id),
+            Some(Op::Tst),
+            "{opword:#06x}"
+        );
+    }
+    for opword in 0x4AC0u16..=0x4AFF {
+        assert_ne!(
+            isa::decode(opword).map(|f| f.id),
+            Some(Op::Tst),
+            "{opword:#06x}"
+        );
+    }
+
+    // guess: neither manual gives the CAU opword encoding; the layout checked below (coprocessor 0, bit 8 store,
+    // bits 7-6 = 10 longword, then an extension word) is what the GNU assembler emits for -mcpu=54418, the only
+    // source for it.
     // The CAU's coprocessor load and store (MCF54418 RM ch. 26), longword only.
     let cau = [
         "cp0ldl %d1,%d2,#1,#0x13",

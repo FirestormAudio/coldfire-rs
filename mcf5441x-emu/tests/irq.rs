@@ -352,6 +352,8 @@ fn periodic(source: u8) -> Box<Timer> {
 fn stop_with_a_masked_periodic_timer_halts() {
     // The timer keeps scheduling events, but its source is masked in the controller and nothing can unmask it
     // while the core waits: no event can wake the STOP, with or without a time limit.
+    // guess: this relies on a controller not changing its masks or levels in `advance` (the chip's INTC has no
+    // timed behaviour); a controller that did could wake a core the machine reports as unable to wake.
     let src = "stop #0x2000\nend: nop";
     let (mut m, l) = prepare(src, &["end"]);
     m.add_interrupt_controller(INTC, 0x4000, Box::new(TestIntc::new(0)));
@@ -371,6 +373,33 @@ fn stop_with_a_masked_periodic_timer_halts() {
     m.set_time_limit(Some(450));
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::HaltedForever, "{r:?}");
+}
+
+/// A device that never moves its event past the clock.
+struct Stuck;
+
+impl Device for Stuck {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
+    fn next_event(&self) -> Option<u64> {
+        Some(0)
+    }
+}
+
+#[test]
+fn stop_with_a_device_whose_event_never_advances_ends_the_run() {
+    // The device is a host-side bug: waiting for its event would never end, so the run stops and says so. A
+    // wakeable source is enabled so that the wait is not already a halt.
+    let (mut m, l) = prepare("stop #0x2000\nend: nop", &["end"]);
+    let mut intc = TestIntc::new(0);
+    intc.enable(6, 3);
+    m.add_interrupt_controller(INTC, 0x4000, Box::new(intc));
+    m.add_timer(Box::new(Stuck));
+    let r = m.run(until(l[0]));
+    assert!(matches!(r.kind, Stop::Halt(_)), "{r:?}");
+    assert!(r.detail.contains("event"), "{r:?}");
 }
 
 #[test]

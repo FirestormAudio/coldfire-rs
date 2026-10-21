@@ -57,3 +57,14 @@ fn assemble_helper_produces_code() {
         [0x4E, 0x71, 0x4E, 0x75]
     );
 }
+
+#[test]
+fn access_ending_at_the_top_of_the_address_space() {
+    // The last byte of the last RAM page is 0xFFFFFFFF: the end of the access must not overflow.
+    let mut m = Memory::default();
+    m.map_ram(0xFFFF_F000, 0x1000);
+    m.write(0xFFFF_FFFC, Size::Long, 0xCAFE_BABE).unwrap();
+    assert_eq!(m.read(0xFFFF_FFFC, Size::Long).unwrap(), 0xCAFE_BABE);
+    m.write(0xFFFF_FFFF, Size::Byte, 0x5A).unwrap();
+    assert_eq!(m.read(0xFFFF_FFFF, Size::Byte).unwrap(), 0x5A);
+}

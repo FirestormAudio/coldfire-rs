@@ -212,6 +212,23 @@ fn link_unlk_frame() {
 }
 
 #[test]
+fn link_and_unlk_with_a7() {
+    // guess: CFPRM ch. 4 gives LINK as "SP - 4 -> SP; Ay -> (SP); SP -> Ay; SP + dn -> SP" and does not call out
+    // Ay = A7. Read in that order the value pushed is the decremented SP, A7 ends at that SP plus the displacement.
+    let m = run_ok("link %a7,#-8", |_| {});
+    assert_eq!(m.mem_long(STACK - 4), STACK - 4);
+    assert_eq!(m.cpu.a[7], STACK - 4 - 8);
+
+    // guess: UNLK does not call out Ax = A7 either; A7 + 4 is overwritten by the popped longword, which wins.
+    let m = run_ok("unlk %a7", |m| {
+        m.mem
+            .write(STACK, mcf5441x_emu::Size::Long, 0x4012_3450)
+            .unwrap()
+    });
+    assert_eq!(m.cpu.a[7], 0x4012_3450);
+}
+
+#[test]
 fn movem_store_load_order() {
     // The lowest register at the lowest address, D0-D7 then A0-A7.
     let all = "movem.l %d0-%d7/%a0-%a7,(%a1)";
