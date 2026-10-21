@@ -1,7 +1,8 @@
 //! The interrupt controllers INTC0-2 and the global IACK registers (RM ch. 17).
 //!
-//! Each controller has 64 sources. A source requests when a peripheral asserts its line ([`IrqLines`]) or its bit
-//! in INTFRCH:INTFRCL is set, its IMRH:IMRL bit is clear and its ICR holds a level (1-7). The controller reports
+//! Each controller has 64 sources. A source requests when its ICR holds a level (1-7) and either a peripheral
+//! asserts its line ([`IrqLines`]) with its IMRH:IMRL bit clear, or its bit in INTFRCH:INTFRCL is set: a forced
+//! request is not affected by IMR (RM 17.2.3; measured on an MCF54415). The controller reports
 //! its highest request to the core: the highest level, and within a level the highest source number (RM 17.3.1).
 //! The vector is `64 + 64 * index + source` (RM 17.3.1.3). Across controllers INTC0 wins at an equal level (RM
 //! 17.3.2): add the three to the machine in order.
@@ -62,7 +63,7 @@ impl Default for Regs {
 #[derive(Debug)]
 struct Chip {
     iconfig: u16,
-    /// 0-7, or 0x0F; 8-14 are reserved and refused.
+    /// 0-7, or 0x0F; other values are reserved and refused.
     clmask: u8,
     slmask: u8,
     intc: [Regs; 3],
@@ -85,11 +86,12 @@ impl Chip {
     }
 
     /// The highest request of controller `i` whose level `want` accepts, as (level, source), with `asserted` its
-    /// asserted lines: asserted or forced, not masked by IMR or CLMASK, ICR not 0. The highest level wins, then
+    /// asserted lines: asserted and not masked by IMR, or forced (RM 17.2.3: IMR does not affect a forced request;
+    /// measured on an MCF54415); not masked by CLMASK; ICR not 0. The highest level wins, then
     /// the highest source (RM 17.3.1).
     fn best(&self, i: usize, asserted: u64, want: impl Fn(u8) -> bool) -> Option<(u8, u8)> {
         let r = &self.intc[i];
-        let mut live = (asserted | r.force) & !r.imr;
+        let mut live = asserted & !r.imr | r.force;
         let mut best: Option<(u8, u8)> = None;
         // Sources from the highest down, so the first at a level is the one that wins it.
         while live != 0 {
@@ -192,14 +194,15 @@ enum Reg {
 /// Its registers (RM 17.2):
 /// - IPRH/IPRL (read-only, writes ignored): the sources peripherals assert, masked or not; never the forced
 ///   ones, masked or unmasked (measured on an MCF54415).
-/// - IMRH/IMRL (reset all ones) and INTFRCH/INTFRCL (reset 0): read/write; a forced source requests as an
-///   asserted one does.
+/// - IMRH/IMRL (reset all ones) and INTFRCH/INTFRCL (reset 0): read/write; a forced source requests whatever its
+///   IMR bit (RM 17.2.3; measured on an MCF54415: a forced source with its IMR bit set reads from LnIACK and
+///   GLnIACK as when unmasked).
 /// - SIMR/CIMR (bytes, read 0): set or clear IMR bit `value & 63`, or every bit with SALL/CALL (0x40). Written
 ///   together (a word at SIMR) the clear is applied first, so SIMR wins (RM 17.2.6).
 /// - ICR0-63 (bytes at 0x40-0x7F, reset 0): the level in bits 2:0; an access of any size covers consecutive
 ///   ICRs, big-endian. The byte registers SIMR, CIMR, CLMASK and SLMASK pack the same way.
 /// - ICONFIG (16-bit), CLMASK and SLMASK (bytes, reset 0x0F): INTC0 only, shared by the controllers of one
-///   [`Intc::chip`]. CLMASK and SLMASK values 8-14 are reserved and refused.
+///   [`Intc::chip`]. CLMASK and SLMASK values other than 0-7 and 0x0F are reserved and refused.
 /// - SWIACK and L1IACK-L7IACK (bytes at 0xE0 + 4n, read-only): see [`GlobalIack`]'s registers; these look at this
 ///   controller only.
 ///
@@ -212,18 +215,8 @@ pub struct Intc {
 }
 
 impl Intc {
-    /// Controller `index` on its own, with its own ICONFIG, CLMASK and SLMASK (reachable only when `index` is 0).
-    /// Panics unless `index` is 0, 1 or 2.
-    pub fn new(index: usize) -> Intc {
-        assert!(index < 3, "interrupt controller {index} out of range");
-        Intc {
-            index,
-            chip: Rc::new(RefCell::new(Chip::new())),
-        }
-    }
-
     /// The chip's three controllers, INTC0-2, sharing one ICONFIG, CLMASK and SLMASK, and the global IACK
-    /// registers over them.
+    /// registers over them. This is the only way to build them: the level masks exist once for all three.
     pub fn chip() -> ([Intc; 3], GlobalIack) {
         let chip = Rc::new(RefCell::new(Chip::new()));
         let intc = [0, 1, 2].map(|index| Intc {
@@ -360,11 +353,13 @@ impl Device for Intc {
                     .map(|j| (offset + j, (value >> (8 * (n - 1 - j))) as u8))
                     .collect();
                 for &(o, b) in &bytes {
-                    if matches!(o, 0x1E | 0x1F) && (8..0x0F).contains(&(b & 0x0F)) {
+                    if matches!(o, 0x1E | 0x1F) && b > 7 && b != 0x0F {
                         let name = if o == 0x1E { "CLMASK" } else { "SLMASK" };
                         return self.refuse(
                             cx,
-                            format_args!("{name}: reserved value {:#x} (RM Table 17-12)", b & 0x0F),
+                            format_args!(
+                                "{name}: reserved value {b:#x} (RM Table 17-12, RM Table 17-13)"
+                            ),
                         );
                     }
                 }
@@ -378,8 +373,8 @@ impl Device for Intc {
                         0x1C => r.imr |= 1 << (b & 63),
                         0x1D if b & ALL != 0 => r.imr = 0,
                         0x1D => r.imr &= !(1 << (b & 63)),
-                        0x1E => chip.clmask = b & 0x0F,
-                        0x1F => chip.slmask = b & 0x0F,
+                        0x1E => chip.clmask = b,
+                        0x1F => chip.slmask = b,
                         _ => r.icr[(o - 0x40) as usize] = b & 7,
                     }
                 }

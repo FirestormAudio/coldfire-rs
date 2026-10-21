@@ -38,10 +38,16 @@ fn base(index: usize) -> u32 {
     [INTC0, INTC1, INTC2][index]
 }
 
+/// Controller `index` of a chip, on its own (its siblings and the global IACK block are dropped).
+fn intc(index: usize) -> Intc {
+    let ([i0, i1, i2], _) = Intc::chip();
+    [i0, i1, i2].into_iter().nth(index).unwrap()
+}
+
 /// A machine running nothing yet, with controller `index` (alone) at its base.
 fn one(index: usize) -> (Machine, DeviceId) {
     let (mut m, _) = prepare("nop", &[]);
-    let id = m.add_interrupt_controller(base(index), 0x4000, Box::new(Intc::new(index)));
+    let id = m.add_interrupt_controller(base(index), 0x4000, Box::new(intc(index)));
     (m, id)
 }
 
@@ -101,12 +107,34 @@ fn force_bits_read_back_and_pend() {
 }
 
 #[test]
-fn masked_force_bit_is_not_pending() {
+fn masked_force_bit_is_still_pending() {
+    // RM 17.2.3: a forced request is not affected by IMR. Measured on an MCF54415: INTC1 source 62 at level 1,
+    // forced with its IMR bit set, reads 0xBE (vector 190) from L1IACK1 and GL1IACK, as when unmasked.
     let (mut m, id) = one(0);
     w(&mut m, INTC0 + ICR0 + 5, Size::Byte, 3);
     w(&mut m, INTC0 + INTFRCL, Size::Long, 1 << 5);
     assert_eq!(r(&mut m, INTC0 + INTFRCL, Size::Long), 1 << 5);
-    assert_eq!(pending(&m, id), None);
+    assert_eq!(r(&mut m, INTC0 + IMRL, Size::Long), 0xFFFF_FFFF);
+    assert_eq!(pending(&m, id), irq(3, 64 + 5));
+    assert_eq!(r(&mut m, INTC0 + iack(3), Size::Byte), 64 + 5);
+    assert_eq!(r(&mut m, INTC0 + SWIACK, Size::Byte), 64 + 5);
+    // The measured case, through the chip and the global IACK block; IPR still does not show it.
+    let (mut m, _) = prepare("nop", &[]);
+    let ids = add_chip(&mut m);
+    w(&mut m, INTC1 + ICR0 + 62, Size::Byte, 1);
+    w(&mut m, INTC1 + INTFRCH, Size::Long, 1 << 30);
+    assert_eq!(pending(&m, ids[1]), irq(1, 0xBE));
+    assert_eq!(r(&mut m, INTC1 + iack(1), Size::Byte), 0xBE);
+    assert_eq!(r(&mut m, GIACK + iack(1), Size::Byte), 0xBE);
+    assert_eq!(r(&mut m, INTC1 + IPRH, Size::Long), 0);
+    // A forced level-7 source raises the level-7 line, masked or not.
+    w(&mut m, INTC1 + ICR0 + 62, Size::Byte, 7);
+    assert!(m.device::<Intc>(ids[1]).level7(m.mem.irq_lines()));
+    // An asserted (not forced) source stays masked by IMR.
+    w(&mut m, INTC1 + INTFRCH, Size::Long, 0);
+    m.mem.irq_lines_mut().set(1, 62, true);
+    assert_eq!(pending(&m, ids[1]), None);
+    assert_eq!(r(&mut m, INTC1 + iack(7), Size::Byte), 0x18);
 }
 
 #[test]
@@ -143,7 +171,7 @@ fn forced(body: &str) -> (Machine, u32) {
     );
     let (mut m, l) = prepare(&src, &["done", "isr"]);
     set_vector(&mut m, 69, l[1]);
-    m.add_interrupt_controller(INTC0, 0x4000, Box::new(Intc::new(0)));
+    m.add_interrupt_controller(INTC0, 0x4000, Box::new(intc(0)));
     (m, l[0])
 }
 
@@ -284,7 +312,7 @@ fn irq_snippet_acknowledges_with_simr() {
     );
     let (mut m, l) = prepare(&src, &["done", "handler"]);
     set_vector(&mut m, 70, l[1]);
-    m.add_interrupt_controller(INTC0, 0x4000, Box::new(Intc::new(0)));
+    m.add_interrupt_controller(INTC0, 0x4000, Box::new(intc(0)));
     w(&mut m, INTC0 + ICR0 + 6, Size::Byte, 3);
     w(&mut m, INTC0 + CIMR, Size::Byte, 6);
     m.mem.irq_lines_mut().set(0, 6, true);
@@ -306,7 +334,7 @@ fn level_7_through_intc0_is_edge_triggered() {
                done: nop\nisr: addq.l #1,%d4\nrte";
     let (mut m, l) = prepare(src, &["loop", "done", "isr"]);
     set_vector(&mut m, 69, l[2]);
-    m.add_interrupt_controller(INTC0, 0x4000, Box::new(Intc::new(0)));
+    m.add_interrupt_controller(INTC0, 0x4000, Box::new(intc(0)));
     w(&mut m, INTC0 + ICR0 + 5, Size::Byte, 7);
     w(&mut m, INTC0 + CIMR, Size::Byte, 5);
     assert_eq!(m.run(until(l[0])).kind, Stop::UntilPc);
@@ -417,9 +445,14 @@ fn level_mask_registers_are_only_in_intc0() {
     let d = refused(&mut m, INTC0 + CLMASK, Size::Byte, Some(9));
     assert!(d.contains("CLMASK") && d.contains("reserved"), "{d}");
     assert_eq!(r(&mut m, INTC0 + CLMASK, Size::Byte), 0x0F);
-    // Bits 7:4 read as zero; ICONFIG keeps only ELVLPRI and EMASK (RM Table 17-9).
-    w(&mut m, INTC0 + SLMASK, Size::Byte, 0xF5);
-    assert_eq!(r(&mut m, INTC0 + SLMASK, Size::Byte), 5);
+    // Bits 7:4 are reserved (RM Table 17-12, RM Table 17-13): a value with any of them set is refused too.
+    let d = refused(&mut m, INTC0 + SLMASK, Size::Byte, Some(0xF5));
+    assert!(d.contains("SLMASK") && d.contains("reserved"), "{d}");
+    let d = refused(&mut m, INTC0 + CLMASK, Size::Byte, Some(0x13));
+    assert!(d.contains("CLMASK") && d.contains("reserved"), "{d}");
+    assert_eq!(r(&mut m, INTC0 + SLMASK, Size::Byte), 0x0F);
+    w(&mut m, INTC0 + SLMASK, Size::Byte, 5);
+    // ICONFIG keeps only ELVLPRI and EMASK (RM Table 17-9).
     w(&mut m, INTC0 + ICONFIG, Size::Word, 0xFFFF);
     assert_eq!(r(&mut m, INTC0 + ICONFIG, Size::Word), 0xFE20);
     // CLMASK and SLMASK pack with SIMR and CIMR in a longword read.
@@ -516,7 +549,7 @@ fn narrow_access_to_imr_refuses() {
 
     // From a program: the instruction is refused and PC stays on it.
     let (mut m, l) = prepare("move.b 0xFC04800F,%d0\nend: nop", &["end"]);
-    m.add_interrupt_controller(INTC0, 0x4000, Box::new(Intc::new(0)));
+    m.add_interrupt_controller(INTC0, 0x4000, Box::new(intc(0)));
     let r0 = m.run(until(l[0]));
     assert_eq!((r0.kind, r0.pc), (Stop::Unmodelled, common::BASE), "{r0:?}");
     assert!(r0.detail.contains("IMRL"), "{r0:?}");
@@ -533,8 +566,8 @@ fn equal_levels_across_controllers_go_to_intc0() {
     let (mut m, l) = prepare(src, &["end", "h0", "h1", "h2"]);
     for index in 0..3 {
         set_vector(&mut m, 64 + 64 * index as u32 + 6, l[1 + index]);
-        m.add_interrupt_controller(base(index), 0x4000, Box::new(Intc::new(index)));
     }
+    add_chip(&mut m);
     // Set up through the registers, INTC2 first.
     for index in (0..3).rev() {
         w(&mut m, base(index) + ICR0 + 6, Size::Byte, 3);
