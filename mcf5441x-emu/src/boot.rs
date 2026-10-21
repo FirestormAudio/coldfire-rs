@@ -27,14 +27,18 @@ const SBFCR: u32 = 0x22;
 const SBF_HEADER: usize = 7;
 /// The BLDIV [`sbf_image`] writes: divisor 2 (RM Table 11-4). The model has no shift clock, so any value boots.
 const SBF_BLDIV: u8 = 1;
-/// FlexBus CS0's flash as [`boot`] maps it: the image, rounded up to this with erased bytes.
+/// FlexBus CS0's flash as [`boot`] maps it: the image, rounded up to this with erased bytes. guess: the flash's
+/// size is the board's and not known here; 64 KB is CSMR0's smallest block (RM 20.3.2).
 const NOR_ROUND: usize = 0x1_0000;
 /// The NAND boot blocks' first rows (RM 22.4.4): four pages are read from the first block whose reads all pass ECC.
 const NAND_BOOT_BLOCKS: [u32; 4] = [0, 256, 512, 768];
 const NAND_BOOT_PAGES: usize = 4;
-/// The NFC's boot view at address 0 runs to 0xF8F (RM 22.4.4); the RAM [`boot`] maps there.
+/// The payload bytes of each boot page: the boot reads 1056-byte pages (NFC_SECSZ's reset value, RM 22.4.4), of
+/// which the last 60 hold the ECC of mode 7 (32-error BCH).
+pub const NAND_BOOT_PAYLOAD: usize = 996;
+/// The RAM [`boot`] maps at address 0 for the NFC's boot view (RM 22.4.4).
 const NAND_VIEW_RAM: u32 = 0x1000;
-/// The boot view's interleave unit (RM Figure 22-25).
+/// The boot view's interleave unit (RM Figure 22-25, RM 22.4.1).
 const NAND_CHUNK: usize = 8;
 /// NFC_CFG and its BTMD bit (RM Table 22-17): set when the NFC booted (RM 22.4.4).
 const NFC_CFG: u32 = 0xFC0F_FF30;
@@ -108,10 +112,14 @@ fn long(b: &[u8], at: usize) -> Result<u32, BootError> {
 ///   SRAM "to address 0 via the RAMBAR", which RAMBAR's base field cannot hold; the SRAM is wherever the board
 ///   mapped it, RAMBAR is left at its reset value, and the reset vector is read from the SRAM's first bytes.
 /// - [`BootSource::Nor`]: the image is mapped as RAM at address 0, rounded up to 64 KB with erased bytes (0xFF)
-///   (guess: CS0's flash takes the CPU's writes like RAM; a flash would take them as commands).
+///   (guess: the flash's size is the board's, and 64 KB is CSMR0's smallest block; guess: CS0's flash takes the
+///   CPU's writes like RAM, where a flash would take them as commands).
 /// - [`BootSource::Nand`]: of the boot blocks at rows 0, 256, 512 and 768, the first whose four pages all pass ECC
-///   is read (RM 22.4.4); its [`nand_boot_view`] is mapped as RAM at 0..0x1000, the bytes past the view 0xFF.
-///   NFC_CFG\[BTMD\] is set (RM Table 22-17) and the array goes behind the NFC.
+///   is read (RM 22.4.4). The boot reads [`NAND_BOOT_PAYLOAD`] (996) payload bytes of each page whatever the
+///   array's `payload` (the boot geometry is fixed, RM 22.4.4): a row's data past them is not read, a shorter row
+///   is padded with 0xFF. The pages' [`nand_boot_view`] (4000 bytes) is mapped as RAM at 0..0x1000 (guess: the
+///   bytes 0xFA0..0xFFF past the hash's reach read 0xFF). NFC_CFG\[BTMD\] is set (RM Table 22-17) and the array
+///   goes behind the NFC.
 ///
 /// # Panics
 /// When the RAM mapped at address 0 (NOR, NAND) overlaps RAM or a device `m` already has there.
@@ -148,11 +156,12 @@ pub fn boot(m: &mut Machine, chip: &Chip, source: BootSource) -> Result<u32, Boo
             let pages: Vec<Vec<u8>> = (first..first + NAND_BOOT_PAGES as u32)
                 .map(|row| {
                     let mut p = array.pages.get(row as usize).cloned().unwrap_or_default();
-                    p.resize(array.payload, 0xFF);
+                    p.resize(NAND_BOOT_PAYLOAD, 0xFF);
                     p
                 })
                 .collect();
             let mut view = nand_boot_view(&pages);
+            // guess: the RAM past the view reads erased
             view.resize(NAND_VIEW_RAM as usize, 0xFF);
             m.mem.map_ram(0, NAND_VIEW_RAM);
             m.mem
@@ -201,9 +210,14 @@ fn sbf_load(m: &mut Machine, chip: &Chip, flash: &[u8]) -> Result<Vec<u8>, BootE
 /// `sbf_len` of 0 gives BLL 0: nothing is copied (RM Table 11-3).
 ///
 /// # Panics
-/// When `sbf_len` is 1 to 4 (BLL 0 means no load, so the SBF cannot copy a single longword) or above 0x40000 (BLL
-/// is 16 bits, RM 11.4.2).
+/// When `sbf_len` is 1 to 4 (BLL 0 means no load, so the SBF cannot copy a single longword), above 0x40000 (BLL
+/// is 16 bits, RM 11.4.2) or longer than `image`.
 pub fn sbf_image(image: &[u8], sbf_len: usize, rcon: u32) -> Vec<u8> {
+    assert!(
+        sbf_len <= image.len(),
+        "sbf_image: the SBF would copy {sbf_len} bytes of a {}-byte image",
+        image.len()
+    );
     assert!(
         sbf_len == 0 || (5..=0x4_0000).contains(&sbf_len),
         "sbf_image: the SBF copies 2 to 65536 longwords (BLL 1 to 0xFFFF) or none, not {sbf_len} bytes"
@@ -217,11 +231,27 @@ pub fn sbf_image(image: &[u8], sbf_len: usize, rcon: u32) -> Vec<u8> {
     out
 }
 
-/// What the CPU reads from address 0 in NFC boot mode, given the four boot pages' payloads (RM 22.4.4 and Figure
-/// 22-25): 8-byte units taken from each page in turn, page 0's first, then page 1's, page 2's, page 3's, then each
-/// page's second. The view holds the whole 8-byte units of the shortest page: 3968 bytes for 996-byte payloads.
-/// guess: the RM's view runs to 0xF8F (3984 bytes, 996 per page) and leaves the last half unit of each page open,
-/// so the view stops before them.
+/// Where boot-view address `a` reads in the four pages: (page, byte), the NFC's address hash in boot mode (RM
+/// Figure 22-25 and RM 22.4.1): 8-byte units taken from each page in turn.
+fn hash(a: usize) -> (usize, usize) {
+    let unit = a / NAND_CHUNK;
+    (
+        unit % NAND_BOOT_PAGES,
+        unit / NAND_BOOT_PAGES * NAND_CHUNK + a % NAND_CHUNK,
+    )
+}
+
+/// The boot view's length for pages of `payload` bytes: four pages of whole 8-byte units, 4000 bytes for 996.
+fn view_len(payload: usize) -> usize {
+    NAND_BOOT_PAGES * payload.div_ceil(NAND_CHUNK) * NAND_CHUNK
+}
+
+/// What the CPU reads from address 0 in NFC boot mode, given the four boot pages' payloads (RM 22.4.4, RM 22.4.1
+/// and Figure 22-25): address `a` reads page `(a >> 3) & 3`, byte `((a >> 5) << 3) | (a & 7)`, so 8-byte units come
+/// from each page in turn, page 0's first, then page 1's, page 2's, page 3's, then each page's second. The view
+/// runs over every unit of the longest page: 4000 bytes (0..0xF9F) for 996-byte payloads, so page `p`'s bytes
+/// 992..995 read at 0xF80 + 8`p`. guess: a byte the hash takes past a page's payload (the buffer's ECC area, bytes
+/// 996..999 of a boot page) reads 0xFF.
 ///
 /// # Panics
 /// When `pages` is not four pages.
@@ -231,33 +261,39 @@ pub fn nand_boot_view(pages: &[Vec<u8>]) -> Vec<u8> {
         NAND_BOOT_PAGES,
         "nand_boot_view: the NFC boots from four pages"
     );
-    let units = pages.iter().map(Vec::len).min().unwrap_or(0) / NAND_CHUNK;
-    let mut view = Vec::with_capacity(NAND_BOOT_PAGES * units * NAND_CHUNK);
-    for unit in 0..units {
-        for page in pages {
-            view.extend_from_slice(&page[unit * NAND_CHUNK..][..NAND_CHUNK]);
-        }
-    }
-    view
+    let len = view_len(pages.iter().map(Vec::len).max().unwrap_or(0));
+    (0..len)
+        .map(|a| {
+            let (page, at) = hash(a);
+            pages[page].get(at).copied().unwrap_or(0xFF)
+        })
+        .collect()
 }
 
 /// The four boot pages' payloads (`payload` bytes each) whose [`nand_boot_view`] starts with `view`: the inverse
-/// of the interleave. Bytes `view` does not reach are erased (0xFF).
+/// of the address hash. Bytes `view` does not reach are erased (0xFF). For 996-byte payloads the view holds up to
+/// 4000 bytes, of which 3968 reach whole units of every page: bytes at 0xF80 + 8`p` + 4..8 fall past page `p`'s
+/// payload and must be 0xFF (they read so, see [`nand_boot_view`]).
 ///
 /// # Panics
-/// When `view` is longer than four pages' whole 8-byte units (3968 bytes for a 996-byte payload).
+/// When `view` is longer than [`nand_boot_view`] of such pages, or puts a byte other than 0xFF past a payload.
 pub fn nand_pages(view: &[u8], payload: usize) -> Vec<Vec<u8>> {
-    let units = payload / NAND_CHUNK;
-    let room = NAND_BOOT_PAGES * units * NAND_CHUNK;
+    let room = view_len(payload);
     assert!(
         view.len() <= room,
         "nand_pages: a boot view of {} bytes does not fit four {payload}-byte pages ({room} bytes)",
         view.len()
     );
     let mut pages = vec![vec![0xFF; payload]; NAND_BOOT_PAGES];
-    for (i, unit) in view.chunks(NAND_CHUNK).enumerate() {
-        let at = i / NAND_BOOT_PAGES * NAND_CHUNK;
-        pages[i % NAND_BOOT_PAGES][at..at + unit.len()].copy_from_slice(unit);
+    for (a, &b) in view.iter().enumerate() {
+        let (page, at) = hash(a);
+        match pages[page].get_mut(at) {
+            Some(slot) => *slot = b,
+            None => assert_eq!(
+                b, 0xFF,
+                "nand_pages: view byte {a:#x} falls past page {page}'s {payload}-byte payload and is not 0xFF"
+            ),
+        }
     }
     pages
 }

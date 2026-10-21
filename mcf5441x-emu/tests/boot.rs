@@ -233,6 +233,8 @@ fn serial_boot_reaches_main() {
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     // the boot part only READs (0x03) the flash
     assert_eq!(nor_of(&chip, &m), [0x03]);
+    // without pll-keep the boot part programs the PLL (so keep_match_reaches_main's "no PLL writes" is the keep)
+    assert!(!m.device::<Pll>(chip.pll).writes().is_empty());
     // SBFSR holds BLL (RM 11.3.1)
     let bll = sym["__boot_size"].div_ceil(4) - 1;
     assert_eq!(m.access(0xEC09_0020, Size::Word, None), Ok(bll));
@@ -285,7 +287,9 @@ fn nand_boot_reaches_main() {
 
 #[test]
 fn app_part_arrives_exactly() {
-    // cold-hello's app part ends mid-page: the last NAND page is copied to the byte
+    // cold-hello's app part ends mid-page: the last NAND page is copied to the byte, and DDR past the app part (to
+    // the end of that page) keeps what it held. Stopped where the app part starts (coldfire_rt_start), before it
+    // clears its .bss.
     let Some(elf) = build("nand", &[]) else {
         return;
     };
@@ -293,9 +297,14 @@ fn app_part_arrives_exactly() {
     assert_ne!(app.len() % PAYLOAD, 0);
     let (mut m, _chip, sym) = nand(&elf, &[]);
     assert_eq!(sym["__app_len"] as usize, app.len());
-    let r = run_to(&mut m, sym["main"]);
+    let end = sym["__app_vma"] + app.len() as u32;
+    let tail = (app.len().div_ceil(PAYLOAD) * PAYLOAD - app.len()) as u32;
+    let pattern: Vec<u8> = (0..tail).map(|i| (i * 7 + 3) as u8).collect();
+    m.mem.load(end, &pattern).unwrap();
+    let r = run_to(&mut m, sym["coldfire_rt_start"]);
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.mem.peek(sym["__app_vma"], app.len() as u32).unwrap(), app);
+    assert_eq!(m.mem.peek(end, tail).unwrap(), pattern);
 }
 
 #[test]
@@ -327,6 +336,9 @@ fn ddr_sequence_order() {
     let last = writes.last().unwrap();
     assert_eq!(last.0, 0x24);
     assert_ne!(last.2 & 1 << 24, 0, "CR09 START");
+    // RCR, RCR, PADCR, CR09: START is written once
+    assert_eq!(writes.len(), 4, "{offsets:x?}");
+    assert_eq!(writes.iter().filter(|w| w.0 == 0x24).count(), 1);
 }
 
 #[test]
@@ -377,15 +389,39 @@ fn sections_carry_run_and_load_addresses() {
 
 #[test]
 fn boot_view_round_trips() {
-    let data: Vec<u8> = (0..3968).map(|i| (i % 256) as u8).collect();
+    let data: Vec<u8> = (0..3968).map(|i| (i % 251) as u8).collect();
     let pages = nand_pages(&data, PAYLOAD);
     assert_eq!(pages.iter().map(Vec::len).collect::<Vec<_>>(), [PAYLOAD; 4]);
     // RM Figure 22-25: U0 page 0, U1 page 1, ..., U4 page 0's second unit
     assert_eq!(pages[1][..8], data[8..16]);
     assert_eq!(pages[0][8..16], data[32..40]);
-    // guess: the view keeps to whole 8-byte units; each page's last 4 bytes are outside it
+    // 3968 bytes reach whole units only: each page's last 4 bytes stay erased
     assert_eq!(pages[3][992..], [0xFF; 4]);
-    assert_eq!(nand_boot_view(&pages), data);
+    let view = nand_boot_view(&pages);
+    assert_eq!(view.len(), 4000);
+    assert_eq!(view[..3968], data[..]);
+
+    // the hash runs over every unit: page p's bytes 992..995 read at 0xF80 + 8p, then 4 bytes past its payload
+    let pages: Vec<Vec<u8>> = (0..4u8)
+        .map(|p| (0..PAYLOAD).map(|i| (i as u8) ^ p << 6).collect())
+        .collect();
+    let view = nand_boot_view(&pages);
+    assert_eq!(view.len(), 4000);
+    for p in 0..4 {
+        let at = 0xF80 + 8 * p;
+        assert_eq!(view[at..at + 4], pages[p][992..996]);
+        // guess: the bytes the hash takes past the payload (the buffer's ECC area) read 0xFF
+        assert_eq!(view[at + 4..at + 8], [0xFF; 4]);
+    }
+    assert_eq!(nand_pages(&view, PAYLOAD), pages);
+}
+
+#[test]
+#[should_panic(expected = "past page 0")]
+fn nand_pages_refuses_a_byte_past_a_payload() {
+    let mut view = vec![0xFF; 4000];
+    view[0xF84] = 0;
+    nand_pages(&view, PAYLOAD);
 }
 
 #[test]
@@ -397,6 +433,12 @@ fn sbf_image_follows_table_11_5() {
     assert_eq!(flash[..7], [0x01, 4, 0, 0x78, 0x56, 0x34, 0x12]);
     assert_eq!(flash[7..], image[..]);
     assert_eq!(sbf_image(&image, 0, 0)[1..3], [0, 0]);
+}
+
+#[test]
+#[should_panic(expected = "40-byte image")]
+fn sbf_image_refuses_more_than_the_image() {
+    sbf_image(&(1..=40).collect::<Vec<u8>>(), 44, 0);
 }
 
 /// A serial-boot flash with a boot image of `longs` longwords whose first two are SP and PC.
@@ -522,9 +564,13 @@ fn nor_boot_maps_the_image_at_0() {
     );
     assert_eq!(m.cpu.a[7], 0x8001_0000);
     assert_eq!(m.mem.peek(0, image.len() as u32).unwrap(), image);
-    // erased past the image, to 64 KB
+    // guess: erased (0xFF) past the image, to 64 KB (CSMR0's smallest block; the flash's size is the board's)
+    assert_eq!(m.mem.peek(image.len() as u32, 4).unwrap(), [0xFF; 4]);
     assert_eq!(m.mem.peek(0xFFFC, 4).unwrap(), [0xFF; 4]);
     assert!(m.mem.peek(0x1_0000, 1).is_none());
+    // guess: CS0's flash takes a CPU write like RAM (a flash would take it as a command)
+    assert_eq!(m.access(0x10, Size::Long, Some(0x1234_5678)), Ok(0));
+    assert_eq!(m.access(0x10, Size::Long, None), Ok(0x1234_5678));
 }
 
 /// Four boot pages whose view starts with SP 0x80010000 and PC `pc`.
@@ -549,8 +595,37 @@ fn nand_boot_falls_back_to_the_next_boot_block() {
     assert_eq!(boot(&mut m, &chip, BootSource::Nand { array }), Ok(0x20));
     // NFC_CFG[BTMD] is set after an NFC boot (RM Table 22-17)
     assert_ne!(m.access(0xFC0F_FF30, Size::Long, None).unwrap() & 1 << 6, 0);
-    // the view is RAM at 0..0x1000, erased past 3968 bytes
-    assert_eq!(m.mem.peek(0xF80, 0x80).unwrap(), [0xFF; 0x80]);
+    // the 4000-byte view: page p's bytes 992..995 (erased here) at 0xF80 + 8p, then 4 bytes past its payload
+    // (guess: read 0xFF); guess: the RAM past the view, 0xFA0..0x1000, reads 0xFF
+    for p in 0..4 {
+        assert_eq!(m.mem.peek(0xF84 + 8 * p, 4).unwrap(), [0xFF; 4]);
+    }
+    assert_eq!(m.mem.peek(0xFA0, 0x60).unwrap(), [0xFF; 0x60]);
+}
+
+#[test]
+fn nand_boot_reads_996_payload_bytes_whatever_the_array_payload() {
+    // RM 22.4.4: the boot reads 1056-byte pages, 996 payload bytes and 60 ECC bytes, whatever the array is for
+    // later reads. Page 3's bytes 992..999 hold a marker: 992..995 show at 0xF98, 996..999 do not.
+    let mut pages = boot_pages(0x10);
+    for p in &mut pages {
+        p.resize(2048, 0xFF);
+    }
+    pages[3][992..1000].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    let array = NandArray {
+        pages,
+        bad: BTreeSet::new(),
+        payload: 2048,
+    };
+    let (mut m, chip) = machine(ChipOptions::default().with_nand(NandArray::default()));
+    assert_eq!(boot(&mut m, &chip, BootSource::Nand { array }), Ok(0x10));
+    assert_eq!(
+        m.mem.peek(0xF98, 8).unwrap(),
+        [1, 2, 3, 4, 0xFF, 0xFF, 0xFF, 0xFF]
+    );
+    // the array behind the NFC is the one given, payload included
+    let nfc = m.device::<mcf5441x_emu::soc::Nfc>(chip.nfc.unwrap());
+    assert_eq!(nfc.array().payload, 2048);
 }
 
 #[test]
