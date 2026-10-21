@@ -57,8 +57,8 @@ block entries (`take_profile`).
 
 ## Running a program
 
-[`load_elf`](elf::load_elf) reads a 32-bit big-endian m68k ELF executable: each `PT_LOAD` segment with file data goes to
-its physical address, the rest of its memory size is zeroed, and the entry point is returned. Anything else is an
+[`load_elf`](elf::load_elf) reads a 32-bit big-endian m68k ELF executable: each `PT_LOAD` segment goes to its physical
+address with the rest of its memory size zeroed (a `.bss` segment with no file data is zeroed too), and the entry point is returned. Anything else is an
 [`elf::ElfError`].
 
 ```no_run

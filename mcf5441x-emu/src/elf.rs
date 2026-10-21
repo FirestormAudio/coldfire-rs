@@ -70,8 +70,9 @@ fn unmapped(f: Fault, fallback: u32) -> ElfError {
 
 /// Load every `PT_LOAD` segment of the ELF executable `bytes` into `m`'s RAM and return its entry point.
 ///
-/// Each segment with a non-zero file size is copied to its physical address (`p_paddr`) and the rest of its
-/// memory size is zeroed, so `.bss` reads as zero whatever the RAM held before. The file must be 32-bit,
+/// Each segment with a non-zero memory size has its file bytes copied to its physical address (`p_paddr`) and
+/// the rest of its memory size zeroed, so `.bss` reads as zero whatever the RAM held before, also when the
+/// linker put it in a segment of its own with no file data. The file must be 32-bit,
 /// big-endian and for `EM_68K`. The loads go through [`Memory::load`](crate::Memory::load), so decoded code
 /// over the loaded range is dropped. The program counter is not touched.
 ///
@@ -120,7 +121,7 @@ pub fn load_elf(m: &mut Machine, bytes: &[u8]) -> Result<u32, ElfError> {
         let paddr = u32_at(bytes, ph + 12)?;
         let filesz = u32_at(bytes, ph + 16)?;
         let memsz = u32_at(bytes, ph + 20)?;
-        if filesz == 0 {
+        if memsz == 0 {
             continue;
         }
         if filesz > memsz {

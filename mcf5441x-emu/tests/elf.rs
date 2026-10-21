@@ -10,6 +10,11 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Assemble `src` and link it as an ELF with `.text` at 0x40100000, `.data` at 0x40200000 and `.bss` right after it in the same segment.
 fn link(src: &str) -> Vec<u8> {
+    link_with(src, &["-n", "-Ttext=0x40100000", "-Tdata=0x40200000"])
+}
+
+/// As [`link`] with the given linker layout arguments.
+fn link_with(src: &str, layout: &[&str]) -> Vec<u8> {
     let dir = std::env::temp_dir().join(format!(
         "mcf5441x-emu-elf-{}-{}",
         std::process::id(),
@@ -26,14 +31,8 @@ fn link(src: &str) -> Vec<u8> {
         .expect("m68k-elf-as");
     assert!(a.status.success(), "{}", String::from_utf8_lossy(&a.stderr));
     let l = Command::new("m68k-elf-ld")
-        .args([
-            "-n",
-            "-Ttext=0x40100000",
-            "-Tdata=0x40200000",
-            "-e",
-            "start",
-            "-o",
-        ])
+        .args(layout)
+        .args(["-e", "start", "-o"])
         .arg(&e)
         .arg(&o)
         .output()
@@ -160,6 +159,25 @@ fn runs_a_linked_program_to_its_exit_label() {
     assert_eq!(m.cpu.d[0], 0x1234_5678u32.wrapping_mul(2));
     assert_eq!(
         m.mem.peek(0x4020_0004, 4).unwrap(),
+        0x1234_5678u32.to_be_bytes()
+    );
+}
+
+#[test]
+fn separate_bss_segment_is_zeroed_over_dirty_ram() {
+    // Without -n and with -Tbss the linker gives .bss its own segment with no file data.
+    let elf = link_with(
+        PROGRAM,
+        &["-Ttext=0x40100000", "-Tdata=0x40200000", "-Tbss=0x40210000"],
+    );
+    let mut m = Machine::new();
+    // The first segment also covers the ELF headers, below the text.
+    m.mem.map_ram(0x4000_0000, 0x0300_0000);
+    m.mem.load(0x4021_0000, &[0xff; 16]).unwrap();
+    load_elf(&mut m, &elf).unwrap();
+    assert_eq!(m.mem.peek(0x4021_0000, 16).unwrap(), vec![0; 16]);
+    assert_eq!(
+        m.mem.peek(0x4020_0000, 4).unwrap(),
         0x1234_5678u32.to_be_bytes()
     );
 }
