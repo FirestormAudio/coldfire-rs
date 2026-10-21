@@ -49,6 +49,8 @@ fn set_vector(m: &mut Machine, v: u32, handler: u32) {
 
 /// FS = 0100 in a frame's first longword: FS[3:2] in bits 27-26, FS[1:0] in bits 17-16 (RM Figure 3-10).
 const FS_FETCH: u32 = 0b01 << 26;
+/// FS = 1100, an error on an operand read (RM Table 3-7).
+const FS_OPERAND: u32 = 0b11 << 26;
 
 /// The first longword of a frame (CFPRM Figure 11-1): format, vector, SR.
 fn fv(format: u32, vector: u32, sr: u16) -> u32 {
@@ -486,6 +488,52 @@ fn odd_pc_is_an_address_error() {
     assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE + 1), "{r:?}");
 }
 
+/// Measured on an MCF54415: a jump to an odd address gives the frame word 0x440C2700 (format 4, vector 3, FS 0100
+/// "error on instruction fetch", SR 0x2700) with the jump instruction as the stacked PC.
+#[test]
+fn odd_jump_address_error_is_an_instruction_fetch_error() {
+    let (mut m, l) = prepare(
+        "lea 1f+1,%a0\njmp_insn: jmp (%a0)\n1: moveq #2,%d0\nhandler: nop",
+        &["jmp_insn", "handler"],
+    );
+    set_vector(&mut m, 3, l[1]);
+    m.policy.stop_on[3] = false;
+    let r = m.run(until(l[1]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK - 8);
+    assert_eq!(long(&mut m, STACK - 8), 0x440C_2700);
+    assert_eq!(long(&mut m, STACK - 8), fv(4, 3, 0x2700) | FS_FETCH);
+    assert_eq!(long(&mut m, STACK - 4), l[0]);
+}
+
+/// Measured on an MCF54415: a word-sized index, a scale factor of 8 and a full-format extension word (RM 3.3.4.2)
+/// each give the frame word 0x4C0C2704 (format 4, vector 3, FS 1100 "error on operand read", SR 0x2704 after the
+/// MOVEQ #0 that set Z) with the faulting instruction as the stacked PC.
+#[test]
+fn bad_index_address_error_is_an_operand_read_error() {
+    // move.l (0,%a0,%d1.w),%d2 / (0,%a0,%d1.l*8),%d2 / full format with base and index suppressed.
+    for ext in [0x1000u16, 0x1E00, 0x19D0] {
+        let (mut m, l) = prepare(
+            &format!(
+                "lea 0x40180000,%a0\nmoveq #0,%d1\nfault: .short 0x2430,{ext:#06x}\nmoveq #2,%d0\nhandler: nop"
+            ),
+            &["fault", "handler"],
+        );
+        set_vector(&mut m, 3, l[1]);
+        m.policy.stop_on[3] = false;
+        let r = m.run(until(l[1]));
+        assert_eq!(r.kind, Stop::UntilPc, "{ext:#06x}: {r:?}");
+        assert_eq!(m.cpu.a[7], STACK - 8, "{ext:#06x}");
+        assert_eq!(long(&mut m, STACK - 8), 0x4C0C_2704, "{ext:#06x}");
+        assert_eq!(
+            long(&mut m, STACK - 8),
+            fv(4, 3, 0x2704) | FS_OPERAND,
+            "{ext:#06x}"
+        );
+        assert_eq!(long(&mut m, STACK - 4), l[0], "{ext:#06x}");
+    }
+}
+
 #[test]
 fn address_error_frames_for_rts_and_jsr() {
     // RTS: the frame is written above (below in memory) the preserved return PC.
@@ -497,7 +545,8 @@ fn address_error_frames_for_rts_and_jsr() {
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.cpu.a[7], STACK - 12);
-    // guess: FS = 0100 "error on instruction fetch" (RM Table 3-7); see `ADDRESS_ERROR_FS` in the source.
+    // Not measured for RTS, JSR or BSR: an odd target is the same cause as the odd JMP measured on an MCF54415
+    // (the fetch at the target), so FS is 0100 "error on instruction fetch" (RM Table 3-7).
     assert_eq!(long(&mut m, STACK - 12), fv(4, 3, 0x2700) | FS_FETCH);
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 0x301);
@@ -513,7 +562,7 @@ fn address_error_frames_for_rts_and_jsr() {
     assert_eq!(
         long(&mut m, STACK - 12),
         fv(4, 3, 0x2700) | FS_FETCH,
-        "guess: FS 0100"
+        "FS 0100, as for the measured odd JMP"
     );
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 2);
@@ -530,7 +579,7 @@ fn address_error_frames_for_rts_and_jsr() {
     assert_eq!(
         long(&mut m, STACK - 12),
         fv(4, 3, 0x2700) | FS_FETCH,
-        "guess: FS 0100"
+        "FS 0100, as for the measured odd JMP"
     );
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(
@@ -549,7 +598,7 @@ fn address_error_frames_for_rts_and_jsr() {
     assert_eq!(
         long(&mut m, STACK - 8),
         fv(4, 3, 0x2700) | FS_FETCH,
-        "guess: FS 0100"
+        "FS 0100, as for the measured odd JMP"
     );
     assert_eq!(long(&mut m, STACK - 4), BASE + 1);
 }

@@ -233,7 +233,7 @@ const KNOWN_OBJDUMP_DIFFERENCES: &[Known] = &[
     Known {
         what: "BRA.L (0x60FF)",
         matches: |op| op == 0x60ff,
-        reason: "objdump decodes it as BRA.B with displacement -1 for isa-c; the 8-bit field 0xFF selects a 32-bit displacement from ISA_B on (a guess in the description for ISA_C)",
+        reason: "objdump decodes it as BRA.B with displacement -1 for isa-c; the 8-bit field 0xFF selects a 32-bit displacement from ISA_B on, and BRA.L was measured valid on an MCF54415",
         cfprm: "CFPRM ch. 4 BRA, p. 4-20",
     },
     Known {

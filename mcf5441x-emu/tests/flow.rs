@@ -49,7 +49,8 @@ fn bcc_all_conditions_taken_and_not() {
 
 #[test]
 fn bra_displacement_sizes_forward_and_backward() {
-    // Byte, word and longword displacements (the longword form is ISA_B), forward over padding and backward.
+    // Byte, word and longword displacements (the longword form is ISA_B, measured valid on an MCF54415), forward
+    // over padding and backward.
     let m = run_ok(
         "bra.b 1f\n.word 0x4afc\n1: bra.w 2f\n.word 0x4afc\n2: .word 0x60ff\n.long 3f-.\n.word 0x4afc\n\
          3: moveq #5,%d0\nbra.b 5f\n4: moveq #9,%d1\nbra.b 6f\n5: bra.w 4b\n6:",

@@ -143,8 +143,8 @@ tpf      A    -  0101000111111100  none  -  Tpf         # CFPRM ch. 4 TPF, p. 4-
 # ---- line 6: branches; displacement 0x00 selects a 16-bit word, 0xFF a 32-bit longword (ISA_B) ---------
 bra      A    B  01100000dddddddd  none  -  Bra         # CFPRM ch. 4 BRA, p. 4-20
 bra      A    W  0110000000000000  none  w  Bra         # CFPRM ch. 4 BRA, p. 4-20
-# guess: Table 3-16 leaves the ISA_C column of BRA.L blank, but p. 4-20 has .L from ISA_B on, ISA_C has Bcc.L
-# and BSR.L (Table 3-16; RM Table 3-4), and BRA is the always-true branch of the same encoding.
+# Table 3-16 leaves the ISA_C column of BRA.L blank, but p. 4-20 has .L from ISA_B on; BRA.L was measured valid
+# on an MCF54415.
 bra      B    L  0110000011111111  none  l  Bra         # CFPRM ch. 4 BRA, p. 4-20
 bsr      A    B  01100001dddddddd  none  -  Bsr         # CFPRM ch. 4 BSR, p. 4-23
 bsr      A    W  0110000100000000  none  w  Bsr         # CFPRM ch. 4 BSR, p. 4-23

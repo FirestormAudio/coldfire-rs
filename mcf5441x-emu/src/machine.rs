@@ -17,7 +17,9 @@
 //! from outside the devices between runs are sampled once, when the next run starts.
 
 use crate::cpu::block::Blocks;
-use crate::cpu::exception::{stacks_next_pc, vector};
+use crate::cpu::exception::{
+    ADDRESS_ERROR_FETCH_FS, ADDRESS_ERROR_OPERAND_FS, stacks_next_pc, vector,
+};
 use crate::cpu::{self, Cpu, DecodeError, ExceptionPolicy, Flow};
 use crate::device::{Access, Device, DeviceId};
 use crate::irq::{InterruptController, Irq};
@@ -287,7 +289,14 @@ impl Machine {
             Ok((d, _)) => d,
             Err(DecodeError::Fault(f)) => return Some(self.fault(f)),
             Err(DecodeError::Vector(v)) => {
-                if let Some(r) = self.take(v, pc) {
+                // The only address error decoding raises is a bad index extension word: an operand-read error
+                // (measured on an MCF54415).
+                let fs = if v == vector::ADDRESS_ERROR {
+                    ADDRESS_ERROR_OPERAND_FS
+                } else {
+                    0
+                };
+                if let Some(r) = self.take_with_fs(v, fs, pc) {
                     return Some(r);
                 }
                 self.tick();
@@ -497,11 +506,21 @@ impl Machine {
     /// Exception `v` with `return_pc` for the frame: stop on it if the policy says so (PC is on the instruction
     /// that took it, or past it for trace), else take it. `Some` ends the run.
     fn take(&mut self, v: u8, return_pc: u32) -> Option<StopReason> {
+        let fs = if v == vector::ADDRESS_ERROR {
+            ADDRESS_ERROR_FETCH_FS
+        } else {
+            0
+        };
+        self.take_with_fs(v, fs, return_pc)
+    }
+
+    /// As [`Machine::take`], with the fault status `fs` for the frame.
+    fn take_with_fs(&mut self, v: u8, fs: u32, return_pc: u32) -> Option<StopReason> {
         if self.policy.stop_on[v as usize] {
             return Some(self.exception(v));
         }
         self.cpu
-            .raise(&mut self.mem, v, return_pc)
+            .raise_with_fs(&mut self.mem, v, fs, return_pc)
             .err()
             .map(|f| self.fault(f))
     }

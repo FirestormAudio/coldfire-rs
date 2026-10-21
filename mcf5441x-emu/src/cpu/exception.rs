@@ -18,12 +18,15 @@ pub mod vector {
     pub const TRAP_0: u8 = 32;
 }
 
-// guess: RM Table 3-7 / CFPRM Table 11-2 give FS encodings for access errors and say FS is defined for address
-// errors too, but list none specific to an address error; 0000 is "not an access or address error", so it cannot be
-// right. Every address error on this core comes from the instruction stream (an odd PC, or an index extension word
-// RM 3.3.4.2 rejects), so it takes 0100 "error on instruction fetch".
-/// The fault status written into an address-error frame: 0100.
-pub const ADDRESS_ERROR_FS: u32 = 0b0100;
+// Measured on an MCF54415: a jump to an odd address writes FS 0100 "error on instruction fetch" (RM Table 3-7) with
+// the jump as the stacked PC; a word-sized index, a scale factor of 8 or a full-format extension word (RM 3.3.4.2)
+// writes FS 1100 "error on operand read" with the faulting instruction as the stacked PC. An odd RTS, JSR or BSR
+// target or an odd PC loaded by RTE was not measured; it is the same cause as the odd jump (the fetch at the odd
+// address) and takes 0100.
+/// The fault status of an address error from an odd instruction address: 0100.
+pub const ADDRESS_ERROR_FETCH_FS: u32 = 0b0100;
+/// The fault status of an address error from an index extension word RM 3.3.4.2 rejects: 1100.
+pub const ADDRESS_ERROR_OPERAND_FS: u32 = 0b1100;
 
 /// Bits 31-20 of VBR; bits 19-0 are not implemented and read as zero (RM 3.2.8).
 pub const VBR_MASK: u32 = 0xFFF0_0000;
@@ -57,16 +60,32 @@ pub fn stacks_next_pc(vector: u8) -> bool {
 
 impl Cpu {
     /// Take exception `vector` with `return_pc` in the frame (CFPRM ch. 11 steps 1-4): enter supervisor mode with
-    /// T clear, write the two-longword frame (format `4 + SSP[1:0]`, fault status ([`ADDRESS_ERROR_FS`] for an
-    /// address error, else 0), vector, the SR before the exception, then
+    /// T clear, write the two-longword frame (format `4 + SSP[1:0]`, fault status ([`ADDRESS_ERROR_FETCH_FS`] for
+    /// an address error, else 0), vector, the SR before the exception, then
     /// `return_pc`) at the SSP aligned down to 4, and continue at the handler read from `VBR + 4 * vector`.
     ///
     /// On an error nothing in the core changes (memory may hold part of the frame). A handler address with bit 0
     /// set is a fault during exception processing, which halts the core (RM 3.3.4.14): it is reported as
     /// `Fault::Device(Stop::Halt("fault-on-fault"))`.
     pub fn raise(&mut self, mem: &mut Memory, vector: u8, return_pc: u32) -> Result<(), Fault> {
+        let fs = if vector == vector::ADDRESS_ERROR {
+            ADDRESS_ERROR_FETCH_FS
+        } else {
+            0
+        };
+        self.raise_with_fs(mem, vector, fs, return_pc)
+    }
+
+    /// As [`Cpu::raise`], with the fault status `fs` (RM Table 3-7) in the frame.
+    pub fn raise_with_fs(
+        &mut self,
+        mem: &mut Memory,
+        vector: u8,
+        fs: u32,
+        return_pc: u32,
+    ) -> Result<(), Fault> {
         let sys = (self.sr() & !SR_T) | SR_S;
-        self.enter(mem, vector, return_pc, sys)
+        self.enter(mem, vector, fs, return_pc, sys)
     }
 
     /// Take interrupt `vector` at priority `level` (1-7): as [`Cpu::raise`], and also clear M and set the
@@ -79,13 +98,14 @@ impl Cpu {
         return_pc: u32,
     ) -> Result<(), Fault> {
         let sys = (self.sr() & !(SR_T | SR_M | 0x0700)) | SR_S | ((level as u16 & 7) << 8);
-        self.enter(mem, vector, return_pc, sys)
+        self.enter(mem, vector, 0, return_pc, sys)
     }
 
     fn enter(
         &mut self,
         mem: &mut Memory,
         vector: u8,
+        fs: u32,
         return_pc: u32,
         sr: u16,
     ) -> Result<(), Fault> {
@@ -96,11 +116,6 @@ impl Cpu {
             self.other_sp
         };
         let format = 4 | (ssp & 3);
-        let fs = if vector == vector::ADDRESS_ERROR {
-            ADDRESS_ERROR_FS
-        } else {
-            0
-        };
         let frame = (ssp & !3).wrapping_sub(8);
         mem.write(
             frame,
