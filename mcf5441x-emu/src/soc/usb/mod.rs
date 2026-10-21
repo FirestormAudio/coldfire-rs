@@ -1,5 +1,10 @@
 //! The USB OTG controller in device mode (RM ch. 24), a bus master, and the host-side primitives that drive it:
-//! setup packets, IN tokens, OUT packets, bus resets, and host scripts that run on the machine's clock.
+//! setup packets, IN tokens, OUT packets, bus resets, and host scripts that run on the machine's clock; and a
+//! high-level host ([`UsbHost`]) that drives the machine itself between its transactions.
+
+pub mod host;
+
+pub use host::{HostError, UsbHost, endpoints};
 
 use std::fmt;
 use std::ops::Range;
@@ -375,6 +380,11 @@ impl UsbOtg {
     /// The device's address (DEVICEADDR\[USBADR\]).
     pub fn address(&self) -> u8 {
         (self.deviceaddr >> 25) as u8
+    }
+
+    /// Whether the port is at high speed (PORTSC1\[HSP\]): set by [`UsbOtg::bus_reset_end`] (see [`UsbKnobs::hs`]).
+    pub fn high_speed(&self) -> bool {
+        self.portsc & HSP != 0
     }
 
     /// Whether the driver flushed the endpoints (EPFLUSH) since the bus reset began.

@@ -26,7 +26,9 @@ pub use pll::Pll;
 pub use ssi::{Ssi, SsiConfig, SsiCounters};
 pub use stub::{StubBlock, StubMode, Unmodelled};
 pub use uart::{PeerCx, SerialPeer, Uart, UartConfig};
-pub use usb::{HostScript, Step, Token, UsbConfig, UsbKnobs, UsbOtg, UsbStats};
+pub use usb::{
+    HostError, HostScript, Step, Token, UsbConfig, UsbHost, UsbKnobs, UsbOtg, UsbStats, endpoints,
+};
 
 /// Whether a `size` access at `offset` runs past the end of the 32-bit register at `offset & !3`. The core splits
 /// misaligned accesses (RM Table 3-12), so its accesses never do; a bus master's access is made whole

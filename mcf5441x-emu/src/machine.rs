@@ -198,6 +198,11 @@ impl Machine {
         self.mem.horizon = 0;
     }
 
+    /// The time limit [`Machine::set_time_limit`] set, if any.
+    pub fn time_limit(&self) -> Option<u64> {
+        self.time_limit
+    }
+
     /// Record every device access, or stop recording.
     pub fn trace(&mut self, on: bool) {
         self.mem.trace(on);

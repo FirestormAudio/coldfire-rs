@@ -200,6 +200,9 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 - `Machine::with_device::<T, R>(id, f)` calls into a device with a full context (for the USB host primitives, say),
   then serves the bus masters; `device` and `device_mut` give plain typed access (a UART's line, an SSI's capture, a
   card's command log).
+- `soc::UsbHost` is a USB host on the OTG port that runs the machine itself between its transactions: connect,
+  enumerate, control transfers, and a CDC-ACM port's writes and reads (with a read URB's batching, as Linux's cdc_acm
+  does). Each operation runs the machine in short slices until the device answers or a timeout passes.
 
 ### Known differences
 
