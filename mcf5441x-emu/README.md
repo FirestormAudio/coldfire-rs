@@ -77,7 +77,11 @@ Table 19-6), and returns their ids in a [`Chip`](soc::Chip). What the chip does 
 [`ChipOptions`](soc::ChipOptions): the parts behind the chip (the SPI NOR flash and the DSPI and chip select it is on,
 the eMMC, the NAND array), the PLL_CR and PLL_DR values the reset configuration left, and the time scale of every
 clock in machine ticks (each UART's character time, each SSI's frame period, ticks per microsecond for USB, the
-eSDHC's data latency and CMD6 busy time). Nothing in the models assumes a clock frequency.
+eSDHC's data latency and CMD6 busy time). Nothing in the models assumes a clock frequency. `ChipOptions::default()`
+is the chip with nothing on it (no parts, the PLL values of the default reset configuration, one tick per character,
+frame and microsecond); the `with_nor`, `with_card`, `with_nand`, `with_pll`, `with_uart_ticks`, `with_ssi_ticks`,
+`with_usb_ticks_per_us` and `with_sd_timing` builders change one part of it. `Chip::nor`, `nor_mut`, `card` and
+`card_mut` give the parts back from the machine.
 
 ```
 use mcf5441x_emu::Machine;
@@ -153,7 +157,10 @@ fault as unmapped.
 - **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character
   per character time (a status read 3 ticks after a write to an idle transmitter sees TXRDY again: measured on an
   MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing
-  errors; the receive DMA request.
+  errors; the receive DMA request. A [`SerialPeer`](soc::SerialPeer) attached with `Uart::attach` stands for whatever
+  is on the far end of the lines: it is called with each character as it leaves the shift register and at its own
+  events, and sends characters back (or ends the run) through a [`PeerCx`](soc::PeerCx); `Uart::peer` and `peer_mut`
+  give it back by type.
 - **SSI0-1** (RM ch. 35): I2S master or network mode with transmit and receive FIFO 0, one frame per frame period,
   the watermark DMA requests; 24-bit words send bits 23:0 of a FIFO word (measured on an MCF54415); an underrun sends
   silence and empties the FIFO (where the RM re-transmits the previous data). The host supplies the received samples
@@ -166,8 +173,9 @@ fault as unmapped.
   and OUT packets, bus resets, scripts on the machine's clock). A high-speed IN of more than 64 bytes from the DDR
   window (0x4000_0000-0x7FFF_FFFF) never completes (measured on an MCF54415); from SRAM it does.
 - **DDR controller** (RM ch. 21): the registers, with the reset values and the INTSTATUS after START measured on an
-  MCF54415; the DDR itself is RAM.
-- **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, always locked.
+  MCF54415; the DDR itself is RAM. `Ddrmc::set_init_completes(false)` models a DRAM that never finishes initializing.
+- **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, locked unless the host says otherwise
+  (`Pll::set_locked(false)` drops LOCK and LOCKS; LOCKS stays clear when the lock returns, as RM 8.3.4 has it).
 - **NFC** (RM ch. 22): page reads into the buffer from a [`NandArray`](soc::NandArray), with the ECC status byte
   as the RM describes it; the reset values measured on an MCF54415.
 
@@ -200,9 +208,16 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 - `Machine::with_device::<T, R>(id, f)` calls into a device with a full context (for the USB host primitives, say),
   then serves the bus masters; `device` and `device_mut` give plain typed access (a UART's line, an SSI's capture, a
   card's command log).
-- `soc::UsbHost` is a USB host on the OTG port that runs the machine itself between its transactions: connect,
-  enumerate, control transfers, and a CDC-ACM port's writes and reads (with a read URB's batching, as Linux's cdc_acm
-  does). Each operation runs the machine in short slices until the device answers or a timeout passes.
+- [`soc::UsbHost`](soc::UsbHost) (in `soc::usb::host`) is a USB host on the OTG port that runs the machine itself
+  between its transactions: `connect`, `enumerate`, `control_in` and `control_out`, and a CDC-ACM port's `cdc_open`,
+  `write` and `read`. Each operation runs the machine in short slices until the device answers or a timeout passes
+  (`set_timeouts`), and fails with a [`HostError`](soc::HostError). With `set_urb` a bulk IN is held as a read URB
+  of that size is (until a short packet or a full URB, as Linux's cdc_acm does); with none every packet reaches
+  `read` at once. A core waiting in STOP for the host (`Stop::HaltedForever`) is not an error: the host moves the
+  clock on and keeps going.
+- Logs: the models that keep one (the UART's sent characters, register writes of the DDR controller, PLL, eSDHC, USB
+  and stub blocks, the DSPI's frames, the SSI's capture, the NOR's and the card's command logs) drain it with a
+  `take_*`, and `record(false)` stops the logging; that changes only the log, never the registers.
 
 ### Known differences
 
@@ -227,7 +242,7 @@ idle-low select; the eSDHC's RSTA reset of the registers not measured and a data
 phase; USB detach 100 µs after RS clears; the SSI's underrun sending silence and emptying the FIFO, where RM Table
 35-8 re-transmits the previous data; the word and longword accesses over the INTC's 8-bit SIMR, CIMR, CLMASK and
 SLMASK; the DDR controller's PADCR bit 9; the NFC's address increment after a single-page read and its ECC status
-byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once; the NOR flash's WEL and WIP timing
+byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once (LOCKS stays clear after a lost lock); the NOR flash's WEL and WIP timing
 around a failed program.
 
 ## Running a program
