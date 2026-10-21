@@ -39,6 +39,8 @@ pub struct Pll {
     writes: Vec<(u32, u32)>,
     record: bool,
     locked: bool,
+    /// Lock was lost since reset: LOCKS stays clear (RM 8.3.4).
+    lost: bool,
 }
 
 impl Pll {
@@ -50,6 +52,7 @@ impl Pll {
             writes: Vec::new(),
             record: true,
             locked: true,
+            lost: false,
         }
     }
 
@@ -68,19 +71,21 @@ impl Pll {
         self.record = on;
     }
 
-    /// Host knob: whether the PLL is locked (default on). Off models a PLL that never locks: PLL_SR\[LOCK\] and
-    /// \[LOCKS\] read 0. guess: turning it back on restores both bits (the RM makes LOCKS sticky after a loss of
-    /// lock; the knob models a PLL that never locked, not one that lost lock).
+    /// Host knob: whether the PLL is locked (default on). Off models a PLL that loses lock (or never locks):
+    /// PLL_SR\[LOCK\] and \[LOCKS\] read 0 (RM 8.3.4). On again restores LOCK only: LOCKS is sticky and "remains
+    /// cleared" after the PLL re-locks (RM 8.3.4); only a reset sets it again, and the model has no reset of the
+    /// PLL. guess: a write to PLL_SR does not restore LOCKS (the RM says to clear it by writing a one, which
+    /// leaves it 0).
     pub fn set_locked(&mut self, on: bool) {
         self.locked = on;
+        self.lost |= !on;
     }
 
     fn register(&self, reg: u32) -> u32 {
         match reg {
             PLL_CR => self.cr,
             PLL_DR => self.dr,
-            PLL_SR if self.locked => LOCK | LOCKS,
-            PLL_SR => 0,
+            PLL_SR => (if self.locked { LOCK } else { 0 }) | (if self.lost { 0 } else { LOCKS }),
             _ => 0,
         }
     }

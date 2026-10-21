@@ -578,7 +578,10 @@ fn unlocked_pll_reads_no_lock() {
         "the rest is unchanged"
     );
     r.m.device_mut::<Pll>(r.pll).set_locked(true);
-    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK | LOCKS);
+    // RM 8.3.4: LOCKS is sticky; it stays cleared after the PLL re-locks
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK);
+    r.write(PLL + PLL_SR, Size::Long, LOCKS);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK);
 }
 
 #[test]

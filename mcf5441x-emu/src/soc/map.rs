@@ -101,8 +101,7 @@ const RGPIO: (u32, u32) = (0x8C00_0000, 0x0400_0000);
 /// PLL_CR as the default reset configuration leaves it (RM Figure 8-3): LOLEN set, REFDIV 0, FBKDIV 9.
 const PLL_CR_RESET: u32 = 1 << 12 | 9;
 /// PLL_DR as the default and parallel reset configurations leave it (RM Figure 8-4): OUTDIV5 0x1F, OUTDIV4 7,
-/// OUTDIV3 9, OUTDIV2 3, OUTDIV1 1. guess: the figure's reset row for OUTDIV4 and OUTDIV3 is garbled in the text
-/// extraction and the note names only OUTDIV5, OUTDIV2 and OUTDIV1; 7 and 9 are read off the row's bits.
+/// OUTDIV3 9, OUTDIV2 3, OUTDIV1 1 (the reset row gives OUTDIV4 and OUTDIV3; the note gives the others).
 const PLL_DR_RESET: u32 = 0x1F << 21 | 7 << 16 | 9 << 10 | 3 << 5 | 1;
 
 /// What the board decides about the chip: the parts outside it and the time scale of its clocks, in ticks of the
