@@ -27,7 +27,7 @@ pub fn unmodelled(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Faul
 
 /// The handler for `op`.
 pub const fn handler(op: Op) -> Handler {
-    use ops::{arith, moves};
+    use ops::{arith, logic, moves};
     match op {
         Op::Move => moves::move_,
         Op::Movea => moves::movea,
@@ -37,6 +37,35 @@ pub const fn handler(op: Op) -> Handler {
         Op::Illegal => moves::illegal,
         Op::Addq => arith::addq,
         Op::Subq => arith::subq,
+        Op::AddEaDn => arith::add_ea_dn,
+        Op::AddDnEa => arith::add_dn_ea,
+        Op::SubEaDn => arith::sub_ea_dn,
+        Op::SubDnEa => arith::sub_dn_ea,
+        Op::Addi => arith::addi,
+        Op::Subi => arith::subi,
+        Op::Adda => arith::adda,
+        Op::Suba => arith::suba,
+        Op::Addx => arith::addx,
+        Op::Subx => arith::subx,
+        Op::Cmp => arith::cmp,
+        Op::Cmpi => arith::cmpi,
+        Op::Cmpa => arith::cmpa,
+        Op::Neg => arith::neg,
+        Op::Negx => arith::negx,
+        Op::AndEaDn => logic::and_ea_dn,
+        Op::AndDnEa => logic::and_dn_ea,
+        Op::OrEaDn => logic::or_ea_dn,
+        Op::OrDnEa => logic::or_dn_ea,
+        Op::Eor => logic::eor,
+        Op::Andi => logic::andi,
+        Op::Ori => logic::ori,
+        Op::Eori => logic::eori,
+        Op::Not => logic::not,
+        Op::Clr => logic::clr,
+        Op::Tst => logic::tst,
+        Op::Ext => logic::ext,
+        Op::Extb => logic::extb,
+        Op::Swap => logic::swap,
         _ => unmodelled,
     }
 }

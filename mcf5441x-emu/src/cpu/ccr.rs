@@ -104,6 +104,17 @@ impl Flags {
         };
     }
 
+    /// Flags of `dst - src = res` at `size` for a comparison: as [`Flags::sub`] but X unchanged.
+    #[inline(always)]
+    pub fn cmp(&mut self, size: Size, src: u32, dst: u32, res: u32) {
+        self.keep_x();
+        self.kind = Kind::Sub;
+        self.size = size;
+        self.src = src;
+        self.dst = dst;
+        self.res = res;
+    }
+
     /// Set X N Z V C from the low five bits of `ccr`.
     pub fn set_ccr(&mut self, ccr: u8) {
         *self = Flags {
