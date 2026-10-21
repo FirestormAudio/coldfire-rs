@@ -38,7 +38,7 @@ pub fn unmodelled(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Faul
 
 /// The handler for `op`.
 pub const fn handler(op: Op) -> Handler {
-    use ops::{arith, bits, flow, isac, logic, moves, muldiv, shift, system};
+    use ops::{arith, bits, emac, flow, isac, logic, moves, muldiv, shift, system};
     match op {
         Op::Move => moves::move_,
         Op::Movea => moves::movea,
@@ -73,6 +73,7 @@ pub const fn handler(op: Op) -> Handler {
         Op::Not => logic::not,
         Op::Clr => logic::clr,
         Op::Tst => logic::tst,
+        Op::Tas => logic::tas,
         Op::Ext => logic::ext,
         Op::Extb => logic::extb,
         Op::Swap => logic::swap,
@@ -135,6 +136,21 @@ pub const fn handler(op: Op) -> Handler {
         Op::Wddata => system::wddata,
         Op::Wdebug => system::wdebug,
         Op::Cpushl | Op::Intouch => system::cache_hint,
+        Op::Mac => emac::mac,
+        Op::MacLoad => emac::mac_load,
+        Op::MoveToAcc => emac::move_to_acc,
+        Op::MoveAccAcc => emac::move_acc_acc,
+        Op::MoveFromAcc => emac::move_from_acc,
+        Op::Movclr => emac::movclr,
+        Op::MoveToMacsr => emac::move_to_macsr,
+        Op::MoveFromMacsr => emac::move_from_macsr,
+        Op::MoveMacsrCcr => emac::move_macsr_ccr,
+        Op::MoveToAccext01 => emac::move_to_accext01,
+        Op::MoveFromAccext01 => emac::move_from_accext01,
+        Op::MoveToAccext23 => emac::move_to_accext23,
+        Op::MoveFromAccext23 => emac::move_from_accext23,
+        Op::MoveToMask => emac::move_to_mask,
+        Op::MoveFromMask => emac::move_from_mask,
         Op::FpuOp | Op::Fbcc | Op::Fsave | Op::Frestore => system::line_f,
         _ => unmodelled,
     }

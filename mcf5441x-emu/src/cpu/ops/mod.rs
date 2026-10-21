@@ -2,6 +2,7 @@
 
 pub mod arith;
 pub mod bits;
+pub mod emac;
 pub mod flow;
 pub mod isac;
 pub mod logic;

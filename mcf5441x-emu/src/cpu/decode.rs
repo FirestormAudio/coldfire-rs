@@ -17,6 +17,14 @@ use crate::mem::{Fault, Memory, Size};
 /// | 3    | the last extension before the EA extension words (`w`, `ext` as read; `l`; `imm` by size);  |
 /// |      | for BRA, BSR and Bcc the sign-extended displacement                                       |
 ///
+/// The EMAC forms rearrange the slots so that their handlers find every field in one place:
+///
+/// | op              | 0         | 1         | 2              | 3                                                |
+/// |-----------------|-----------|-----------|----------------|--------------------------------------------------|
+/// | MAC/MSAC        | Rx (0-15) | Ry (0-15) | ACC (0-3)      | the extension word                               |
+/// | MAC/MSAC + load | Rx (0-15) | Ry (0-15) | ACC (0-3)      | the extension word with Rw (0-15) in bits 15-12  |
+/// | MOVE ACCy,ACCx  | -         | ACCy      | ACCx           | -                                                |
+///
 /// `ea` is the `m`/`e` field and `ea2` the `M`/`E` field (MOVE's destination), [`Ea::NONE`] when absent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Decoded {
@@ -160,6 +168,28 @@ pub fn decode(mem: &mut Memory, pc: u32) -> Result<(Decoded, &'static Form), Dec
             Size::Word => sign_extend(Size::Word, operands[3]),
             Size::Long => operands[3],
         };
+    }
+
+    match form.id {
+        Op::Mac | Op::MacLoad => {
+            // CFPRM ch. 6 MAC: opword bit 6 is the msb of the register in bits 11-9 (Rx, or Rw with a load);
+            // extension bit 4 is the msb of the accumulator and opword bit 7 its lsb, inverted with a load.
+            let ext = operands[3];
+            let r = (f.get('x', opword).unwrap_or(0) << 3) | operands[0];
+            let lsb = operands[2] & 1;
+            if form.id == Op::Mac {
+                operands = [r, operands[1], ((ext >> 3) & 2) | lsb, ext];
+            } else {
+                operands = [
+                    ext >> 12,
+                    ext & 0xF,
+                    ((ext >> 3) & 2) | (lsb ^ 1),
+                    (ext & 0x0FFF) | (r << 12),
+                ];
+            }
+        }
+        Op::MoveAccAcc => operands[1] = opword as u32 & 3,
+        _ => {}
     }
 
     let ea = s.ea(f.ea(opword), size, pc)?;

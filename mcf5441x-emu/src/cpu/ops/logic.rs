@@ -1,4 +1,4 @@
-//! AND, OR, EOR, NOT, CLR, TST, EXT, EXTB and SWAP (CFPRM ch. 4). N and Z come from the result, V and C are
+//! AND, OR, EOR, NOT, CLR, TST, TAS, EXT, EXTB and SWAP (CFPRM ch. 4). N and Z come from the result, V and C are
 //! cleared and X is unchanged.
 
 use crate::cpu::ea::{self, sign_extend, size_mask};
@@ -97,6 +97,15 @@ pub fn not(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
 pub fn clr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     ea::store(cpu, mem, &d.ea, d.size, 0)?;
     cpu.flags.logic(d.size, 0);
+    Ok(Flow::Next)
+}
+
+/// `TAS.B <ea>x`: N and Z from the byte as read, then bit 7 is set, in one read-modify-write.
+pub fn tas(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
+    let loc = ea::resolve(cpu, &d.ea, Size::Byte);
+    let v = ea::read(cpu, mem, loc, Size::Byte)?;
+    ea::write(cpu, mem, loc, Size::Byte, v | 0x80)?;
+    cpu.flags.logic(Size::Byte, v);
     Ok(Flow::Next)
 }
 

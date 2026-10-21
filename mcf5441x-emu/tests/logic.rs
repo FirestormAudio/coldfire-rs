@@ -223,3 +223,29 @@ fn tst_clr() {
     let mut m = exec("clr.b (1,%a1)", 0, 0, 0xDEAD_BEEF, 0);
     assert_eq!(m.mem.read(MEM, Size::Long).unwrap(), 0xDE00_BEEF);
 }
+
+#[test]
+fn tas_tests_old_byte_and_sets_bit_7() {
+    // CFPRM ch. 4 TAS: N and Z from the byte as it was, V and C cleared, X kept; bit 7 of the byte is then set,
+    // the other bytes of the longword untouched.
+    let rows: [(u32, u32, u8); 4] = [
+        (0x0012_3456, 0x8012_3456, Z),
+        (0x7F12_3456, 0xFF12_3456, 0),
+        (0x8012_3456, 0x8012_3456, N),
+        (0xFF12_3456, 0xFF12_3456, N),
+    ];
+    for (before, after, nz) in rows {
+        for ccr in [0, X | V | C, X | N | Z | V | C] {
+            let mut m = exec("tas.b (%a1)", 0, 0, before, ccr);
+            assert_eq!(m.mem.read(MEM, Size::Long).unwrap(), after, "{before:#x}");
+            assert_eq!(m.cpu.ccr(), nz | (ccr & X), "{before:#x} in={ccr:#x}");
+        }
+    }
+    // A byte operand steps (An)+ by one.
+    let mut m = exec("tas.b (%a1)+", 0, 0, 0x0001_0000, 0);
+    assert_eq!(m.cpu.a[1], MEM + 1);
+    assert_eq!(m.mem.read(MEM, Size::Long).unwrap(), 0x8001_0000);
+    let mut m = exec("tas.b 1(%a1)", 0, 0, 0x0001_0000, 0);
+    assert_eq!(m.mem.read(MEM, Size::Long).unwrap(), 0x0081_0000);
+    assert_eq!(m.cpu.ccr(), 0);
+}

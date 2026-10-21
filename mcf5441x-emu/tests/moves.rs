@@ -407,16 +407,6 @@ fn unmapped_access_stops() {
 }
 
 #[test]
-fn unimplemented_op_stops_unmodelled_with_its_mnemonic() {
-    // TAS (ISA_B, CFPRM ch. 4): the table recognises it and this core does not execute it yet.
-    let (mut m, end) = prepare("tas.b (%a0)\nend:");
-    m.cpu.a[0] = DST;
-    let r = m.run(until(end));
-    assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
-    assert_eq!(r.detail, "tas", "{r:?}");
-}
-
-#[test]
 fn until_pc_and_instruction_limit() {
     let src = "moveq #1,%d0\nmoveq #2,%d1\nmoveq #3,%d2\nmoveq #4,%d3\nmoveq #5,%d4\nend:";
     let (mut m, end) = prepare(src);

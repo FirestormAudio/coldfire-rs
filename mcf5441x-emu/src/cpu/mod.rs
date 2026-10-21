@@ -3,6 +3,7 @@
 pub mod ccr;
 pub mod decode;
 pub mod ea;
+pub mod emac;
 pub mod exception;
 pub mod exec;
 pub mod ops;
@@ -10,6 +11,7 @@ pub mod ops;
 pub use ccr::Flags;
 pub use decode::{DecodeError, Decoded, decode};
 pub use ea::Ea;
+pub use emac::Emac;
 pub use exception::ExceptionPolicy;
 pub use exec::{Flow, Handler, handler};
 
@@ -44,6 +46,8 @@ pub struct Cpu {
     pub mmubar: u32,
     pub rgpiobar: u32,
     pub rambar: u32,
+    /// The enhanced multiply-accumulate unit (RM ch. 5).
+    pub emac: Emac,
     /// SR without the CCR (T, S, M, IPL).
     sys: u16,
     pub(crate) flags: Flags,
@@ -72,6 +76,7 @@ impl Cpu {
             mmubar: 0,
             rgpiobar: 0,
             rambar: 0,
+            emac: Emac::new(),
             sys: 0x2700,
             flags: Flags::default(),
         }
