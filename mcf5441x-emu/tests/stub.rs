@@ -135,3 +135,30 @@ fn unmodelled_block_refuses_with_its_name() {
     assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
     assert_eq!(r.detail, "CAN0 +0x20");
 }
+
+#[test]
+fn take_writes_drains_and_record_off_logs_nothing() {
+    let (mut m, l) = prepare(
+        "move.l #1,%d0\nmove.l %d0,(%a0)\nmove.l #2,%d0\nmove.w %d0,4(%a0)\nmove.l #3,%d0\nmove.l %d0,8(%a0)\nend: nop",
+        &["end"],
+    );
+    let id = m.add_device(
+        DEV,
+        0x100,
+        Box::new(StubBlock::new("scm", StubMode::ReadBack)),
+    );
+    m.cpu.a[0] = DEV;
+    m.run(until(l[0]));
+    assert_eq!(m.device::<StubBlock>(id).writes().len(), 3);
+    let taken = m.device_mut::<StubBlock>(id).take_writes();
+    assert_eq!(taken.len(), 3);
+    assert_eq!(taken[1], (taken[1].0, 4, Size::Word, 2));
+    assert!(m.device::<StubBlock>(id).writes().is_empty());
+    // behaviour is unchanged with the log off: the register still reads back
+    m.device_mut::<StubBlock>(id).record(false);
+    m.device_mut::<StubBlock>(id).set(0x20, 7);
+    assert_eq!(m.access(DEV + 0x20, Size::Long, None), Ok(7));
+    m.access(DEV + 0x24, Size::Long, Some(9)).unwrap();
+    assert_eq!(m.access(DEV + 0x24, Size::Long, None), Ok(9));
+    assert!(m.device::<StubBlock>(id).writes().is_empty());
+}

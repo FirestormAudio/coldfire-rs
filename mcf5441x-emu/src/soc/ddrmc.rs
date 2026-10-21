@@ -68,6 +68,8 @@ pub struct Ddrmc {
     /// INTSTATUS bits 7:0.
     int_status: u32,
     writes: Vec<(u32, Size, u32)>,
+    record: bool,
+    init_completes: bool,
 }
 
 impl Default for Ddrmc {
@@ -89,12 +91,31 @@ impl Ddrmc {
             padcr: PADCR_RESET,
             int_status: 0,
             writes: Vec::new(),
+            record: true,
+            init_completes: true,
         }
     }
 
     /// Every write so far: (offset, size, value), in order.
     pub fn writes(&self) -> &[(u32, Size, u32)] {
         &self.writes
+    }
+
+    /// Every write so far, emptying the log.
+    pub fn take_writes(&mut self) -> Vec<(u32, Size, u32)> {
+        std::mem::take(&mut self.writes)
+    }
+
+    /// Whether writes are logged (default on). Off changes only the log, never the registers.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
+    }
+
+    /// Host knob: whether setting CR09\[START\] completes the initialization (default on). Off models a DRAM
+    /// that never initializes: CR27 INIT_DONE (and the status OR bit) stay clear after START. A START made while
+    /// the knob was off does not complete when it is turned back on; the next START edge does.
+    pub fn set_init_completes(&mut self, on: bool) {
+        self.init_completes = on;
     }
 
     fn register(&self, reg: u32) -> u32 {
@@ -130,14 +151,16 @@ impl Device for Ddrmc {
                 crossing("DDR controller", offset, size, "write"),
             );
         }
-        self.writes.push((offset, size, value));
+        if self.record {
+            self.writes.push((offset, size, value));
+        }
         let reg = offset & !3;
         let new = lane_merge(self.register(reg), offset, size, value);
         match reg {
             _ if READ_ONLY.contains(&reg) => {}
             CR09 => {
                 let old = self.cr[(CR09 / 4) as usize];
-                if new & START != 0 && old & START == 0 {
+                if new & START != 0 && old & START == 0 && self.init_completes {
                     self.int_status |= INIT_DONE;
                 }
                 self.cr[(CR09 / 4) as usize] = new;

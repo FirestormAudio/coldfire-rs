@@ -100,6 +100,7 @@ pub struct SpiNor {
     page: u32,
     log: Vec<(u64, u8, Option<u32>)>,
     writes: Vec<(u64, u8, u32)>,
+    record: bool,
     wel: bool,
     /// E_ERR, P_ERR and WIP latched until CLSR.
     status: u8,
@@ -154,6 +155,7 @@ impl SpiNor {
             page,
             log: Vec::new(),
             writes: Vec::new(),
+            record: true,
             wel: false,
             status: 0,
             busy: 0,
@@ -191,6 +193,21 @@ impl SpiNor {
         &self.writes
     }
 
+    /// Every command so far, emptying the log.
+    pub fn take_log(&mut self) -> Vec<(u64, u8, Option<u32>)> {
+        std::mem::take(&mut self.log)
+    }
+
+    /// Every program, erase and DYBWR that acted so far, emptying the log.
+    pub fn take_writes(&mut self) -> Vec<(u64, u8, u32)> {
+        std::mem::take(&mut self.writes)
+    }
+
+    /// Whether commands and writes are logged (default on). Off changes only the logs, never the part.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
+    }
+
     /// The injected faults and the WIP timing.
     pub fn faults(&mut self) -> &mut NorFaults {
         &mut self.faults
@@ -212,7 +229,9 @@ impl SpiNor {
     fn end(&mut self, now: u64) {
         let Some(op) = self.op.take() else { return };
         let addr = (address_bytes(op).unwrap_or(0) > 0).then_some(self.addr);
-        self.log.push((now, op, addr));
+        if self.record {
+            self.log.push((now, op, addr));
+        }
         match op {
             WREN => self.wel = true,
             WRDI => self.wel = false,
@@ -222,7 +241,9 @@ impl SpiNor {
             }
             PP | PP4 | SE | SE4 | DYBWR => {
                 if self.wel {
-                    self.writes.push((now, op, self.addr));
+                    if self.record {
+                        self.writes.push((now, op, self.addr));
+                    }
                     self.execute(op);
                 }
                 // guess: WEL clears after every attempt, failed or not

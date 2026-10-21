@@ -30,6 +30,7 @@ pub struct StubBlock {
     canned: BTreeMap<u32, u32>,
     stored: BTreeMap<u32, u32>,
     log: Vec<(u64, u32, Size, u32)>,
+    record: bool,
     hook: Option<WriteHook>,
 }
 
@@ -42,6 +43,7 @@ impl StubBlock {
             canned: BTreeMap::new(),
             stored: BTreeMap::new(),
             log: Vec::new(),
+            record: true,
             hook: None,
         }
     }
@@ -67,6 +69,16 @@ impl StubBlock {
     /// Every write so far: (tick, offset, size, value), in order.
     pub fn writes(&self) -> &[(u64, u32, Size, u32)] {
         &self.log
+    }
+
+    /// Every write so far, emptying the log.
+    pub fn take_writes(&mut self) -> Vec<(u64, u32, Size, u32)> {
+        std::mem::take(&mut self.log)
+    }
+
+    /// Whether writes are logged (default on). Off changes only the log, never the registers or the hook.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
     }
 
     /// Call `f` on every write, after it is logged (and stored), with the offset, size, value and context: a
@@ -98,7 +110,9 @@ impl Device for StubBlock {
 
     fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx) {
         let value = truncate(value, size);
-        self.log.push((cx.now, offset, size, value));
+        if self.record {
+            self.log.push((cx.now, offset, size, value));
+        }
         if self.mode == StubMode::ReadBack {
             self.stored.insert(offset, value);
         }

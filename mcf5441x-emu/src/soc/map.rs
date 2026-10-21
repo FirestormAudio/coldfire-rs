@@ -98,6 +98,13 @@ const UNMODELLED: [(&str, u32); 26] = [
 /// Rapid GPIO: 0x8C00_0000-0x8FFF_FFFF (RM Table 1-2, RM ch. 16).
 const RGPIO: (u32, u32) = (0x8C00_0000, 0x0400_0000);
 
+/// PLL_CR as the default reset configuration leaves it (RM Figure 8-3): LOLEN set, REFDIV 0, FBKDIV 9.
+const PLL_CR_RESET: u32 = 1 << 12 | 9;
+/// PLL_DR as the default and parallel reset configurations leave it (RM Figure 8-4): OUTDIV5 0x1F, OUTDIV4 7,
+/// OUTDIV3 9, OUTDIV2 3, OUTDIV1 1. guess: the figure's reset row for OUTDIV4 and OUTDIV3 is garbled in the text
+/// extraction and the note names only OUTDIV5, OUTDIV2 and OUTDIV1; 7 and 9 are read off the row's bits.
+const PLL_DR_RESET: u32 = 0x1F << 21 | 7 << 16 | 9 << 10 | 3 << 5 | 1;
+
 /// What the board decides about the chip: the parts outside it and the time scale of its clocks, in ticks of the
 /// machine clock (one instruction is one tick).
 pub struct ChipOptions {
@@ -122,6 +129,77 @@ pub struct ChipOptions {
     pub sd_cmd6_busy: u64,
 }
 
+impl Default for ChipOptions {
+    /// The chip with nothing on it: no NOR, card or NAND; PLL_CR 0x1009 and PLL_DR 0x03E7_2461, the values the
+    /// default reset configuration (RCON) leaves (RM Figures 8-3 and 8-4); UARTs with no character time (0 ticks
+    /// per byte); SSIs with a frame every tick; USB with 1 tick per microsecond; the eSDHC with a data latency of
+    /// 1 tick and a CMD6 busy of 1 tick.
+    fn default() -> ChipOptions {
+        ChipOptions {
+            nor: None,
+            card: None,
+            nand: None,
+            pll: (PLL_CR_RESET, PLL_DR_RESET),
+            uart_ticks_per_byte: [0; 10],
+            ssi_ticks_per_frame: [1; 2],
+            usb_ticks_per_us: 1,
+            sd_data_latency: 1,
+            sd_cmd6_busy: 1,
+        }
+    }
+}
+
+impl ChipOptions {
+    /// Put `nor` on DSPI`dspi`'s chip select PCS`pcs`.
+    pub fn with_nor(mut self, dspi: u8, pcs: u8, nor: SpiNor) -> ChipOptions {
+        self.nor = Some((dspi, pcs, nor));
+        self
+    }
+
+    /// Put `card` behind the eSDHC.
+    pub fn with_card(mut self, card: Emmc) -> ChipOptions {
+        self.card = Some(card);
+        self
+    }
+
+    /// Put `nand` behind the NFC.
+    pub fn with_nand(mut self, nand: NandArray) -> ChipOptions {
+        self.nand = Some(nand);
+        self
+    }
+
+    /// Set PLL_CR and PLL_DR as the reset configuration left them.
+    pub fn with_pll(mut self, cr: u32, dr: u32) -> ChipOptions {
+        self.pll = (cr, dr);
+        self
+    }
+
+    /// Set UART`n`'s character time (0-9). Panics when `n` is above 9.
+    pub fn with_uart_ticks(mut self, n: usize, ticks_per_byte: u64) -> ChipOptions {
+        self.uart_ticks_per_byte[n] = ticks_per_byte;
+        self
+    }
+
+    /// Set SSI`n`'s frame period (0 or 1). Panics when `n` is above 1; [`Mcf5441x::build`] rejects a period of 0.
+    pub fn with_ssi_ticks(mut self, n: usize, ticks_per_frame: u64) -> ChipOptions {
+        self.ssi_ticks_per_frame[n] = ticks_per_frame;
+        self
+    }
+
+    /// Set the USB controller's time scale.
+    pub fn with_usb_ticks_per_us(mut self, ticks_per_us: u64) -> ChipOptions {
+        self.usb_ticks_per_us = ticks_per_us;
+        self
+    }
+
+    /// Set the eSDHC's command-to-data delay and how long the card holds DAT0 busy after a CMD6.
+    pub fn with_sd_timing(mut self, data_latency: u64, cmd6_busy: u64) -> ChipOptions {
+        self.sd_data_latency = data_latency;
+        self.sd_cmd6_busy = cmd6_busy;
+        self
+    }
+}
+
 /// The devices [`Mcf5441x::build`] added, for [`Machine::device`] and [`Machine::with_device`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Chip {
@@ -139,6 +217,8 @@ pub struct Chip {
     pub ssi: [DeviceId; 2],
     /// DSPI0-DSPI3 ([`Dspi`]).
     pub dspi: [DeviceId; 4],
+    /// Where the NOR sits, (DSPI, PCS), when [`ChipOptions::nor`] gave one: see [`Chip::nor`].
+    pub nor: Option<(u8, u8)>,
     /// The eSDHC ([`Esdhc`]).
     pub esdhc: DeviceId,
     /// The USB OTG controller ([`UsbOtg`]).
@@ -151,6 +231,36 @@ pub struct Chip {
     pub nfc: Option<DeviceId>,
     /// The [`StubBlock`]s, by name: XBS, FlexBus, SCM, CCM, GPIO.
     pub stubs: Vec<(&'static str, DeviceId)>,
+}
+
+impl Chip {
+    /// The SPI NOR flash, if [`ChipOptions::nor`] gave one.
+    pub fn nor<'m>(&self, m: &'m Machine) -> Option<&'m SpiNor> {
+        let (d, pcs) = self.nor?;
+        Some(
+            m.device::<Dspi>(self.dspi[usize::from(d)])
+                .device::<SpiNor>(pcs),
+        )
+    }
+
+    /// The SPI NOR flash, mutably.
+    pub fn nor_mut<'m>(&self, m: &'m mut Machine) -> Option<&'m mut SpiNor> {
+        let (d, pcs) = self.nor?;
+        Some(
+            m.device_mut::<Dspi>(self.dspi[usize::from(d)])
+                .device_mut::<SpiNor>(pcs),
+        )
+    }
+
+    /// The eSDHC's card, if [`ChipOptions::card`] gave one.
+    pub fn card<'m>(&self, m: &'m Machine) -> Option<&'m Emmc> {
+        m.device::<Esdhc>(self.esdhc).card()
+    }
+
+    /// The eSDHC's card, mutably.
+    pub fn card_mut<'m>(&self, m: &'m mut Machine) -> Option<&'m mut Emmc> {
+        m.device_mut::<Esdhc>(self.esdhc).card_mut()
+    }
 }
 
 /// The MCF5441x's on-chip modules, mapped into a [`Machine`].
@@ -243,6 +353,7 @@ impl Mcf5441x {
             m.add_device(base, SLOT, Box::new(Ssi::new(config)))
         });
 
+        let nor_at = options.nor.as_ref().map(|&(d, pcs, _)| (d, pcs));
         let mut dspis = [(); 4].map(|_| Dspi::new());
         if let Some((d, pcs, nor)) = options.nor {
             assert!(d < 4, "no DSPI{d}: DSPI0-DSPI3 only");
@@ -309,6 +420,7 @@ impl Mcf5441x {
             uart,
             ssi,
             dspi,
+            nor: nor_at,
             esdhc,
             usb,
             ddrmc,

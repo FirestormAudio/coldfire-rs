@@ -603,3 +603,24 @@ fn stop_wakes_on_the_dma_interrupt_of_a_received_byte() {
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.mem.peek(RING, 1).unwrap(), [0x66]);
 }
+
+#[test]
+fn take_sent_drains_and_record_off_logs_nothing() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let (mut m, id) = board(false);
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let s = seen.clone();
+    m.device_mut::<Uart>(id)
+        .on_byte(Box::new(move |t, b| s.borrow_mut().push((t, b))));
+    w(&mut m, UCR, 0x04);
+    w(&mut m, URB, 0x31);
+    idle(&mut m, 250);
+    assert_eq!(m.device_mut::<Uart>(id).take_sent(), [(3, 0x31)]);
+    assert!(uart(&m, id).sent().is_empty());
+    m.device_mut::<Uart>(id).record(false);
+    w(&mut m, URB, 0x32);
+    idle(&mut m, 500);
+    assert!(uart(&m, id).sent().is_empty(), "not logged");
+    assert_eq!(seen.borrow().len(), 2, "but the hook saw it");
+}

@@ -37,6 +37,8 @@ pub struct Pll {
     cr: u32,
     dr: u32,
     writes: Vec<(u32, u32)>,
+    record: bool,
+    locked: bool,
 }
 
 impl Pll {
@@ -46,6 +48,8 @@ impl Pll {
             cr,
             dr,
             writes: Vec::new(),
+            record: true,
+            locked: true,
         }
     }
 
@@ -54,11 +58,29 @@ impl Pll {
         &self.writes
     }
 
+    /// Every accepted write so far, emptying the log.
+    pub fn take_writes(&mut self) -> Vec<(u32, u32)> {
+        std::mem::take(&mut self.writes)
+    }
+
+    /// Whether writes are logged (default on). Off changes only the log, never the registers.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
+    }
+
+    /// Host knob: whether the PLL is locked (default on). Off models a PLL that never locks: PLL_SR\[LOCK\] and
+    /// \[LOCKS\] read 0. guess: turning it back on restores both bits (the RM makes LOCKS sticky after a loss of
+    /// lock; the knob models a PLL that never locked, not one that lost lock).
+    pub fn set_locked(&mut self, on: bool) {
+        self.locked = on;
+    }
+
     fn register(&self, reg: u32) -> u32 {
         match reg {
             PLL_CR => self.cr,
             PLL_DR => self.dr,
-            PLL_SR => LOCK | LOCKS,
+            PLL_SR if self.locked => LOCK | LOCKS,
+            PLL_SR => 0,
             _ => 0,
         }
     }
@@ -87,7 +109,9 @@ impl Device for Pll {
                 ),
             );
         }
-        self.writes.push((offset, value));
+        if self.record {
+            self.writes.push((offset, value));
+        }
         let new = lane_merge(self.register(reg), offset, size, value);
         match reg {
             PLL_CR => self.cr = new & CR_BITS,

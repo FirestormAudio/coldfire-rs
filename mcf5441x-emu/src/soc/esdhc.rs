@@ -198,6 +198,7 @@ pub struct Esdhc {
     /// SDCLKEN was set by a SYSCTL write since the last reset (it then guards the divider).
     clock_written: bool,
     writes: Vec<(u32, u32)>,
+    record: bool,
 }
 
 impl Esdhc {
@@ -226,6 +227,7 @@ impl Esdhc {
             busy_until: 0,
             clock_written: false,
             writes: Vec::new(),
+            record: true,
         }
     }
 
@@ -242,6 +244,16 @@ impl Esdhc {
     /// Every accepted register write, (offset, value), in order.
     pub fn writes(&self) -> &[(u32, u32)] {
         &self.writes
+    }
+
+    /// Every accepted register write so far, emptying the log.
+    pub fn take_writes(&mut self) -> Vec<(u32, u32)> {
+        std::mem::take(&mut self.writes)
+    }
+
+    /// Whether register writes are logged (default on). Off changes only the log, never the controller.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
     }
 
     fn signal(&self, cx: &mut DeviceCx) {
@@ -295,6 +307,7 @@ impl Esdhc {
                 card: self.card.take(),
                 busy_until: self.busy_until,
                 writes: std::mem::take(&mut self.writes),
+                record: self.record,
                 ..Esdhc::new(self.config, None)
             };
         }
@@ -551,7 +564,7 @@ impl Device for Esdhc {
             }
             _ => {}
         }
-        if cx.refused.is_none() {
+        if self.record && cx.refused.is_none() {
             self.writes.push((offset, value));
         }
     }

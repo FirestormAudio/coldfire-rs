@@ -734,3 +734,29 @@ fn undrained_data_phase_times_out() {
     b.idle(t + LATENCY + 1);
     assert_eq!(b.r(IRQSTAT) & (TC | DTOE), DTOE);
 }
+
+#[test]
+fn take_writes_and_take_commands_drain_and_record_off_logs_nothing() {
+    let mut b = board(&[0; 1024]);
+    b.cmd(0x0209_0000, 0, true); // CMD2
+    assert!(!b.esdhc().writes().is_empty());
+    let writes = b.m.device_mut::<Esdhc>(b.sd).take_writes();
+    assert!(writes.contains(&(CMDARG, 0)));
+    assert!(b.esdhc().writes().is_empty());
+    let cmds =
+        b.m.device_mut::<Esdhc>(b.sd)
+            .card_mut()
+            .unwrap()
+            .take_commands();
+    assert_eq!(cmds, [(2, 0)]);
+    assert!(b.esdhc().card().unwrap().commands().is_empty());
+    b.m.device_mut::<Esdhc>(b.sd).record(false);
+    b.m.device_mut::<Esdhc>(b.sd)
+        .card_mut()
+        .unwrap()
+        .record(false);
+    let (_, rsp) = b.cmd(0x0209_0000, 0, true);
+    assert_eq!(rsp, CID[0], "the card still answers");
+    assert!(b.esdhc().writes().is_empty());
+    assert!(b.esdhc().card().unwrap().commands().is_empty());
+}

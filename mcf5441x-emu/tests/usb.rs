@@ -712,3 +712,20 @@ fn a_driver_bring_up_and_control_transfer_are_accepted() {
     assert_eq!(t.in_token(0, 7), Token::Stall);
     assert_eq!(t.dev().stats().writes.len(), 18, "every write accepted");
 }
+
+#[test]
+fn take_writes_drains_and_record_off_logs_nothing() {
+    let mut t = rig();
+    t.w(USBMODE, 0x1E);
+    t.w(BURSTSIZE, 0x204);
+    let id = t.usb;
+    assert_eq!(
+        t.m.device_mut::<UsbOtg>(id).take_writes(),
+        [(USBMODE, 0x1E), (BURSTSIZE, 0x204)]
+    );
+    assert!(t.dev().stats().writes.is_empty());
+    t.m.device_mut::<UsbOtg>(id).record(false);
+    t.w(BURSTSIZE, 0x108);
+    assert_eq!(t.r(BURSTSIZE), 0x108, "the write still lands");
+    assert!(t.dev().stats().writes.is_empty());
+}

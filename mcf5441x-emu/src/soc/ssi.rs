@@ -156,6 +156,7 @@ pub struct Ssi {
     /// TE cleared: the frame end that sets TFRC.
     tfrc_at: Option<u64>,
     capture: Vec<(u64, Vec<i32>)>,
+    record: bool,
     counters: SsiCounters,
     source: Option<Box<dyn FnMut(u64) -> Vec<i32>>>,
 }
@@ -201,6 +202,7 @@ impl Ssi {
             starved: false,
             tfrc_at: None,
             capture: Vec::new(),
+            record: true,
             counters: SsiCounters::default(),
             source: None,
         }
@@ -215,6 +217,16 @@ impl Ssi {
     /// The frames sent: (tick of the frame's end, the signed word of each slot).
     pub fn capture(&self) -> &[(u64, Vec<i32>)] {
         &self.capture
+    }
+
+    /// Every frame captured so far, emptying the log.
+    pub fn take_capture(&mut self) -> Vec<(u64, Vec<i32>)> {
+        std::mem::take(&mut self.capture)
+    }
+
+    /// Whether frames are captured (default on). Off changes only the log, never the transmitter.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
     }
 
     /// The counts of underruns, overruns, frames and unaligned refills.
@@ -386,7 +398,9 @@ impl Ssi {
         if self.tx.len() >= n {
             let words = self.tx.drain(..n).collect::<Vec<_>>();
             let words = words.into_iter().map(|w| self.signed(w)).collect();
-            self.capture.push((t, words));
+            if self.record {
+                self.capture.push((t, words));
+            }
         } else {
             // guess: silence and an emptied FIFO; RM Table 35-8 says the previous data is re-transmitted on an
             // underrun. Not measured.
@@ -397,7 +411,9 @@ impl Ssi {
                 self.counters.dma_underruns += 1;
             }
             self.tx.clear();
-            self.capture.push((t, vec![0; n]));
+            if self.record {
+                self.capture.push((t, vec![0; n]));
+            }
         }
         if self.cr & RE != 0 {
             let frame = self.counters.frames;

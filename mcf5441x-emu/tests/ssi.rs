@@ -544,3 +544,21 @@ fn unmodelled_registers_are_refused() {
     b.w(ACR, 0);
     b.w(TMASK, 0);
 }
+
+#[test]
+fn take_capture_drains_and_record_off_logs_nothing() {
+    let mut b = board();
+    b.configure(0, 0);
+    for w in [1, 2, 3, 4] {
+        b.w(TX0, w);
+    }
+    b.w(CR, RUN);
+    b.at(FRAME);
+    let taken = b.m.device_mut::<Ssi>(b.ssi).take_capture();
+    assert_eq!(taken, [(FRAME, vec![1, 2])]);
+    assert_eq!(b.capture(), []);
+    b.m.device_mut::<Ssi>(b.ssi).record(false);
+    b.at(2 * FRAME);
+    assert_eq!(b.capture(), [], "not captured");
+    assert_eq!(b.ssi().counters().frames, 2, "but the frame went out");
+}

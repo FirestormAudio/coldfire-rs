@@ -246,3 +246,24 @@ fn reads_wrap_at_the_end_of_the_array() {
     let out = cmd(&mut nor, &with(0x03, &a3(size - 1), &[0, 0]));
     assert_eq!(out[4..], [0x55, 0xAA]);
 }
+
+#[test]
+fn take_log_and_take_writes_drain_and_record_off_changes_only_the_logs() {
+    let mut nor = nor256();
+    cmd(&mut nor, &[0x06]);
+    cmd(&mut nor, &with(0x02, &a3(0x100), &[0x12]));
+    assert_eq!(nor.log().len(), 2);
+    assert_eq!(nor.writes().len(), 1);
+    let log = nor.take_log();
+    assert_eq!(log.iter().map(|e| e.1).collect::<Vec<_>>(), [0x06, 0x02]);
+    assert_eq!(nor.take_writes().len(), 1);
+    assert!(nor.log().is_empty() && nor.writes().is_empty());
+    nor.record(false);
+    cmd(&mut nor, &[0x06]);
+    cmd(&mut nor, &with(0x02, &a3(0x200), &[0x34]));
+    assert_eq!(nor.memory()[0x200], 0x34, "the program still acts");
+    assert!(nor.log().is_empty() && nor.writes().is_empty());
+    nor.record(true);
+    cmd(&mut nor, &[0x06]);
+    assert_eq!(nor.log().len(), 1);
+}

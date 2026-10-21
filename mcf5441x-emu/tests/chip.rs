@@ -641,3 +641,57 @@ fn serq_on_a_channel_nothing_drives_is_refused() {
         assert!(d.contains(&format!("channel {ch}:")), "{d}");
     }
 }
+
+#[test]
+fn chip_options_default_builds_a_chip() {
+    let o = ChipOptions::default();
+    assert!(o.nor.is_none() && o.card.is_none() && o.nand.is_none());
+    // RM Figures 8-3 and 8-4: LOLEN, FBKDIV 9; OUTDIV5 0x1F, OUTDIV4 7, OUTDIV3 9, OUTDIV2 3, OUTDIV1 1
+    assert_eq!(o.pll, (0x1009, 0x03E7_2461));
+    assert_eq!(o.uart_ticks_per_byte, [0; 10]);
+    assert_eq!(o.ssi_ticks_per_frame, [1, 1]);
+    assert_eq!(o.usb_ticks_per_us, 1);
+    assert_eq!((o.sd_data_latency, o.sd_cmd6_busy), (1, 1));
+    let (mut m, chip) = chip_with(o);
+    assert_eq!(r(&mut m, PLL, Size::Long), 0x1009);
+    assert_eq!(r(&mut m, PLL + 4, Size::Long), 0x03E7_2461);
+    assert!(chip.nor(&m).is_none() && chip.card(&m).is_none() && chip.nfc.is_none());
+}
+
+#[test]
+fn chip_options_builders_set_their_fields() {
+    let o = ChipOptions::default()
+        .with_nor(2, 3, SpiNor::new(1 << 20, JEDEC, &[]))
+        .with_card(card(&[]))
+        .with_nand(NandArray {
+            pages: vec![vec![0; 16]],
+            bad: Default::default(),
+            payload: 16,
+        })
+        .with_pll(5, 6)
+        .with_uart_ticks(4, 77)
+        .with_ssi_ticks(1, 9)
+        .with_usb_ticks_per_us(33)
+        .with_sd_timing(11, 22);
+    assert_eq!(o.nor.as_ref().map(|n| (n.0, n.1)), Some((2, 3)));
+    assert!(o.card.is_some() && o.nand.is_some());
+    assert_eq!(o.pll, (5, 6));
+    assert_eq!(o.uart_ticks_per_byte[4], 77);
+    assert_eq!(o.uart_ticks_per_byte[3], 0);
+    assert_eq!(o.ssi_ticks_per_frame, [1, 9]);
+    assert_eq!(o.usb_ticks_per_us, 33);
+    assert_eq!((o.sd_data_latency, o.sd_cmd6_busy), (11, 22));
+}
+
+#[test]
+fn chip_nor_and_card_accessors() {
+    let (mut m, chip) = built();
+    assert_eq!(chip.nor(&m).unwrap().sector_size(), 0x10000);
+    assert!(chip.card(&m).is_some());
+    chip.nor_mut(&mut m).unwrap().faults();
+    assert_eq!(*chip.card_mut(&mut m).unwrap().faults(), 0);
+    let nor = m
+        .device::<Dspi>(chip.dspi[usize::from(NOR_DSPI)])
+        .device::<SpiNor>(NOR_PCS);
+    assert!(std::ptr::eq(nor, chip.nor(&m).unwrap()));
+}

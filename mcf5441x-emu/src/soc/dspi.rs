@@ -137,6 +137,7 @@ pub struct Dspi {
     /// The part selected now.
     selected: Option<usize>,
     frames: Vec<(u64, u32, u8, bool)>,
+    record: bool,
 }
 
 impl fmt::Debug for Dspi {
@@ -176,6 +177,7 @@ impl Dspi {
             parts: Default::default(),
             selected: None,
             frames: Vec::new(),
+            record: true,
         }
     }
 
@@ -189,6 +191,16 @@ impl Dspi {
     /// Every frame shifted out: (tick, TXDATA within the frame size, PUSHR\[PCS\], PUSHR\[CONT\]).
     pub fn frames(&self) -> &[(u64, u32, u8, bool)] {
         &self.frames
+    }
+
+    /// Every frame shifted out so far, emptying the log.
+    pub fn take_frames(&mut self) -> Vec<(u64, u32, u8, bool)> {
+        std::mem::take(&mut self.frames)
+    }
+
+    /// Whether frames are logged (default on). Off changes only the log, never the transfers.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
     }
 
     /// The part on PCS`pcs`. Panics when there is none or it is not a `T`.
@@ -375,7 +387,9 @@ impl Dspi {
         let mask = (1u32 << bits) - 1;
         let data = v & mask;
         let cont = v & CONT != 0;
-        self.frames.push((cx.now, data, (v >> 16) as u8, cont));
+        if self.record {
+            self.frames.push((cx.now, data, (v >> 16) as u8, cont));
+        }
         let r = match part {
             None => mask,
             Some(i) => {

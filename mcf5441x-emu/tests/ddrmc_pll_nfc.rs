@@ -538,3 +538,65 @@ fn nfc_unmodelled_commands_refuse() {
     assert_eq!(r.nfc_r(CMD2), 0x9048_0400);
     assert!(r.m.device::<Nfc>(r.nfc).reads().is_empty());
 }
+
+#[test]
+fn take_writes_drain_and_record_off_logs_nothing() {
+    let mut r = rig();
+    r.write(DDR + 8, Size::Long, 5);
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR);
+    assert_eq!(
+        r.m.device_mut::<Ddrmc>(r.ddr).take_writes(),
+        [(8, Size::Long, 5)]
+    );
+    assert_eq!(
+        r.m.device_mut::<Pll>(r.pll).take_writes(),
+        [(PLL_CR, TEST_CR)]
+    );
+    assert!(r.m.device::<Ddrmc>(r.ddr).writes().is_empty());
+    assert!(r.m.device::<Pll>(r.pll).writes().is_empty());
+    r.m.device_mut::<Ddrmc>(r.ddr).record(false);
+    r.m.device_mut::<Pll>(r.pll).record(false);
+    r.write(DDR + CR09, Size::Long, START);
+    r.write(PLL + PLL_CR, Size::Long, 0x1B);
+    assert_eq!(r.read(DDR + CR27, Size::Long), INIT_DONE | INT_ANY);
+    assert_eq!(r.read(PLL + PLL_CR, Size::Long), 0x1B);
+    assert!(r.m.device::<Ddrmc>(r.ddr).writes().is_empty());
+    assert!(r.m.device::<Pll>(r.pll).writes().is_empty());
+}
+
+#[test]
+fn unlocked_pll_reads_no_lock() {
+    let mut r = rig();
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK | LOCKS);
+    r.m.device_mut::<Pll>(r.pll).set_locked(false);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), 0);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Byte), 0);
+    r.write(PLL + PLL_CR, Size::Long, TEST_CR);
+    assert_eq!(
+        r.read(PLL + PLL_CR, Size::Long),
+        TEST_CR,
+        "the rest is unchanged"
+    );
+    r.m.device_mut::<Pll>(r.pll).set_locked(true);
+    assert_eq!(r.read(PLL + PLL_SR, Size::Long), LOCK | LOCKS);
+}
+
+#[test]
+fn ddr_init_that_never_completes() {
+    let mut r = rig();
+    r.m.device_mut::<Ddrmc>(r.ddr).set_init_completes(false);
+    r.write(DDR + CR09, Size::Long, START);
+    assert_eq!(
+        r.read(DDR + CR09, Size::Long),
+        START,
+        "START still reads back"
+    );
+    assert_eq!(r.read(DDR + CR27, Size::Long), 0, "no INIT_DONE, no OR bit");
+    // guess: a START made while the knob was off does not complete when it is turned back on
+    r.m.device_mut::<Ddrmc>(r.ddr).set_init_completes(true);
+    r.write(DDR + CR09, Size::Long, START);
+    assert_eq!(r.read(DDR + CR27, Size::Long), 0);
+    r.write(DDR + CR09, Size::Long, 0);
+    r.write(DDR + CR09, Size::Long, START);
+    assert_eq!(r.read(DDR + CR27, Size::Long), INIT_DONE | INT_ANY);
+}

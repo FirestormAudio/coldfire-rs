@@ -523,3 +523,18 @@ fn unmodelled_modes_are_refused_also_when_a_queue_restarts() {
     assert!(d.contains("slave mode"), "{d}");
     assert_eq!(b.dspi().frames().len(), 1);
 }
+
+#[test]
+fn take_frames_drains_and_record_off_logs_nothing() {
+    let mut b = board(&[], JEDEC_64K);
+    b.transfer(&[0x9F], 3);
+    let n = b.dspi().frames().len();
+    assert_eq!(n, 4);
+    let taken = b.m.device_mut::<Dspi>(b.dspi).take_frames();
+    assert_eq!(taken.len(), n);
+    assert!(b.dspi().frames().is_empty());
+    b.m.device_mut::<Dspi>(b.dspi).record(false);
+    let got = b.transfer(&[0x9F], 3);
+    assert_eq!(got, JEDEC_64K[..3], "the transfer still reaches the part");
+    assert!(b.dspi().frames().is_empty());
+}

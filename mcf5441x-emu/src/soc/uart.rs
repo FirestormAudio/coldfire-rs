@@ -187,6 +187,7 @@ pub struct Uart {
     /// The tick the shift register finishes its character (idle when not after the clock).
     shift_end: u64,
     sent: Vec<(u64, u8)>,
+    record: bool,
     hook: Option<Box<dyn FnMut(u64, u8)>>,
     peer: Option<Box<dyn SerialPeer>>,
     lost: u64,
@@ -225,6 +226,7 @@ impl Uart {
             holding: None,
             shift_end: 0,
             sent: Vec::new(),
+            record: true,
             hook: None,
             peer: None,
             lost: 0,
@@ -278,6 +280,17 @@ impl Uart {
     /// The characters sent, each with the tick it began shifting out onto the line.
     pub fn sent(&self) -> &[(u64, u8)] {
         &self.sent
+    }
+
+    /// The characters sent so far, emptying the log.
+    pub fn take_sent(&mut self) -> Vec<(u64, u8)> {
+        std::mem::take(&mut self.sent)
+    }
+
+    /// Whether sent characters are logged (default on). Off changes only the log: the hook and the peer still see
+    /// every character.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
     }
 
     /// The characters sent, as UTF-8 (invalid sequences replaced).
@@ -410,7 +423,9 @@ impl Uart {
         {
             self.holding = None;
             self.shift_end = at + self.config.ticks_per_byte;
-            self.sent.push((at, b));
+            if self.record {
+                self.sent.push((at, b));
+            }
             if let Some(f) = &mut self.hook {
                 f(at, b);
             }

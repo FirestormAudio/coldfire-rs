@@ -84,6 +84,7 @@ pub struct Emmc {
     faults: u32,
     bus_test: u32,
     commands: Vec<(u8, u32)>,
+    record: bool,
 }
 
 impl fmt::Debug for Emmc {
@@ -118,6 +119,7 @@ impl Emmc {
             faults: 0,
             bus_test: 0,
             commands: Vec::new(),
+            record: true,
         }
     }
 
@@ -129,6 +131,16 @@ impl Emmc {
     /// Every command the card received, (index, argument), in order.
     pub fn commands(&self) -> &[(u8, u32)] {
         &self.commands
+    }
+
+    /// Every command the card received so far, emptying the log.
+    pub fn take_commands(&mut self) -> Vec<(u8, u32)> {
+        std::mem::take(&mut self.commands)
+    }
+
+    /// Whether commands are logged (default on). Off changes only the log, never the card.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
     }
 
     /// Why command `cmd` with `arg` is not modelled, if it is not.
@@ -168,7 +180,9 @@ impl Emmc {
 
     /// Receive a modelled command: its response, or `None` when the card answers nothing.
     pub(crate) fn command(&mut self, cmd: u8, arg: u32) -> Option<Response> {
-        self.commands.push((cmd, arg));
+        if self.record {
+            self.commands.push((cmd, arg));
+        }
         if self.sending && cmd != 12 {
             return None;
         }

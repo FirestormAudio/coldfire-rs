@@ -297,6 +297,7 @@ pub struct UsbOtg {
     stale_since: Option<u64>,
     knobs: UsbKnobs,
     stats: UsbStats,
+    record: bool,
     script: Option<Box<dyn HostScript>>,
     next: Option<u64>,
     result: Option<Result<i64, String>>,
@@ -339,6 +340,7 @@ impl UsbOtg {
             stale_since: None,
             knobs: UsbKnobs::default(),
             stats: UsbStats::default(),
+            record: true,
             script: None,
             next: None,
             result: None,
@@ -353,6 +355,16 @@ impl UsbOtg {
     /// What the controller saw.
     pub fn stats(&self) -> &UsbStats {
         &self.stats
+    }
+
+    /// Every accepted register write so far, emptying [`UsbStats::writes`].
+    pub fn take_writes(&mut self) -> Vec<(u32, u32)> {
+        std::mem::take(&mut self.stats.writes)
+    }
+
+    /// Whether register writes are logged in [`UsbStats::writes`] (default on). Off changes only that log.
+    pub fn record(&mut self, on: bool) {
+        self.record = on;
     }
 
     /// Whether the driver runs the controller (USBCMD\[RS\]): the device is on the bus.
@@ -897,7 +909,11 @@ impl Device for UsbOtg {
         }
         self.settle(cx.now);
         match self.write32(offset, value, cx) {
-            Ok(()) => self.stats.writes.push((offset, value)),
+            Ok(()) => {
+                if self.record {
+                    self.stats.writes.push((offset, value));
+                }
+            }
             Err(why) => cx.refuse(Stop::Unmodelled, why),
         }
         self.signal(cx);
