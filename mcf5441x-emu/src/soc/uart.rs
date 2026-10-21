@@ -24,6 +24,13 @@ const FE: u8 = 0x40;
 /// UMR1\[ERR\]: block error mode; UMR1\[RxIRQ\]: FFULL as the receive request (RM Table 41-4).
 const ERR: u8 = 0x20;
 const RXIRQ: u8 = 0x40;
+/// UMR1\[PM\] = 11: multidrop mode.
+const PM: u8 = 0x18;
+
+/// Ticks from a UTB write to the character's move into an idle shift register: status reads at +1 and +2 see
+/// TXRDY clear, at +3 set. Measured on an MCF54415 as 2 to 9 instructions, varying from run to run (TXRDY first
+/// seen on the 3rd to the 10th back-to-back USR read); guess: the shortest measured.
+const HANDOVER: u64 = 3;
 
 /// How a UART is wired and clocked: board values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,9 +57,11 @@ pub struct UartConfig {
 /// Registers (byte registers; the access size is not checked and only the low byte of a write is used):
 /// - UMR1/UMR2 (+0x00, reset 0): stored and read back through the mode register pointer (RM 41.3.1, RM
 ///   41.3.2). Of their fields only UMR1\[ERR\] acts; parity, character length, stop bits and RTS/CTS control
-///   are stored only. Setting UMR1\[RxIRQ\] (FFULL as the receive request: the FIFO is not modelled) or a
-///   UMR2\[CM\] channel mode other than normal (automatic echo, local loopback, remote loopback) is refused with
-///   [`Stop::Unmodelled`], the detail naming the UART and the mode.
+///   are stored only. Setting UMR1\[RxIRQ\] (FFULL as the receive request: the FIFO is not modelled), UMR1\[PM\]
+///   multidrop mode (the receiver then loads address characters even while disabled, RM 41.4.4) or a UMR2\[CM\]
+///   channel mode other than normal (automatic echo, local loopback, remote loopback) is refused with
+///   [`Stop::Unmodelled`], the detail naming the UART and the mode. guess: a UMR1 write starts block mode's
+///   accumulated status afresh.
 /// - USR (+0x04 read): RXRDY, TXRDY, TXEMP, OE, FE. FFULL, PE and RB are never set. UCSR (+0x04 write) is ignored:
 ///   the timing is [`UartConfig::ticks_per_byte`].
 /// - UCR (+0x08 write): the RC and TC commands, then MISC (so 0x21 ends with the receiver disabled). MISC 1 resets
@@ -70,9 +79,10 @@ pub struct UartConfig {
 ///   UACR, UBG1/UBG2 and UOP1/UOP0 take writes and do nothing. The rest of the window reads 0.
 ///
 /// The transmitter (RM 41.3.7, RM 41.4.2.1; timing measured on an MCF54415): a UTB write fills the holding
-/// register, clearing TXRDY and TXEMP. The character moves to the shift register one tick later when that is
-/// idle (guess: measured only as "within 2 status reads"), else when the shift register finishes its character;
-/// the move sets TXRDY again. TXEMP sets when the last character has been shifted out, `ticks_per_byte` after it
+/// register, clearing TXRDY and TXEMP. The character moves to the shift register 3 ticks after the write when
+/// that is idle (status reads at +1 and +2 still see TXRDY clear; guess: the shortest of the measured 2 to 9
+/// instructions), else when the shift register finishes its character; the move sets TXRDY again. A second
+/// character written before the move is dropped (RM 41.3.7), as on the chip. TXEMP sets when the last character has been shifted out, `ticks_per_byte` after it
 /// began. TRANSMITTER DISABLE lets the character being shifted finish; one still in the holding register is not
 /// sent (guess: RM Table 41-6 says characters loaded while the transmitter is disabled are not sent). Each
 /// character is recorded ([`Uart::sent`], [`Uart::on_byte`]) with the tick it begins shifting out: when it
@@ -81,9 +91,9 @@ pub struct UartConfig {
 /// The receiver: a character arrives `ticks_per_byte` after its start bit, and lands in the holding register,
 /// setting RXRDY, when the receiver is on and the register is empty. Otherwise it is lost ([`Uart::lost`]): with
 /// the receiver off, with no status (RM 41.3.5), or over a held character, setting OE (RM Table 41-6); the framing
-/// error of a lost character is lost with it. The three-deep FIFO is not modelled. A framing error is received as 0xFF with FE: in character
-/// mode FE belongs to the character held and is popped with it, in block mode (UMR1\[ERR\]) it holds until RESET
-/// ERROR STATUS (RM 41.4.2.3).
+/// error of a lost character is lost with it. The three-deep FIFO is not modelled. A framing error is received as
+/// 0xFF with FE: in character mode FE belongs to the character held and is popped with it, in block mode
+/// (UMR1\[ERR\]) it holds until RESET ERROR STATUS (RM 41.4.2.3).
 ///
 /// Requests: the interrupt (source [`UartConfig::source`] of controller [`UartConfig::controller`]) is
 /// `UIMR[0] & TXRDY | UIMR[1] & RXRDY`; the receive DMA request (line [`UartConfig::rx_dma`]) is RXRDY (RM
@@ -164,7 +174,7 @@ impl Uart {
         }
     }
 
-    /// The characters sent, each with the tick of its UTB write.
+    /// The characters sent, each with the tick it began shifting out onto the line.
     pub fn sent(&self) -> &[(u64, u8)] {
         &self.sent
     }
@@ -185,7 +195,8 @@ impl Uart {
         self.lost
     }
 
-    /// Characters written to UTB with the transmitter off.
+    /// Characters written to UTB and never sent: written with the transmitter off, written with the holding
+    /// register full (TXRDY clear), or left in the holding register by TRANSMITTER DISABLE.
     pub fn dropped(&self) -> u64 {
         self.dropped
     }
@@ -282,7 +293,7 @@ impl Uart {
             self.dropped += 1;
             return;
         }
-        self.holding = Some((b, now + 1));
+        self.holding = Some((b, now + HANDOVER));
     }
 
     /// The tick the character in the holding register moves to the shift register.
@@ -307,7 +318,13 @@ impl Uart {
     /// Refuse a mode register write selecting a mode this model leaves out.
     fn check_mode(&self, v: u8, cx: &mut DeviceCx) -> bool {
         let what = if !self.umr2 {
-            (v & RXIRQ != 0).then_some("UMR1 RxIRQ (FFULL as the receive request)")
+            if v & RXIRQ != 0 {
+                Some("UMR1 RxIRQ (FFULL as the receive request)")
+            } else if v & PM == PM {
+                Some("UMR1 PM multidrop mode")
+            } else {
+                None
+            }
         } else {
             match v >> 6 {
                 1 => Some("UMR2 CM automatic echo mode"),
@@ -357,6 +374,9 @@ impl Device for Uart {
                 let i = usize::from(self.umr2);
                 self.umr2 = true;
                 self.umr[i] = v;
+                if i == 0 {
+                    self.block_fe = false;
+                }
             }
             UCR => self.command(v),
             URB => self.send(v, cx.now),

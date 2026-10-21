@@ -18,11 +18,17 @@ loop:
     cmp.l #5, %d1
     bne.s loop
     moveq #0x6F, %d0
-    move.b %d0, 0xEC07400C          | UART9 UTB: 'o'
+    bsr.s putc                      | 'o'
     moveq #0x6B, %d0
-    move.b %d0, 0xEC07400C          | 'k'
+    bsr.s putc                      | 'k'
 done:
     bra.s done
+putc:                               | UART9: wait for TXRDY, then UTB = d0
+    move.b 0xEC074004, %d1
+    btst #2, %d1
+    beq.s putc
+    move.b %d0, 0xEC07400C
+    rts
 pit_isr:
     move.w 0xFC080000, %d0
     move.w %d0, 0xFC080000          | write PCSR back with PIF set: clears PIF

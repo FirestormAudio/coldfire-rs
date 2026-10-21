@@ -246,10 +246,12 @@ fn txrdy_interrupt_follows_uimr_and_byte_timing() {
     assert!(!source(&m, 1, SOURCE));
     assert_eq!(
         uart(&m, id).next_event(),
-        Some(1),
+        Some(3),
         "TXRDY returns when the character moves to the shift register"
     );
-    idle(&mut m, 1);
+    idle(&mut m, 2);
+    assert!(!source(&m, 1, SOURCE));
+    idle(&mut m, 3);
     assert!(source(&m, 1, SOURCE));
     let mut out = Vec::new();
     assert!(uart(&m, id).wake_sources(&mut out));
@@ -262,13 +264,13 @@ fn txrdy_interrupt_follows_uimr_and_byte_timing() {
         "a TXRDY edge to come with UIMR TXRDY set"
     );
     assert!(!source(&m, 1, SOURCE), "the second waits for the first");
-    assert_eq!(uart(&m, id).next_event(), Some(101));
-    idle(&mut m, 101);
+    assert_eq!(uart(&m, id).next_event(), Some(103));
+    idle(&mut m, 103);
     assert!(source(&m, 1, SOURCE));
     w(&mut m, UISR, 0x00);
     assert!(!source(&m, 1, SOURCE));
     assert_eq!(uart(&m, id).text(), "AB");
-    assert_eq!(uart(&m, id).sent(), [(1, 0x41), (101, 0x42)]);
+    assert_eq!(uart(&m, id).sent(), [(3, 0x41), (103, 0x42)]);
 }
 
 #[test]
@@ -389,46 +391,77 @@ fn transmitter_is_off_until_enabled_and_after_reset() {
 
 #[test]
 fn transmitter_has_a_holding_and_a_shift_register() {
-    // Measured on an MCF54415 (UART9 at 31 250 baud): idle USR 0x0C; straight after a UTB write USR reads 0x00;
-    // TXRDY is back within 2 USR reads with TXEMP still clear (0x04), TXEMP one character later. A second byte
-    // written at once keeps USR at 0x00 while the first is shifted out.
-    // guess: the character moves to the shift register one tick after the write ("within 2 status reads").
+    // Measured on an MCF54415 (UART9 at 31 250 baud): idle USR 0x0C. Back-to-back USR reads after a UTB write
+    // from idle read 0x00 until the character moves to the shift register, then 0x04 (TXRDY back, TXEMP clear);
+    // TXEMP sets one character later. TXRDY was first seen on the 3rd read in one run and the 10th in another.
+    // guess: the shortest measured hand-over, the 3rd instruction after the write. A second byte written while
+    // the first shifts keeps USR at 0x00 until the first has gone.
+    let src = "move.l #0xEC074000,%a1\nmove.l #0x40300000,%a2\nmove.b #0x04,8(%a1)\nmoveq #0x41,%d0\n\
+               move.b 4(%a1),(%a2)+\nmove.b %d0,12(%a1)\n\
+               .rept 6\nmove.b 4(%a1),(%a2)+\n.endr\nend: nop";
+    let (mut m, id, l) = snippet(src, &["end"], false);
+    let r0 = m.run(common::until(l[0]));
+    assert_eq!(r0.kind, Stop::UntilPc, "{r0:?}");
+    assert_eq!(
+        m.mem.peek(0x4030_0000, 7).unwrap(),
+        [0x0C, 0x00, 0x00, 0x04, 0x04, 0x04, 0x04]
+    );
+    assert_eq!(uart(&m, id).text(), "A");
+
+    // The same from the host, with the timing of TXEMP and of a second byte.
     let (mut m, id) = board(false);
     w(&mut m, UCR, 0x04);
-    assert_eq!(r(&mut m, USR), 0x0C);
     w(&mut m, URB, 0x41);
     assert_eq!(r(&mut m, USR), 0x00, "holding register loaded");
-    idle(&mut m, 1);
+    idle(&mut m, 2);
+    assert_eq!(r(&mut m, USR), 0x00);
+    idle(&mut m, 3);
     assert_eq!(
         r(&mut m, USR),
         0x04,
         "in the shift register: TXRDY back, TXEMP clear"
     );
-    idle(&mut m, 100);
+    idle(&mut m, 102);
     assert_eq!(r(&mut m, USR), 0x04);
-    idle(&mut m, 101);
+    idle(&mut m, 103);
     assert_eq!(
         r(&mut m, USR),
         0x0C,
         "TXEMP one character after it began shifting"
     );
-    // Two at once: the second waits in the holding register until the first has gone.
+    // The second waits in the holding register until the first has gone.
     idle(&mut m, 200);
     w(&mut m, URB, 0x42);
-    idle(&mut m, 201);
+    idle(&mut m, 203);
     w(&mut m, URB, 0x43);
     assert_eq!(r(&mut m, USR), 0x00);
-    idle(&mut m, 300);
+    idle(&mut m, 302);
     assert_eq!(r(&mut m, USR), 0x00, "still holding while the first shifts");
     // RM 41.3.7: the holding register takes a character only when TXRDY is set.
     w(&mut m, URB, 0x44);
     assert_eq!(uart(&m, id).dropped(), 1);
-    idle(&mut m, 301);
+    idle(&mut m, 303);
     assert_eq!(r(&mut m, USR), 0x04);
-    idle(&mut m, 401);
+    idle(&mut m, 403);
     assert_eq!(r(&mut m, USR), 0x0C);
     // Each character is stamped with the tick it began shifting out.
-    assert_eq!(uart(&m, id).sent(), [(1, 0x41), (201, 0x42), (301, 0x43)]);
+    assert_eq!(uart(&m, id).sent(), [(3, 0x41), (203, 0x42), (303, 0x43)]);
+}
+
+#[test]
+fn back_to_back_writes_drop_the_second() {
+    // RM 41.3.7: the second write finds TXRDY clear (the first is still in the holding register).
+    let (mut m, id, l) = snippet(
+        "move.l #0xEC074000,%a1\nmove.b #0x04,8(%a1)\nmove.b #0x41,12(%a1)\nmove.b #0x42,12(%a1)\nend: nop",
+        &["end"],
+        false,
+    );
+    let r0 = m.run(common::until(l[0]));
+    assert_eq!(r0.kind, Stop::UntilPc, "{r0:?}");
+    let t = m.now() + 1000;
+    idle(&mut m, t);
+    assert_eq!(uart(&m, id).text(), "A");
+    assert_eq!(uart(&m, id).dropped(), 1);
 }
 
 #[test]
@@ -439,12 +472,12 @@ fn disabling_lets_the_shifting_character_finish() {
     let (mut m, id) = board(false);
     w(&mut m, UCR, 0x04);
     w(&mut m, URB, 0x41);
-    idle(&mut m, 1);
+    idle(&mut m, 3);
     w(&mut m, URB, 0x42);
     w(&mut m, UCR, 0x08);
     assert_eq!(r(&mut m, USR) & (TXRDY | TXEMP), 0);
     idle(&mut m, 500);
-    assert_eq!(uart(&m, id).sent(), [(1, 0x41)]);
+    assert_eq!(uart(&m, id).sent(), [(3, 0x41)]);
     assert_eq!(uart(&m, id).dropped(), 1);
     w(&mut m, UCR, 0x04);
     assert_eq!(r(&mut m, USR), 0x0C);
@@ -454,6 +487,7 @@ fn disabling_lets_the_shifting_character_finish() {
 fn unmodelled_modes_are_refused() {
     for (writes, what) in [
         (&[0x40][..], "RxIRQ"),
+        (&[0x18][..], "multidrop"),
         (&[0x00, 0x40][..], "automatic echo"),
         (&[0x00, 0x80][..], "local loopback"),
         (&[0x00, 0xC0][..], "remote loopback"),
@@ -490,8 +524,8 @@ fn on_byte_sees_each_byte_with_its_tick() {
     w(&mut m, URB, 0x31);
     idle(&mut m, 250);
     w(&mut m, URB, 0x32);
-    idle(&mut m, 251);
-    assert_eq!(*seen.borrow(), [(1, 0x31), (251, 0x32)]);
+    idle(&mut m, 253);
+    assert_eq!(*seen.borrow(), [(3, 0x31), (253, 0x32)]);
     assert_eq!(uart(&m, id).text(), "12");
 }
 
@@ -540,8 +574,9 @@ fn stop_with_a_byte_that_cannot_interrupt_halts_at_once() {
 
 #[test]
 fn stop_wakes_when_a_byte_finishes_sending() {
-    let src = "move.l #0xEC074000,%a0\nmove.b #0x04,8(%a0)\nmove.b #0x41,12(%a0)\nmove.b #0x42,12(%a0)\n\
-               move.b #0x01,20(%a0)\n\
+    // Two characters, the second written once TXRDY is back: it holds TXRDY clear until the first has gone.
+    let src = "move.l #0xEC074000,%a0\nmove.b #0x04,8(%a0)\nmove.b #0x41,12(%a0)\n\
+               1: move.b 4(%a0),%d1\nbtst #2,%d1\nbeq.s 1b\nmove.b #0x42,12(%a0)\nmove.b #0x01,20(%a0)\n\
                stop #0x2000\nend: nop\nhandler: clr.b 20(%a0)\nrte";
     let (mut m, id, l) = snippet(src, &["end", "handler"], false);
     unmask(&mut m, SOURCE);
@@ -550,7 +585,6 @@ fn stop_wakes_when_a_byte_finishes_sending() {
     let r = m.run(common::until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert!(m.now() >= 100, "{}", m.now());
-    // TXRDY returns when the second character moves to the shift register, a character after the first.
     assert_eq!(uart(&m, id).text(), "AB");
 }
 

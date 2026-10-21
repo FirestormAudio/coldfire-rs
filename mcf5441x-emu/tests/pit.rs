@@ -159,6 +159,12 @@ fn pre_change_while_running_keeps_the_count_continuous() {
     assert_eq!(m.device::<Pit>(id).expiries(), 1);
 }
 
+/// Let the UART's transmitter take the character still in its holding register.
+fn finish_sending(m: &mut Machine) {
+    let t = m.now() + 10;
+    assert_eq!(m.idle_until(t), None);
+}
+
 #[test]
 fn pit_stop_wakes_and_fast_forwards() {
     let (mut m, _, uart, l) = board_uart(include_str!("fixtures/pitstop.s"), &["done", "pit_isr"]);
@@ -170,6 +176,8 @@ fn pit_stop_wakes_and_fast_forwards() {
     assert!((5 * 132_000..6 * 132_000).contains(&m.now()), "{}", m.now());
     assert!(m.instructions() < m.now() / 100, "{}", m.instructions());
     assert_eq!(m.cpu.a[7], STACK);
+    // The last character starts out on the line a few ticks after its write, past `done`.
+    finish_sending(&mut m);
     assert_eq!(m.device::<Uart>(uart).text(), "ok");
 }
 
@@ -180,6 +188,7 @@ fn uart_bytes_carry_cycle_stamps() {
     set_vector(&mut m, 205, l[1]);
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    finish_sending(&mut m);
     let stamps: Vec<u64> = m
         .device::<Uart>(uart)
         .sent()
