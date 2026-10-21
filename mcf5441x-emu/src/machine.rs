@@ -119,12 +119,19 @@ impl Machine {
     /// Table 3-12); then service the bus masters. Returns the value read, or 0 for a write (`write` holds the
     /// value to write). A halt a device asks for stays pending and is reported by the next run, before its first
     /// instruction. An access a device refuses ([`DeviceCx::refuse`]) returns `Err(Fault::Device(kind))` and
-    /// leaves nothing pending: there is no instruction to stop on, so the error is the whole report.
+    /// leaves nothing pending: there is no instruction to stop on. Its kind and detail are kept for
+    /// [`Machine::take_refusal`].
     pub fn access(&mut self, addr: u32, size: Size, write: Option<u32>) -> Result<u32, Fault> {
         self.mem.pc = self.cpu.pc;
         let r = self.mem.host_access(addr, size, write);
         self.mem.service_masters();
         r
+    }
+
+    /// The kind and detail of the last access [`Machine::access`] had refused, cleared by this call; `None` when
+    /// there is none. `pc` is the PC at the time.
+    pub fn take_refusal(&mut self) -> Option<StopReason> {
+        self.mem.host_refusal.take()
     }
 
     /// Move the clock to `tick` without executing instructions or taking interrupts: advance the devices at each

@@ -9,6 +9,7 @@ pub mod isa;
 pub mod machine;
 pub mod mem;
 mod sched;
+pub mod soc;
 pub mod stop;
 
 pub use bus::{Bus, DmaLines};

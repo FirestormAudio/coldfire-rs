@@ -78,18 +78,24 @@ fn refused_write_after_a_read_rolls_back_the_flags() {
 
 #[test]
 fn refused_host_access_is_an_error_and_leaves_no_stop() {
-    // A host-side access fails with the refusal's kind; the detail goes with the error (there is no run to stop),
-    // so the next run starts normally.
+    // A host-side access fails with the refusal's kind; the detail is kept for `take_refusal` (there is no run to
+    // stop), so the next run starts normally.
     let (mut m, l) = prepare("nop\nend: nop", &["end"]);
     m.add_device(DEV, 0x100, Box::new(Refuser));
     assert_eq!(
         m.access(DEV, Size::Long, None),
         Err(Fault::Device(Stop::Unmodelled))
     );
+    let taken = m.take_refusal().expect("refusal kept");
+    assert_eq!(taken.kind, Stop::Unmodelled);
+    assert_eq!(taken.detail, "test block: read of 0x0 not modelled");
+    assert_eq!(m.take_refusal(), None, "taking clears it");
     assert_eq!(
         m.access(DEV, Size::Word, Some(1)),
         Err(Fault::Device(Stop::Unmodelled))
     );
+    let taken = m.take_refusal().expect("refusal kept");
+    assert_eq!(taken.detail, "test block: write of 0x0 not modelled");
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
 }

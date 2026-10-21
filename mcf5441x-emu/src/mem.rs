@@ -121,6 +121,8 @@ pub struct Memory {
     /// The detail of the last access a device refused ([`DeviceCx::refuse`]), for the stop its
     /// [`Fault::Device`] ends in.
     pub(crate) refused: Option<String>,
+    /// The last access a host-side call refused, for [`Machine::take_refusal`](crate::Machine::take_refusal).
+    pub(crate) host_refusal: Option<StopReason>,
     trace: Option<Vec<Access>>,
     /// Device reads per (pc, addr) since the last device write. Only counted, never iterated.
     polls: HashMap<(u32, u32), u32>,
@@ -147,6 +149,7 @@ impl Default for Memory {
             pc: 0,
             stop: None,
             refused: None,
+            host_refusal: None,
             trace: None,
             polls: HashMap::new(),
             poll_limit: DEFAULT_POLL_LIMIT,
@@ -564,7 +567,7 @@ impl Memory {
 
     /// An access made from outside the core at the current tick: RAM, or device accesses (split as the core's
     /// are) traced as the core's would be and not counted by the poll detector. The value read, or 0 for a
-    /// write. A refusal's detail is dropped: the error is all a caller outside a run gets.
+    /// write. A refusal's kind and detail are kept for [`Machine::take_refusal`](crate::Machine::take_refusal).
     pub(crate) fn host_access(
         &mut self,
         addr: u32,
@@ -580,7 +583,14 @@ impl Memory {
             Some(value) if self.space.ram_write(addr, size, value).is_some() => Ok(0),
             Some(value) => self.device_op(addr, size, Some(value), false),
         };
-        self.refused = None;
+        let detail = self.refused.take();
+        if let Err(Fault::Device(kind)) = r {
+            self.host_refusal = Some(StopReason {
+                kind,
+                pc: self.pc,
+                detail: detail.unwrap_or_default(),
+            });
+        }
         r
     }
 
