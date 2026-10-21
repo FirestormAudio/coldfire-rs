@@ -27,6 +27,8 @@ pub enum Kind {
     Add,
     /// `res = dst - src`.
     Sub,
+    /// N and Z from the result, V clear, C = bit 0 of `src` (shifts and rotates).
+    Shift,
 }
 
 /// The condition-code register, lazily.
@@ -115,6 +117,61 @@ impl Flags {
         self.res = res;
     }
 
+    /// Flags of a longword shift with result `res`: N and Z from it, V clear and C = `carry`, the last bit shifted
+    /// out. X follows C when `count_nonzero`; a zero count clears C and leaves X.
+    #[inline(always)]
+    pub fn shift(&mut self, res: u32, carry: bool, count_nonzero: bool) {
+        if count_nonzero {
+            *self = Flags {
+                kind: Kind::Shift,
+                size: Size::Long,
+                src: carry as u32,
+                dst: 0,
+                res,
+                x: false,
+                x_is_c: true,
+            };
+        } else {
+            self.keep_x();
+            self.kind = Kind::Shift;
+            self.size = Size::Long;
+            self.src = 0;
+            self.res = res;
+        }
+    }
+
+    /// Set N Z V C from bits 3-0 of `nzvc`, leaving X.
+    pub fn set_nzvc(&mut self, nzvc: u8) {
+        self.keep_x();
+        self.kind = Kind::Known;
+        self.size = Size::Long;
+        self.res = (nzvc & 0x0F) as u32;
+    }
+
+    /// Whether condition `cc` (the 4-bit code of Bcc, Scc: CFPRM ch. 4 Scc table) holds.
+    pub fn condition(&self, cc: u8) -> bool {
+        let f = self.nzvc();
+        let (n, z, v, c) = (f & N != 0, f & Z != 0, f & V != 0, f & C != 0);
+        match cc & 15 {
+            0 => true,
+            1 => false,
+            2 => !c && !z,
+            3 => c || z,
+            4 => !c,
+            5 => c,
+            6 => !z,
+            7 => z,
+            8 => !v,
+            9 => v,
+            10 => !n,
+            11 => n,
+            12 => n == v,
+            13 => n != v,
+            14 => !z && n == v,
+            _ => z || n != v,
+        }
+    }
+
     /// Set X N Z V C from the low five bits of `ccr`.
     pub fn set_ccr(&mut self, ccr: u8) {
         *self = Flags {
@@ -139,6 +196,7 @@ impl Flags {
             Kind::Known => self.res as u8 & 0x0F,
             Kind::Logic => nz(r),
             Kind::Add => nz(r) | bit((s ^ r) & (d ^ r), V) | bit((s & d) | (!r & (s | d)), C),
+            Kind::Shift => nz(r) | if s & 1 != 0 { C } else { 0 },
             Kind::Sub => nz(r) | bit((s ^ d) & (r ^ d), V) | bit((s & !d) | (r & !d) | (s & r), C),
         }
     }

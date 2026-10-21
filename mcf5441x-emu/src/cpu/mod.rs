@@ -11,6 +11,8 @@ pub use decode::{DecodeError, Decoded, decode};
 pub use ea::Ea;
 pub use exec::{Flow, Handler, handler};
 
+use crate::stop::Stop;
+
 /// SR bits that exist (RM §3.2.9, Figure 3-8): T, S, M, I2-I0 and the CCR; the others read as zero.
 const SR_MASK: u16 = 0xB71F;
 /// The supervisor bit.
@@ -80,6 +82,12 @@ impl Cpu {
     /// Whether the core is in supervisor mode.
     pub fn supervisor(&self) -> bool {
         self.sys & SR_S != 0
+    }
+
+    /// Take exception `vector` from the instruction being executed. The one place instruction handlers raise an
+    /// exception; for now the run stops there with the registers as they were.
+    pub fn raise(&mut self, vector: u8) -> Flow {
+        Flow::Stop(Stop::Exception(vector))
     }
 
     /// Register `n` of D0-D7 (0-7) and A0-A7 (8-15).

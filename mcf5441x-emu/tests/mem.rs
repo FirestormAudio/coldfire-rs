@@ -16,7 +16,10 @@ fn unmapped_read_faults() {
     m.map_ram(0x4010_0000, 0x1000);
     assert_eq!(
         m.read(0x3000_0000, Size::Long),
-        Err(Fault::Unmapped { addr: 0x3000_0000, size: Size::Long })
+        Err(Fault::Unmapped {
+            addr: 0x3000_0000,
+            size: Size::Long
+        })
     );
 }
 
@@ -26,7 +29,10 @@ fn long_read_straddling_ram_end_is_unmapped() {
     m.map_ram(0x4010_0000, 0x1000);
     assert_eq!(
         m.read(0x4010_0FFE, Size::Long),
-        Err(Fault::Unmapped { addr: 0x4010_0FFE, size: Size::Long })
+        Err(Fault::Unmapped {
+            addr: 0x4010_0FFE,
+            size: Size::Long
+        })
     );
     assert!(m.write(0x4010_0FFE, Size::Long, 0).is_err());
     assert_eq!(m.read(0x4010_0FFC, Size::Long), Ok(0));
@@ -46,5 +52,8 @@ fn load_and_peek() {
 
 #[test]
 fn assemble_helper_produces_code() {
-    assert_eq!(common::assemble("nop\nrts", 0x4010_0000), [0x4E, 0x71, 0x4E, 0x75]);
+    assert_eq!(
+        common::assemble("nop\nrts", 0x4010_0000),
+        [0x4E, 0x71, 0x4E, 0x75]
+    );
 }

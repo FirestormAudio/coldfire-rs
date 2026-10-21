@@ -39,7 +39,10 @@ pub struct Ram {
 
 impl Ram {
     fn new(base: u32, size: u32) -> Ram {
-        Ram { base, data: vec![0; size as usize] }
+        Ram {
+            base,
+            data: vec![0; size as usize],
+        }
     }
 
     /// First address of the region.
@@ -76,11 +79,17 @@ pub struct Memory {
 impl Memory {
     /// Map zeroed RAM at `base`. Panics when the region is empty, wraps the address space or overlaps another.
     pub fn map_ram(&mut self, base: u32, size: u32) {
-        assert!(size > 0 && base.checked_add(size - 1).is_some(), "bad RAM region {base:#x}+{size:#x}");
+        assert!(
+            size > 0 && base.checked_add(size - 1).is_some(),
+            "bad RAM region {base:#x}+{size:#x}"
+        );
         let end = base as u64 + size as u64;
         let at = self.ram.partition_point(|r| r.base < base);
         if let Some(prev) = at.checked_sub(1).map(|i| &self.ram[i]) {
-            assert!(prev.base as u64 + prev.data.len() as u64 <= base as u64, "RAM overlaps at {base:#x}");
+            assert!(
+                prev.base as u64 + prev.data.len() as u64 <= base as u64,
+                "RAM overlaps at {base:#x}"
+            );
         }
         if let Some(next) = self.ram.get(at) {
             assert!(end <= next.base as u64, "RAM overlaps at {base:#x}");
@@ -94,7 +103,10 @@ impl Memory {
         if let Some(off) = self.ram.get(self.last).and_then(|r| r.span(addr, len)) {
             return Some((self.last, off));
         }
-        let i = self.ram.partition_point(|r| r.base <= addr).checked_sub(1)?;
+        let i = self
+            .ram
+            .partition_point(|r| r.base <= addr)
+            .checked_sub(1)?;
         let off = self.ram[i].span(addr, len)?;
         self.last = i;
         Some((i, off))
@@ -111,7 +123,9 @@ impl Memory {
     /// Write the low bytes of `value`, big-endian.
     pub fn write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
         let n = size.bytes() as usize;
-        let (i, off) = self.find(addr, n as u32).ok_or(Fault::Unmapped { addr, size })?;
+        let (i, off) = self
+            .find(addr, n as u32)
+            .ok_or(Fault::Unmapped { addr, size })?;
         self.ram[i].data[off..off + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
         Ok(())
     }
@@ -121,16 +135,20 @@ impl Memory {
         if bytes.is_empty() {
             return Ok(());
         }
-        let (i, off) = self
-            .find(addr, bytes.len() as u32)
-            .ok_or(Fault::Unmapped { addr, size: Size::Byte })?;
+        let (i, off) = self.find(addr, bytes.len() as u32).ok_or(Fault::Unmapped {
+            addr,
+            size: Size::Byte,
+        })?;
         self.ram[i].data[off..off + bytes.len()].copy_from_slice(bytes);
         Ok(())
     }
 
     /// Copy `len` bytes out without side effects; `None` unless one region covers all of them.
     pub fn peek(&self, addr: u32, len: u32) -> Option<Vec<u8>> {
-        let i = self.ram.partition_point(|r| r.base <= addr).checked_sub(1)?;
+        let i = self
+            .ram
+            .partition_point(|r| r.base <= addr)
+            .checked_sub(1)?;
         let off = self.ram[i].span(addr, len)?;
         Some(self.ram[i].data[off..off + len as usize].to_vec())
     }

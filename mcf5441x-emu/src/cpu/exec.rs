@@ -27,7 +27,7 @@ pub fn unmodelled(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Faul
 
 /// The handler for `op`.
 pub const fn handler(op: Op) -> Handler {
-    use ops::{arith, logic, moves};
+    use ops::{arith, bits, isac, logic, moves, muldiv, shift};
     match op {
         Op::Move => moves::move_,
         Op::Movea => moves::movea,
@@ -66,6 +66,35 @@ pub const fn handler(op: Op) -> Handler {
         Op::Ext => logic::ext,
         Op::Extb => logic::extb,
         Op::Swap => logic::swap,
+        Op::AsrImm => shift::asr_imm,
+        Op::AsrReg => shift::asr_reg,
+        Op::AslImm => shift::asl_imm,
+        Op::AslReg => shift::asl_reg,
+        Op::LsrImm => shift::lsr_imm,
+        Op::LsrReg => shift::lsr_reg,
+        Op::LslImm => shift::lsl_imm,
+        Op::LslReg => shift::lsl_reg,
+        Op::BtstImmEa => bits::btst_imm,
+        Op::BtstDnEa => bits::btst_dn,
+        Op::BsetImmEa => bits::bset_imm,
+        Op::BsetDnEa => bits::bset_dn,
+        Op::BclrImmEa => bits::bclr_imm,
+        Op::BclrDnEa => bits::bclr_dn,
+        Op::BchgImmEa => bits::bchg_imm,
+        Op::BchgDnEa => bits::bchg_dn,
+        Op::Scc => bits::scc,
+        Op::MulsW => muldiv::muls_w,
+        Op::MuluW => muldiv::mulu_w,
+        Op::MulL => muldiv::mul_l,
+        Op::DivsW => muldiv::divs_w,
+        Op::DivuW => muldiv::divu_w,
+        Op::DivL => muldiv::div_l,
+        Op::Mov3q => isac::mov3q,
+        Op::Sats => isac::sats,
+        Op::Ff1 => isac::ff1,
+        Op::Bitrev => isac::bitrev,
+        Op::Byterev => isac::byterev,
+        Op::Tpf => isac::tpf,
         _ => unmodelled,
     }
 }
