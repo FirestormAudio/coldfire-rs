@@ -584,9 +584,9 @@ const PRODUCT_OVERFLOW: &str = "
 ";
 
 #[test]
-fn product_overflow_without_omc_accumulates_the_low_48_bits() {
+fn product_overflow_without_omc_adds_the_low_40_bits_sign_extended() {
     // Measured on an MCF54415, signed integer: 0x7FFF_FFFF * 0x7FFF_FFFF into ACC0 = 0 leaves ACC0 = 0x0000_0001
-    // and ACC0's extension 0xFFFF, the low 48 bits of the product, with MACSR 0x10B (PAV0, N, V, EV).
+    // and ACC0's extension 0xFFFF, with MACSR 0x10B (PAV0, N, V, EV).
     let m = run(PRODUCT_OVERFLOW, [0; 8]);
     assert_eq!(
         (m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]),
@@ -594,36 +594,34 @@ fn product_overflow_without_omc_accumulates_the_low_48_bits() {
     );
     assert_eq!(m.cpu.d[5], PAV0 | N | V | EV);
 
-    // guess: the measured product has bit 39 set, so its low 48 bits are also the low 40 sign-extended; this core
-    // takes the low 48 bits as they are. 0x1_0000 * 0x100_0000 = 2^40 then adds 0x0100_0000_0000 (EV), where
-    // sign-extending the low 40 bits would add 0.
-    case(&row(
-        "mac.l %d0,%d1,%acc0",
-        0,
-        0,
-        0x1_0000,
-        0x100_0000,
-        (0, 0x0100, PAV0 | V | EV),
-    ));
-    // guess: RM 5.3.5 shifts a zero in on a right shift of an overflowed signed product; taken here as a zero into
-    // bit 47 of those 48 bits: 0xFFFF_0000_0001 >> 1 = 0x7FFF_8000_0000.
-    case(&row(
-        "mac.l %d0,%d1,>>,%acc0",
-        0,
-        0,
-        0x7FFF_FFFF,
-        0x7FFF_FFFF,
-        (0x8000_0000, 0x7FFF, PAV0 | V | EV),
-    ));
-    // guess: unsigned integers likewise take the low 48 bits of a product that does not fit 40 (RM 5.3.5 zero-fills
-    // bits 47-40 for a product that fits), by the same reading as the measured signed case.
+    // Measured on an MCF54415, signed integer: 0x0001_0000 * 0x0100_0000 = 2^40 (bit 40 set, bit 39 clear) into
+    // ACC0 = 5 leaves ACC0 = 5 and ACCext01 = 0, MACSR 0x102 (PAV0, V): the product's low 40 bits, sign-extended,
+    // are added (RM 5.3.5), not its low 48.
+    let src = "
+        moveq #0,%d0
+        move.l %d0,%macsr
+        move.l %d0,%accext01
+        moveq #5,%d0
+        move.l %d0,%acc0
+        move.l #0x00010000,%d2
+        move.l #0x01000000,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        move.l %acc0,%d6
+        move.l %accext01,%d7
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0x102, 5, 0));
+    assert_eq!(m.cpu.d[5], PAV0 | V);
+
+    // Unsigned integers (RM 5.3.5, not measured): the low 40 bits zero-filled, so 2^40 adds 0.
     case(&row(
         "mac.l %d0,%d1,%acc0",
         SU,
         0,
         0x1_0000,
         0x100_0000,
-        (0, 0x0100, SU | PAV0 | V | EV),
+        (0, 0, SU | PAV0 | Z | V),
     ));
 }
 

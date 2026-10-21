@@ -24,6 +24,7 @@ pub const EV: u32 = 0x01;
 const MACSR_MASK: u32 = 0x0FFF;
 
 const MASK48: u64 = (1 << 48) - 1;
+const MASK40: u64 = (1 << 40) - 1;
 
 /// The operating mode MACSR\[S/U, F/I\] selects (RM 5.2.1 Table 5-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,12 @@ impl Default for Emac {
 #[inline(always)]
 fn sext48(v: u64) -> i64 {
     ((v << 16) as i64) >> 16
+}
+
+/// Sign-extend the low 40 bits.
+#[inline(always)]
+fn sext40(v: u64) -> i64 {
+    ((v << 24) as i64) >> 24
 }
 
 /// `v >> k`, rounded to nearest with ties to even (RM 5.3.1.1).
@@ -347,15 +354,12 @@ impl Emac {
             let positive = (product >= 0) != op.subtract;
             return (Self::saturate_signed(positive), true);
         }
-        // Measured on an MCF54415 (RM 5.3.5 assigns no result here): without OMC, 0x7FFF_FFFF * 0x7FFF_FFFF into 0
-        // leaves 0xFFFF_0000_0001, the low 48 bits of the product. guess: the product is added to the accumulator
-        // (it was 0) and its bits 47-40 are kept as they are rather than sign-extended from bit 39 (the measured
-        // product has bit 39 set, so both read the same). A product that fits 40 bits is unchanged by this.
-        let p = sext48(product as u64);
+        // Measured on an MCF54415: without OMC an overflowed product is used as any other, its low 40 bits
+        // sign-extended to 48 (RM 5.3.5) and added to the accumulator. 0x7FFF_FFFF * 0x7FFF_FFFF into 0 leaves
+        // 0xFFFF_0000_0001; 0x1_0000 * 0x100_0000 = 2^40 into 5 leaves 5.
+        let p = sext40(product as u64);
         let p = match op.sf {
             1 => p << 1,
-            // guess: RM 5.3.5 shifts a zero in on a right shift of an overflowed signed product; here into bit 47.
-            3 if product_overflow => ((p as u64 & MASK48) >> 1) as i64,
             3 => p >> 1,
             _ => p,
         };
@@ -387,9 +391,9 @@ impl Emac {
         if product_overflow && omc {
             return (saturated, true);
         }
-        // guess: as measured for signed integers on an MCF54415 (see `signed`), a product that does not fit 40 bits
-        // contributes its low 48 bits; one that fits is the zero-filled 40 bits of RM 5.3.5.
-        let p = product & MASK48;
+        // RM 5.3.5: the low 40 bits, zero-filled to 48, whether or not the product overflowed (as measured on an
+        // MCF54415 for signed integers, see `signed`).
+        let p = product & MASK40;
         let p = match op.sf {
             1 => p << 1,
             3 => p >> 1,
