@@ -2,6 +2,7 @@
 
 pub mod dspi;
 pub mod edma;
+pub mod esdhc;
 pub mod intc;
 pub mod pit;
 pub mod ssi;
@@ -10,6 +11,7 @@ pub mod uart;
 
 pub use dspi::{Dspi, SpiDevice};
 pub use edma::Edma;
+pub use esdhc::{Esdhc, EsdhcConfig};
 pub use intc::{GlobalIack, Intc};
 pub use pit::Pit;
 pub use ssi::{Ssi, SsiConfig, SsiCounters};
