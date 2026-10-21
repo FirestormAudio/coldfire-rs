@@ -7,8 +7,7 @@ use crate::cpu::ea;
 use crate::cpu::{Cpu, Decoded, Flow};
 use crate::mem::{Fault, Memory, Size};
 
-/// The divide-by-zero exception vector (CFPRM Table 11-1).
-const DIVIDE_BY_ZERO: u8 = 5;
+use crate::cpu::exception::vector::DIVIDE_BY_ZERO;
 
 /// MULS.W and MULU.W `<ea>y,Dx`: 16 x 16 to 32 from the low words.
 #[inline(always)]
@@ -52,11 +51,9 @@ fn overflow(cpu: &mut Cpu) -> Result<Flow, Fault> {
 /// DIVS.W and DIVU.W `<ea>y,Dx`: 32-bit Dx / 16-bit source; remainder in the upper word, quotient in the lower.
 #[inline(always)]
 fn div_w(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded, signed: bool) -> Result<Flow, Fault> {
-    let before = cpu.a;
     let src = ea::load(cpu, mem, &d.ea, Size::Word)?;
     if src == 0 {
-        cpu.a = before;
-        return Ok(cpu.raise(DIVIDE_BY_ZERO));
+        return Ok(Flow::Exception(DIVIDE_BY_ZERO));
     }
     let r = d.operands[0] as usize & 7;
     let dividend = cpu.d[r];
@@ -87,14 +84,12 @@ pub fn divu_w(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Faul
 /// is Dx (quotient into Dx) or another register (remainder into Dw, Dx unchanged). N and Z follow the quotient
 /// in both forms (CFPRM ch. 4 REMS, REMU condition codes).
 pub fn div_l(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
-    let before = cpu.a;
     let src = ea::load(cpu, mem, &d.ea, Size::Long)?;
     let ext = d.operands[3];
     let (x, w) = ((ext >> 12) as usize & 7, ext as usize & 7);
     if src == 0 {
-        // The frame points at the divide, so the (Ay)+ / -(Ay) update is undone.
-        cpu.a = before;
-        return Ok(cpu.raise(DIVIDE_BY_ZERO));
+        // The frame points at the divide; the (Ay)+ / -(Ay) update is undone with the other registers.
+        return Ok(Flow::Exception(DIVIDE_BY_ZERO));
     }
     let dividend = cpu.d[x];
     let (q, rem) = if ext & 0x0800 != 0 {

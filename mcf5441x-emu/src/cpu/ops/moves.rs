@@ -1,9 +1,8 @@
-//! MOVE, MOVEA, MOVEQ, MVS, MVZ (CFPRM ch. 4) and ILLEGAL.
+//! MOVE, MOVEA, MOVEQ, MVS and MVZ (CFPRM ch. 4).
 
 use crate::cpu::ea::{self, sign_extend};
 use crate::cpu::{Cpu, Decoded, Flow};
 use crate::mem::{Fault, Memory, Size};
-use crate::stop::Stop;
 
 /// MOVE.sz <ea>y,<ea>x: N and Z from the moved value, V and C cleared, X unchanged. The source is evaluated (and
 /// its (An)+/-(An) applied) before the destination.
@@ -43,9 +42,4 @@ pub fn mvz(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> 
     cpu.d[d.operands[0] as usize & 7] = v;
     cpu.flags.logic(Size::Long, v);
     Ok(Flow::Next)
-}
-
-/// ILLEGAL: the illegal-instruction exception (vector 4); the run stops on it.
-pub fn illegal(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> {
-    Ok(Flow::Stop(Stop::Illegal))
 }

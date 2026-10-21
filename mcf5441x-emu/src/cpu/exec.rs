@@ -15,8 +15,19 @@ pub enum Flow {
     Next,
     /// The handler has set PC.
     Jump,
-    /// Stop without completing the instruction; PC stays on it.
+    /// Stop without completing the instruction; PC stays on it and the registers are as they were.
     Stop(Stop),
+    /// The instruction takes exception `vector` instead of completing: the registers are restored to their state
+    /// before it (RM 3.3.4.16), and the machine stops or vectors according to its
+    /// [`ExceptionPolicy`](crate::cpu::ExceptionPolicy).
+    Exception(u8),
+    /// As [`Flow::Exception`], but the instruction's register updates stand: JSR and BSR push their return address
+    /// before the target takes an address error (RM 3.3.4.2).
+    ExceptionAfterPush(u8),
+    /// STOP: the instruction is complete (PC past it) and the core waits for an interrupt.
+    Wait,
+    /// The instruction is complete and the run stops after it (HALT).
+    StopAfter(Stop),
 }
 
 /// The handler for an instruction this core does not model (yet): it stops the run, and the caller reports the
@@ -27,14 +38,13 @@ pub fn unmodelled(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Faul
 
 /// The handler for `op`.
 pub const fn handler(op: Op) -> Handler {
-    use ops::{arith, bits, flow, isac, logic, moves, muldiv, shift};
+    use ops::{arith, bits, flow, isac, logic, moves, muldiv, shift, system};
     match op {
         Op::Move => moves::move_,
         Op::Movea => moves::movea,
         Op::Moveq => moves::moveq,
         Op::Mvs => moves::mvs,
         Op::Mvz => moves::mvz,
-        Op::Illegal => moves::illegal,
         Op::Addq => arith::addq,
         Op::Subq => arith::subq,
         Op::AddEaDn => arith::add_ea_dn,
@@ -108,6 +118,24 @@ pub const fn handler(op: Op) -> Handler {
         Op::Unlk => flow::unlk,
         Op::MovemRegsEa => flow::movem_regs_ea,
         Op::MovemEaRegs => flow::movem_ea_regs,
+        Op::MoveFromSr => system::move_from_sr,
+        Op::MoveToSr => system::move_to_sr,
+        Op::MoveFromCcr => system::move_from_ccr,
+        Op::MoveToCcr => system::move_to_ccr,
+        Op::MoveToUsp => system::move_to_usp,
+        Op::MoveFromUsp => system::move_from_usp,
+        Op::Movec => system::movec,
+        Op::Strldsr => system::strldsr,
+        Op::Trap => system::trap,
+        Op::Illegal => system::illegal,
+        Op::Rte => system::rte,
+        Op::Stop => system::stop,
+        Op::Halt => system::halt,
+        Op::Pulse => system::pulse,
+        Op::Wddata => system::wddata,
+        Op::Wdebug => system::wdebug,
+        Op::Cpushl | Op::Intouch => system::cache_hint,
+        Op::FpuOp | Op::Fbcc | Op::Fsave | Op::Frestore => system::line_f,
         _ => unmodelled,
     }
 }

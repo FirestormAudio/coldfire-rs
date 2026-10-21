@@ -283,16 +283,16 @@ fn nop_changes_nothing_but_pc() {
 }
 
 #[test]
-fn jump_to_an_odd_address_does_not_panic() {
-    // The address-error exception comes with the exception model; here the jump only has to set PC.
+fn jump_to_an_odd_address_is_an_address_error() {
+    // RM 3.3.4.2: the jump takes vector 3 and the run stops on it, PC on the jump.
     let mut m = Machine::new();
     m.mem.map_ram(0x4010_0000, 0x0100_0000);
     m.mem.load(BASE, &[0x4e, 0xd2]).unwrap(); // jmp (%a2)
     m.cpu.pc = BASE;
     m.cpu.a[2] = BASE + 0x201;
     let r = m.run(Limit::default());
-    assert_ne!(r.kind, Stop::UntilPc);
-    assert_eq!(m.cpu.pc, BASE + 0x201);
+    assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE), "{r:?}");
+    assert_eq!(m.cpu.pc, BASE);
 }
 
 #[test]

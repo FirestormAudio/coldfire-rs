@@ -408,12 +408,12 @@ fn unmapped_access_stops() {
 
 #[test]
 fn unimplemented_op_stops_unmodelled_with_its_mnemonic() {
-    // A CAU instruction (CP0LD (A2), opword 0xFC92 plus its extension word): the table recognises it but the
-    // core does not execute it, which is not expected to change with the integer instructions.
-    let (mut m, end) = prepare(".short 0xfc92, 0x0000\nend:");
+    // TAS (ISA_B, CFPRM ch. 4): the table recognises it and this core does not execute it yet.
+    let (mut m, end) = prepare("tas.b (%a0)\nend:");
+    m.cpu.a[0] = DST;
     let r = m.run(until(end));
     assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
-    assert!(r.detail.contains("cp0ld"), "{r:?}");
+    assert_eq!(r.detail, "tas", "{r:?}");
 }
 
 #[test]
@@ -447,6 +447,7 @@ fn until_pc_and_instruction_limit() {
 fn set_sr_swaps_stacks_on_s_change() {
     let mut m = Machine::new();
     assert_eq!(m.cpu.sr(), 0x2700, "reset: supervisor, IPL 7");
+    m.cpu.cacr = 0x20; // EUSP: separate stack pointers (RM 3.2.3)
     m.cpu.a[7] = 0x4100_0000; // SSP
     m.cpu.other_sp = 0x4080_0000; // USP
     m.cpu.set_sr(0x0005);

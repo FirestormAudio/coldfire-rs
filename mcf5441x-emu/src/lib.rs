@@ -6,7 +6,7 @@ pub mod machine;
 pub mod mem;
 pub mod stop;
 
-pub use cpu::Cpu;
+pub use cpu::{Cpu, ExceptionPolicy};
 pub use machine::Machine;
 pub use mem::{Fault, Memory, Ram, Size};
 pub use stop::{Limit, Stop, StopReason};
