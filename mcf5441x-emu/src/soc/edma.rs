@@ -82,10 +82,11 @@ enum Activation {
 /// A peripheral request is served until its line drops (each minor loop reads or writes the peripheral, which
 /// lowers its line when it has nothing more), at SERQ and at every instruction boundary
 /// ([`Device::service`]); channels are served from 63 down to 0, the order the reset group and channel priorities
-/// give (RM 19.4.1, RM 19.4.16). A peripheral may hold any number of minor loops' worth behind one request. A
-/// minor loop whose accesses all hit RAM cannot lower the request: if the request is still asserted after one,
-/// the serving is refused (at SERQ) or halts the run with [`Stop::Unmodelled`] "channel N request never drops".
-/// As a backstop, a request still asserted after 2^20 minor loops is refused or halts the same way.
+/// give (RM 19.4.1, RM 19.4.16). The ERQ bits are published as [`DmaLines::enabled`](crate::DmaLines::enabled)
+/// for the peripherals' host-side statistics. A peripheral may hold any number of minor loops' worth behind one
+/// request. A minor loop whose accesses all hit RAM cannot lower the request: if the request is still asserted
+/// after one, the serving is refused (at SERQ) or halts the run with [`Stop::Unmodelled`] "channel N request never
+/// drops". As a backstop, a request still asserted after 2^20 minor loops is refused or halts the same way.
 ///
 /// A source or destination address that is not a multiple of the transfer size is a configuration error (RM
 /// 19.4.2): nothing moves, CITER and the TCD are unchanged but for START, DONE is not set, the channel's ERR bit is
@@ -303,6 +304,7 @@ impl Edma {
             }
             if csr & DREQ != 0 {
                 self.erq &= !(1 << ch);
+                cx.dma.set_enabled(self.erq);
             }
         }
         self.set_field(ch, SADDR, 4, saddr);
@@ -411,11 +413,15 @@ impl Edma {
         match offset {
             SERQ => {
                 self.erq |= 1 << ch;
+                cx.dma.set_enabled(self.erq);
                 if let Err(why) = self.serve(ch, cx) {
                     cx.refuse(Stop::Unmodelled, why);
                 }
             }
-            CERQ => self.erq &= !(1 << ch),
+            CERQ => {
+                self.erq &= !(1 << ch);
+                cx.dma.set_enabled(self.erq);
+            }
             CINT => {
                 self.int &= !(1 << ch);
                 self.drive(ch, cx);

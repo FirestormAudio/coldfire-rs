@@ -22,6 +22,7 @@ use crate::stop::StopReason;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DmaLines {
     asserted: u64,
+    enabled: u64,
 }
 
 impl DmaLines {
@@ -39,6 +40,17 @@ impl DmaLines {
     /// The asserted requests: bit `n` is channel `n`.
     pub fn asserted(&self) -> u64 {
         self.asserted
+    }
+
+    /// Publish the channels whose requests the eDMA serves (its ERQ bits): bit `n` is channel `n`.
+    pub fn set_enabled(&mut self, channels: u64) {
+        self.enabled = channels;
+    }
+
+    /// The channels whose requests the eDMA serves, as it last published them. The chip has no such signal: a
+    /// peripheral model uses it only for host-side statistics, never for behaviour.
+    pub fn enabled(&self) -> u64 {
+        self.enabled
     }
 }
 
