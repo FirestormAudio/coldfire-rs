@@ -191,9 +191,9 @@ impl Emac {
         self.mask = 0xFFFF_0000 | (v & 0xFFFF);
     }
 
-    // Measured on an MCF54415: ACCext01 bits 15-0 are ACCext0 and bits 31-16 ACCext1, as the CFPRM ch. 6 MOVE
-    // to/from ACCext01 tables have it (RM Figure 5-5 has them swapped). ACCext23 is taken the same way by analogy
-    // (ACCext2 in bits 15-0, ACCext3 in 31-16).
+    // Measured on an MCF54415: ACCext01 bits 15-0 are ACCext0 and bits 31-16 ACCext1, and ACCext23 bits 15-0 are
+    // ACCext2 and 31-16 ACCext3, as the CFPRM ch. 6 MOVE to/from ACCext tables have it (RM Figures 5-5 and 5-6
+    // have them swapped).
     /// MOVE from ACCext01 (`pair` 0) or ACCext23 (`pair` 1).
     pub fn accext(&self, pair: usize) -> u32 {
         ((self.ext[2 * pair + 1] as u32) << 16) | self.ext[2 * pair] as u32
@@ -355,8 +355,9 @@ impl Emac {
             return (Self::saturate_signed(positive), true);
         }
         // Measured on an MCF54415: without OMC an overflowed product is used as any other, its low 40 bits
-        // sign-extended to 48 (RM 5.3.5) and added to the accumulator. 0x7FFF_FFFF * 0x7FFF_FFFF into 0 leaves
-        // 0xFFFF_0000_0001; 0x1_0000 * 0x100_0000 = 2^40 into 5 leaves 5.
+        // sign-extended to 48 and added to the accumulator. 0x7FFF_FFFF * 0x7FFF_FFFF into 0 leaves 0xFFFF_0000_0001;
+        // 0x1_0000 * 0x100_0000 = 2^40 into 5 leaves 5. This goes against RM 5.3.5's pseudo-code, which skips the
+        // add once the product overflow has set PAVn (`if (MACSR.PAVn == 0)`).
         let p = sext40(product as u64);
         let p = match op.sf {
             1 => p << 1,
@@ -391,8 +392,9 @@ impl Emac {
         if product_overflow && omc {
             return (saturated, true);
         }
-        // RM 5.3.5: the low 40 bits, zero-filled to 48, whether or not the product overflowed (as measured on an
-        // MCF54415 for signed integers, see `signed`).
+        // Measured on an MCF54415: without OMC an overflowed product's low 40 bits, zero-filled to 48, are added:
+        // 0xFFFF_FFFF * 0xFFFF_FFFF into 5 leaves 0x00FE_0000_0006. As for signed integers, this goes against RM
+        // 5.3.5's pseudo-code, which skips the add once PAVn is set.
         let p = product & MASK40;
         let p = match op.sf {
             1 => p << 1,
@@ -413,7 +415,8 @@ impl Emac {
 
     /// Signed fractions: `product` is Y * X of the 32-bit operands. The scale factor is ignored (RM 5.3.1.4).
     /// There is no product overflow in this mode (RM 5.3.5: it applies to 32 x 32 integer operations only), only
-    /// the 48-bit accumulation overflow.
+    /// the 48-bit accumulation overflow. Measured on an MCF54415 without OMC: -1 * -1 into 0x0000_0100 leaves
+    /// 0x8000_0100 with EV and without PAV0 or V. With OMC the same holds by RM 5.3.5 (not measured).
     fn fractional(&self, n: usize, op: MacOp, product: i128, omc: bool) -> (u64, bool) {
         // product[63:0] = (Y * X) << 1; held exactly, so -1 * -1 is +2^63, which is the zero-filled
         // product[71:64] RM 5.3.5 asks for in that case and the sign extension in every other.

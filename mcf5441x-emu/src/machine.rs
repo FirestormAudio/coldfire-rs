@@ -276,7 +276,8 @@ impl Machine {
         self.mem.pc = pc;
         if pc & 1 != 0 {
             // guess: jumps, branches and returns check their own targets (RM 3.3.4.2); a PC that is odd
-            // anyway (loaded by RTE, or set from outside) faults at the fetch, with itself as the stacked PC.
+            // anyway (loaded by RTE, or set from outside) faults at the fetch, with itself as the stacked PC and FS
+            // 0100 (by analogy with the odd RTS measured on an MCF54415).
             if let Some(r) = self.take(vector::ADDRESS_ERROR, pc) {
                 return Some(r);
             }

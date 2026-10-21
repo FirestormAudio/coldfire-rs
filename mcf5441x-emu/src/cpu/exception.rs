@@ -20,9 +20,9 @@ pub mod vector {
 
 // Measured on an MCF54415: a jump to an odd address writes FS 0100 "error on instruction fetch" (RM Table 3-7) with
 // the jump as the stacked PC; a word-sized index, a scale factor of 8 or a full-format extension word (RM 3.3.4.2)
-// writes FS 1100 "error on operand read" with the faulting instruction as the stacked PC. An odd RTS, JSR or BSR
-// target or an odd PC loaded by RTE was not measured; it is the same cause as the odd jump (the fetch at the odd
-// address) and takes 0100.
+// writes FS 1100 "error on operand read" with the faulting instruction as the stacked PC. An odd JSR or RTS target
+// writes FS 0100 too, measured. guess: an odd BSR target (by analogy with JSR) and an odd PC loaded by RTE (by
+// analogy with RTS) were not measured; they take 0100.
 /// The fault status of an address error from an odd instruction address: 0100.
 pub const ADDRESS_ERROR_FETCH_FS: u32 = 0b0100;
 /// The fault status of an address error from an index extension word RM 3.3.4.2 rejects: 1100.
@@ -61,7 +61,8 @@ pub fn stacks_next_pc(vector: u8) -> bool {
 impl Cpu {
     /// Take exception `vector` with `return_pc` in the frame (CFPRM ch. 11 steps 1-4): enter supervisor mode with
     /// T clear, write the two-longword frame (format `4 + SSP[1:0]`, fault status ([`ADDRESS_ERROR_FETCH_FS`] for
-    /// an address error, else 0), vector, the SR before the exception, then
+    /// an address error, else 0; [`Cpu::raise_with_fs`] gives another, such as [`ADDRESS_ERROR_OPERAND_FS`]),
+    /// vector, the SR before the exception, then
     /// `return_pc`) at the SSP aligned down to 4, and continue at the handler read from `VBR + 4 * vector`.
     ///
     /// On an error nothing in the core changes (memory may hold part of the frame). A handler address with bit 0

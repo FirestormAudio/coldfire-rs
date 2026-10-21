@@ -9,18 +9,19 @@ through a small device interface and decides what a stop means.
 - The integer instruction set of ISA_A, ISA_B and ISA_C, with condition codes, the hardware divider (DIVU/DIVS/REMU/REMS)
   and the EMAC (CFPRM ch. 6, RM ch. 5): four accumulators, MACSR, the mask register, fractional and saturating modes.
 - Values measured on an MCF54415 are reproduced: MVS, MVZ, REMU, FF1, BITREV, BYTEREV, MOV3Q, SATS and MAC; BRA.L
-  on ISA_C; the fault status of address-error frames (0100 for an odd jump target, 1100 for a bad index extension
-  word); the ACCext01 layout; and the EMAC's overflow behaviour (a product overflow without OMC adds the product's low
-  40 bits sign-extended, PAVn is recomputed by each MAC without OMC, and with OMC a set PAVn freezes the
-  accumulator).
+  on ISA_C; the fault status of address-error frames (0100 for an odd JMP, JSR or RTS target, 1100 for a bad index
+  extension word); the ACCext01 and ACCext23 layouts; and the EMAC's overflow behaviour (a product overflow without
+  OMC adds the product's low 40 bits, signed or unsigned; fractional -1 * -1 is no product overflow; PAVn is
+  recomputed by each MAC without OMC; with OMC a set PAVn freezes the accumulator).
 - Exceptions are vectored through VBR with ColdFire stack frames (CFPRM ch. 11). An [`ExceptionPolicy`] decides which
   vectors end the run instead of being taken; the default stops on every vector except TRAP #0-15 and interrupts.
 - Interrupts are sampled at instruction boundaries, so a request raised by a device write is taken before the next
   instruction.
 
 Where the manuals do not say what the hardware does and it was not measured, the code carries a `guess:` comment with
-the reason, and so does its test. The notable open points: the fault status for an odd RTS, JSR or BSR target (taken
-as 0100, like the measured odd jump), and ACCext23 (taken to mirror the measured ACCext01).
+the reason, and so does its test. The notable open points: the address-error frame for an odd BSR target and for an
+odd PC loaded by RTE (taken as FS 0100, like the measured odd JSR and RTS), and the EMAC with OMC set in the cases
+only measured without it (fractional -1 * -1, unsigned product overflow), which follow RM 5.3.5.
 
 ## What is not modelled
 

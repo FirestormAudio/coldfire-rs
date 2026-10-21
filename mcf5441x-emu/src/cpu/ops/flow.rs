@@ -40,7 +40,8 @@ fn jump(cpu: &mut Cpu, target: u32) -> Flow {
     Flow::Jump
 }
 
-// guess (BSR): RM 3.3.4.2 describes JSR only; BSR, the other call, is taken to push first in the same way.
+// Measured on an MCF54415 for JSR: the push stands and the frame is written below it.
+// guess (BSR): not measured; BSR, the other call, is taken to push first in the same way.
 /// Push the return address, then continue at `target`; an odd target takes the address error with the push
 /// standing if the exception is taken.
 #[inline(always)]

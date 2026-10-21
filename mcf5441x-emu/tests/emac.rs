@@ -613,16 +613,55 @@ fn product_overflow_without_omc_adds_the_low_40_bits_sign_extended() {
     let m = run(src, [0; 8]);
     assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0x102, 5, 0));
     assert_eq!(m.cpu.d[5], PAV0 | V);
+}
 
-    // Unsigned integers (RM 5.3.5, not measured): the low 40 bits zero-filled, so 2^40 adds 0.
-    case(&row(
-        "mac.l %d0,%d1,%acc0",
-        SU,
-        0,
-        0x1_0000,
-        0x100_0000,
-        (0, 0, SU | PAV0 | Z | V),
-    ));
+#[test]
+fn unsigned_product_overflow_without_omc_adds_the_low_40_bits() {
+    // Measured on an MCF54415, unsigned integer (MACSR 0x40): 0xFFFF_FFFF * 0xFFFF_FFFF = 0xFFFF_FFFE_0000_0001 into
+    // ACC0 = 5 leaves ACC0 = 6 and ACCext01 = 0x0000_00FE, MACSR 0x143 (PAV0, S/U, V, EV): the product's low 40
+    // bits are added, although RM 5.3.5's pseudo-code skips the add once PAVn is set.
+    let src = "
+        moveq #0x40,%d0
+        move.l %d0,%macsr
+        moveq #0,%d0
+        move.l %d0,%accext01
+        moveq #5,%d0
+        move.l %d0,%acc0
+        moveq #-1,%d2
+        moveq #-1,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        move.l %acc0,%d6
+        move.l %accext01,%d7
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0x143, 6, 0xFE));
+    assert_eq!(m.cpu.d[5], SU | PAV0 | V | EV);
+}
+
+#[test]
+fn fractional_minus_one_squared_is_not_a_product_overflow() {
+    // Measured on an MCF54415, signed fractional without OMC (MACSR 0x20): ACC0 = 0x0000_0100, then
+    // 0x8000_0000 * 0x8000_0000 (-1 * -1 = +1.0) leaves ACC0 = 0x8000_0100, ACCext01 = 0 and MACSR 0x21 (F/I, EV):
+    // no PAV0 and no V. The +1.0 is accumulated into the 40-bit fraction and EV flags it (RM 5.3.5 has no product
+    // overflow in fractional mode).
+    let src = "
+        moveq #0x20,%d0
+        move.l %d0,%macsr
+        moveq #0,%d0
+        move.l %d0,%accext01
+        move.l #0x100,%d0
+        move.l %d0,%acc0
+        move.l #0x80000000,%d2
+        move.l %d2,%d3
+        mac.l %d2,%d3,%acc0
+        move.l %macsr,%d5
+        move.l %acc0,%d6
+        move.l %accext01,%d7
+    ";
+    let m = run(src, [0; 8]);
+    assert_eq!((m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]), (0x21, 0x8000_0100, 0));
+    assert_eq!(m.cpu.d[5], FI | EV);
 }
 
 #[test]
@@ -664,7 +703,7 @@ fn accumulation_overflow_without_omc_wraps() {
 fn pav_without_omc_is_recomputed_by_each_mac() {
     // Measured on an MCF54415, signed integer without OMC: the product overflow gives MACSR 0x10B, then a clean
     // mac.l 1*1 into the same accumulator gives MACSR 0x009: PAV0 and V cleared, as RM 5.3.5's algorithm clears
-    // PAVn before each MAC or MSAC. ACC0 (worked out, not read back): 0xFFFF_0000_0001 + 1.
+    // PAVn before each MAC or MSAC. ACC0 reads 0x0000_0002 and ACCext01 0x0000_FFFF (0xFFFF_0000_0001 + 1).
     let src = "
         moveq #0,%d0
         move.l %d0,%macsr
@@ -678,11 +717,13 @@ fn pav_without_omc_is_recomputed_by_each_mac() {
         moveq #1,%d3
         mac.l %d2,%d3,%acc0
         move.l %macsr,%d6
+        move.l %acc0,%d7
+        move.l %accext01,%d4
     ";
     let m = run(src, [0; 8]);
     assert_eq!((m.cpu.d[5], m.cpu.d[6]), (0x10B, 0x009));
     assert_eq!(m.cpu.d[6], N | EV);
-    assert_eq!((m.cpu.emac.acc[0], m.cpu.emac.ext[0]), (2, 0xFFFF));
+    assert_eq!((m.cpu.d[7], m.cpu.d[4]), (0x0000_0002, 0x0000_FFFF));
 }
 
 #[test]
@@ -812,7 +853,8 @@ fn mac_with_load_moves_and_masks_address() {
 #[test]
 fn accext_round_trip() {
     // CFPRM ch. 6 MOVE to/from ACCext01 and ACCext23: ACCext1 (ACCext3) in bits 31-16 and ACCext0 (ACCext2) in
-    // bits 15-0, as measured on an MCF54415 (see `accext01_low_half_is_acc0`); RM Figure 5-5 has them swapped.
+    // bits 15-0, as measured on an MCF54415 (see `accext_low_halves_are_acc0_and_acc2`); RM Figures 5-5 and 5-6
+    // have them swapped.
     let m = run(
         "move.l %d0,%accext01\nmove.l %d1,%accext23\nmove.l %accext01,%d2\nmove.l %accext23,%d3",
         [0x1234_5678, 0x9ABC_DEF0, 0, 0, 0, 0, 0, 0],
@@ -874,7 +916,7 @@ fn accext_round_trip() {
 }
 
 #[test]
-fn accext01_low_half_is_acc0() {
+fn accext_low_halves_are_acc0_and_acc2() {
     // Measured on an MCF54415: with OMC, signed integer, ACC0 = ACC1 = 0 and ACCext01 = 1, MOVE ACC0 saturates to
     // 0x7FFF_FFFF (its extension is nonzero) and MOVE ACC1 reads 0: bits 15-0 of ACCext01 belong to ACC0 and bits
     // 31-16 to ACC1 (CFPRM ch. 6; RM Figure 5-5 has them swapped). ACCext01 reads back 1.
@@ -893,7 +935,8 @@ fn accext01_low_half_is_acc0() {
     let m = run(src, [0; 8]);
     assert_eq!((m.cpu.d[4], m.cpu.d[5], m.cpu.d[6]), (0x7FFF_FFFF, 0, 1));
 
-    // ACCext23 by analogy (not measured): bits 15-0 belong to ACC2, 31-16 to ACC3.
+    // Measured on an MCF54415, the same for ACCext23: ACC2 saturates, ACC3 reads 0, ACCext23 reads back 1 and MACSR
+    // is 0x84 (OMC, and Z from the last MOVE to ACC): bits 15-0 belong to ACC2, 31-16 to ACC3.
     let src = "
         move.l #0x80,%d0
         move.l %d0,%macsr
@@ -905,9 +948,13 @@ fn accext01_low_half_is_acc0() {
         move.l %acc2,%d4
         move.l %acc3,%d5
         move.l %accext23,%d6
+        move.l %macsr,%d7
     ";
     let m = run(src, [0; 8]);
-    assert_eq!((m.cpu.d[4], m.cpu.d[5], m.cpu.d[6]), (0x7FFF_FFFF, 0, 1));
+    assert_eq!(
+        (m.cpu.d[4], m.cpu.d[5], m.cpu.d[6], m.cpu.d[7]),
+        (0x7FFF_FFFF, 0, 1, 0x84)
+    );
 }
 
 #[test]

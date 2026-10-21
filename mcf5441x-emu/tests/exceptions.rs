@@ -534,6 +534,50 @@ fn bad_index_address_error_is_an_operand_read_error() {
     }
 }
 
+/// Measured on an MCF54415: JSR to an odd address pushes the return address first, then writes the frame below it
+/// (frame word 0x440C2700, FS 0100) with the JSR as the stacked PC.
+#[test]
+fn odd_jsr_pushes_the_return_address_then_faults() {
+    let (mut m, l) = prepare(
+        "lea ret+1,%a0\njsr_insn: jsr (%a0)\nret: moveq #2,%d0\nhandler: nop",
+        &["jsr_insn", "ret", "handler"],
+    );
+    set_vector(&mut m, 3, l[2]);
+    m.policy.stop_on[3] = false;
+    let r = m.run(until(l[2]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK - 12, "A7 in the handler");
+    assert_eq!(long(&mut m, STACK - 12), 0x440C_2700);
+    assert_eq!(long(&mut m, STACK - 8), l[0], "stacked PC: the JSR");
+    assert_eq!(
+        long(&mut m, STACK - 4),
+        l[1],
+        "the return address above the frame"
+    );
+}
+
+/// Measured on an MCF54415: RTS to an odd address does not pop it; the frame (frame word 0x440C2700, FS 0100) is
+/// written below it, with the RTS as the stacked PC.
+#[test]
+fn odd_rts_leaves_the_return_address_and_faults() {
+    let (mut m, l) = prepare(
+        "pea ret+1\nrts_insn: rts\nret: moveq #2,%d0\nhandler: nop",
+        &["rts_insn", "ret", "handler"],
+    );
+    set_vector(&mut m, 3, l[2]);
+    m.policy.stop_on[3] = false;
+    let r = m.run(until(l[2]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK - 12, "A7 in the handler");
+    assert_eq!(long(&mut m, STACK - 12), 0x440C_2700);
+    assert_eq!(long(&mut m, STACK - 8), l[0], "stacked PC: the RTS");
+    assert_eq!(
+        long(&mut m, STACK - 4),
+        l[1] + 1,
+        "the odd address, not popped"
+    );
+}
+
 #[test]
 fn address_error_frames_for_rts_and_jsr() {
     // RTS: the frame is written above (below in memory) the preserved return PC.
@@ -545,8 +589,8 @@ fn address_error_frames_for_rts_and_jsr() {
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.cpu.a[7], STACK - 12);
-    // Not measured for RTS, JSR or BSR: an odd target is the same cause as the odd JMP measured on an MCF54415
-    // (the fetch at the target), so FS is 0100 "error on instruction fetch" (RM Table 3-7).
+    // FS 0100 "error on instruction fetch" (RM Table 3-7), measured on an MCF54415 for RTS and JSR (see
+    // `odd_rts_leaves_the_return_address_and_faults`, `odd_jsr_pushes_the_return_address_then_faults`).
     assert_eq!(long(&mut m, STACK - 12), fv(4, 3, 0x2700) | FS_FETCH);
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 0x301);
@@ -562,14 +606,14 @@ fn address_error_frames_for_rts_and_jsr() {
     assert_eq!(
         long(&mut m, STACK - 12),
         fv(4, 3, 0x2700) | FS_FETCH,
-        "FS 0100, as for the measured odd JMP"
+        "FS 0100, measured"
     );
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 2);
 
     // BSR to an odd target.
-    // guess: RM 3.3.4.2 describes JSR only; BSR is taken to push the return address first in the same way, so the
-    // frame sits below the pushed return address. The branch is hand-encoded (BSR.W, displacement 0x201).
+    // guess: not measured for BSR; by analogy with the measured JSR the return address is pushed first, the frame
+    // sits below it and FS is 0100. The branch is hand-encoded (BSR.W, displacement 0x201).
     let (mut m, l) = prepare(".short 0x6100,0x0201\nend: nop\nhandler: nop", &["handler"]);
     set_vector(&mut m, 3, l[0]);
     m.policy.stop_on[3] = false;
@@ -579,7 +623,7 @@ fn address_error_frames_for_rts_and_jsr() {
     assert_eq!(
         long(&mut m, STACK - 12),
         fv(4, 3, 0x2700) | FS_FETCH,
-        "FS 0100, as for the measured odd JMP"
+        "guess: FS 0100, as for the measured JSR"
     );
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(
@@ -588,7 +632,8 @@ fn address_error_frames_for_rts_and_jsr() {
         "guess: pushed before the error"
     );
 
-    // A PC that is already odd: the stacked PC is the odd address (guess, see `odd_pc_is_an_address_error`).
+    // guess: a PC that is already odd (RTE can load one) is not measured; by analogy with the measured RTS it
+    // faults with FS 0100, and the stacked PC is the odd address (see `odd_pc_is_an_address_error`).
     let (mut m, l) = prepare("nop\nend: nop\nhandler: nop", &["handler"]);
     set_vector(&mut m, 3, l[0]);
     m.policy.stop_on[3] = false;
@@ -598,7 +643,7 @@ fn address_error_frames_for_rts_and_jsr() {
     assert_eq!(
         long(&mut m, STACK - 8),
         fv(4, 3, 0x2700) | FS_FETCH,
-        "FS 0100, as for the measured odd JMP"
+        "guess: FS 0100, as for the measured RTS"
     );
     assert_eq!(long(&mut m, STACK - 4), BASE + 1);
 }
