@@ -4,6 +4,10 @@
 //! with a [`DeviceCx`] for the clock, the interrupt lines and halting; every such access also ends the current
 //! instruction's run of uninterrupted execution, so the machine looks at interrupts and events before the next
 //! instruction.
+//!
+//! Memory also keeps one bit per 4 KiB page for the pages holding decoded instructions. A write into such a page,
+//! by an instruction or by [`Memory::load`], clears the bit, reports the page to the machine and ends the run of
+//! uninterrupted execution, so the page's decoded blocks are dropped before the next instruction.
 
 use std::collections::HashMap;
 
@@ -100,7 +104,14 @@ pub struct Memory {
     /// Device reads per (pc, addr) since the last device write. Only counted, never iterated.
     polls: HashMap<(u32, u32), u32>,
     poll_limit: u32,
+    /// One bit per 4 KiB page of the address space: the page holds bytes of a decoded block.
+    code: Box<[u64]>,
+    /// Pages whose code was written since the machine last dropped their blocks.
+    pub(crate) written: Vec<u32>,
 }
+
+/// Log2 of the page size the block cache tracks writes in.
+pub(crate) const PAGE_SHIFT: u32 = 12;
 
 impl Default for Memory {
     fn default() -> Self {
@@ -116,6 +127,8 @@ impl Default for Memory {
             trace: None,
             polls: HashMap::new(),
             poll_limit: DEFAULT_POLL_LIMIT,
+            code: vec![0; 1 << (32 - PAGE_SHIFT - 6)].into_boxed_slice(),
+            written: Vec::new(),
         }
     }
 }
@@ -214,7 +227,49 @@ impl Memory {
             return self.device_write(addr, size, value);
         };
         self.ram[i].data[off..off + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
+        let (first, last) = (addr >> PAGE_SHIFT, (addr + n as u32 - 1) >> PAGE_SHIFT);
+        if self.has_code(first) || self.has_code(last) {
+            self.code_written(first, last);
+        }
         Ok(())
+    }
+
+    /// Whether `page` holds bytes of a decoded block.
+    #[inline(always)]
+    fn has_code(&self, page: u32) -> bool {
+        self.code[(page >> 6) as usize & (self.code.len() - 1)] >> (page & 63) & 1 != 0
+    }
+
+    /// Mark pages `first..=last` as holding bytes of a decoded block.
+    pub(crate) fn mark_code(&mut self, first: u32, last: u32) {
+        for page in first..=last {
+            self.code[(page >> 6) as usize] |= 1 << (page & 63);
+        }
+    }
+
+    /// RAM in pages `first..=last` was written: report the ones holding code, so that their blocks are dropped
+    /// before the next instruction.
+    #[cold]
+    #[inline(never)]
+    fn code_written(&mut self, first: u32, last: u32) {
+        for page in first..=last {
+            if self.has_code(page) {
+                self.code[(page >> 6) as usize] &= !(1 << (page & 63));
+                self.written.push(page);
+                self.horizon = 0;
+            }
+        }
+    }
+
+    /// Whether one RAM region holds all of `[addr, addr + len)`.
+    pub(crate) fn in_ram(&mut self, addr: u32, len: u32) -> bool {
+        self.find(addr, len).is_some()
+    }
+
+    /// Look at events, limits and interrupts before the next instruction: the interrupt mask may have changed.
+    #[inline(always)]
+    pub(crate) fn resample(&mut self) {
+        self.horizon = 0;
     }
 
     /// A read RAM does not cover: the device whose window holds it, or unmapped. More than the poll limit of
@@ -411,6 +466,8 @@ impl Memory {
             size: Size::Byte,
         })?;
         self.ram[i].data[off..off + bytes.len()].copy_from_slice(bytes);
+        let last = addr + (bytes.len() as u32 - 1);
+        self.code_written(addr >> PAGE_SHIFT, last >> PAGE_SHIFT);
         Ok(())
     }
 

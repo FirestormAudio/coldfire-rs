@@ -1,5 +1,6 @@
 //! The V4e integer core: programmer-visible state, decoding into [`Decoded`] and the instruction handlers.
 
+pub(crate) mod block;
 pub mod ccr;
 pub mod decode;
 pub mod ea;

@@ -36,6 +36,8 @@ pub fn move_to_sr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, 
     supervisor!(cpu);
     let v = ea::load(cpu, mem, &d.ea, Size::Word)?;
     cpu.set_sr(v as u16);
+    // A lower mask may let a held interrupt request in.
+    mem.resample();
     Ok(Flow::Next)
 }
 
@@ -103,6 +105,7 @@ pub fn strldsr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fau
     mem.write(sp, Size::Long, cpu.sr() as u32)?;
     cpu.a[7] = sp;
     cpu.set_sr(imm);
+    mem.resample();
     Ok(Flow::Next)
 }
 
@@ -130,6 +133,7 @@ pub fn rte(cpu: &mut Cpu, mem: &mut Memory, _: &Decoded) -> Result<Flow, Fault> 
     cpu.a[7] = sp.wrapping_add(8 + (format - 4));
     cpu.set_sr(fv as u16);
     cpu.pc = pc;
+    mem.resample();
     Ok(Flow::Jump)
 }
 

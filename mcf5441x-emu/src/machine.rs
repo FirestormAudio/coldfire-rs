@@ -2,15 +2,21 @@
 //!
 //! Time is the instruction count: one instruction is one tick, interrupt entry takes none, and STOP jumps the
 //! clock to the next device event. The loop executes instructions back to back until the clock reaches
-//! `Memory::horizon`: the earliest of the next device event and the time limit, or the end of any instruction
-//! that touched a device (or the next instruction while a request waits on the interrupt mask). There it
-//! *services* the machine: the due device events, a halt a device asked for, the time limit, and interrupts, in
-//! that order; then it sets the next horizon. RAM-only code pays one comparison per instruction for all of it.
+//! `Memory::horizon`: the earliest of the next device event, the time limit and the instruction limit, or the end
+//! of any instruction that touched a device, wrote SR (a request held off by the interrupt mask may now be taken)
+//! or wrote over decoded code. There it drops the blocks over written code and *services* the machine: the due
+//! device events, a halt a device asked for, the time limit, and interrupts, in that order; then it sets the next
+//! horizon. RAM-only code pays one comparison per instruction for all of it.
+//!
+//! Instructions run from decoded blocks: straight runs decoded once, ending at a branch, a jump, a write to SR or a
+//! page boundary. Execution enters a block only at its start, so a run that stops in the middle of one (at the
+//! instruction limit, `until_pc` or the horizon) resumes in a block that starts there.
 //!
 //! The level-7 line is sampled at each service, which follows every instruction that could change it (a device
 //! access or event), so its edges are seen per instruction, as the core samples them (RM 17.1.1). Lines changed
 //! from outside the devices between runs are sampled once, when the next run starts.
 
+use crate::cpu::block::Blocks;
 use crate::cpu::exception::{stacks_next_pc, vector};
 use crate::cpu::{self, Cpu, DecodeError, ExceptionPolicy, Flow};
 use crate::device::{Access, Device, DeviceId};
@@ -36,6 +42,8 @@ pub struct Machine {
     level7_line: bool,
     /// The level-7 line rose since a level-7 interrupt was last taken.
     level7_edge: bool,
+    /// Decoded blocks.
+    blocks: Blocks,
 }
 
 impl Machine {
@@ -116,19 +124,56 @@ impl Machine {
     /// way; one it does not is taken (frame, vector, handler) and the instruction that took it counts as one.
     ///
     /// A device access completes even when the device asks to halt; the run then stops before the next
-    /// instruction. Interrupts are sampled before every instruction that follows a device access or a device
-    /// event, so a request raised by a write is taken before the next instruction. Changes made between runs
-    /// (lines, device state, the time limit) are seen when the next run starts.
+    /// instruction. Interrupts are sampled before every instruction that follows a device access, a device
+    /// event or a write to SR, so a request raised by a write is taken before the next instruction. Changes made
+    /// between runs (lines, device state, the time limit) are seen when the next run starts.
+    ///
+    /// Instructions are decoded once into blocks and run from there; a write over decoded code is seen by the
+    /// next instruction fetched, as if every instruction were decoded where it is executed.
     pub fn run(&mut self, limit: Limit) -> StopReason {
-        let end = limit
-            .max_instructions
-            .map_or(u64::MAX, |n| self.instructions.saturating_add(n));
-        self.mem.stop = None;
-        self.mem.reset_polls();
-        self.mem.horizon = 0;
+        let end = self.begin(limit);
         loop {
             if self.mem.now >= self.mem.horizon {
-                match self.service() {
+                match self.boundary() {
+                    Ok(false) => {}
+                    // An interrupt was taken: sample again before the handler's first instruction.
+                    Ok(true) => continue,
+                    Err(r) => return r,
+                }
+                // Blocks look only at the horizon, so it covers the instruction limit too.
+                let left = end.saturating_sub(self.instructions);
+                self.mem.horizon = self.mem.horizon.min(self.mem.now.saturating_add(left));
+            }
+            let pc = self.cpu.pc;
+            if limit.until_pc == Some(pc) {
+                return self.stop(Stop::UntilPc, String::new());
+            }
+            if self.instructions >= end {
+                return self.stop(Stop::InstructionLimit, String::new());
+            }
+            let block = if pc & 1 == 0 && !self.cpu.tracing() {
+                self.blocks.get(&mut self.mem, pc)
+            } else {
+                None
+            };
+            let r = match block {
+                Some(slot) => self.run_block(slot, limit.until_pc),
+                None => self.step(pc),
+            };
+            if let Some(r) = r {
+                return r;
+            }
+        }
+    }
+
+    /// [`Machine::run`] decoding every instruction where it is executed, without the block cache: the reference
+    /// the cache is checked against.
+    #[doc(hidden)]
+    pub fn run_uncached(&mut self, limit: Limit) -> StopReason {
+        let end = self.begin(limit);
+        loop {
+            if self.mem.now >= self.mem.horizon {
+                match self.boundary() {
                     Ok(false) => {}
                     // An interrupt was taken: sample again before the handler's first instruction.
                     Ok(true) => continue,
@@ -142,96 +187,204 @@ impl Machine {
             if self.instructions >= end {
                 return self.stop(Stop::InstructionLimit, String::new());
             }
-            self.mem.pc = pc;
-            if pc & 1 != 0 {
-                // guess: jumps, branches and returns check their own targets (RM 3.3.4.2); a PC that is odd
-                // anyway (loaded by RTE, or set from outside) faults at the fetch, with itself as the stacked PC.
-                if let Some(r) = self.take(vector::ADDRESS_ERROR, pc) {
-                    return r;
-                }
-                self.tick();
-                continue;
-            }
-            let traced = self.cpu.tracing();
-            let saved = self.cpu.a;
-            let (d, form) = match cpu::decode(&mut self.mem, pc) {
-                Ok(x) => x,
-                Err(DecodeError::Fault(f)) => return self.fault(f),
-                Err(DecodeError::Vector(v)) => {
-                    if let Some(r) = self.take(v, pc) {
-                        return r;
-                    }
-                    self.tick();
-                    continue;
-                }
-            };
-            let next = pc.wrapping_add(d.len as u32);
-            match cpu::exec::execute(&mut self.cpu, &mut self.mem, &d) {
-                Ok(Flow::Next) => self.cpu.pc = next,
-                Ok(Flow::Jump) => {}
-                Ok(Flow::Exception(v)) => {
-                    self.cpu.a = saved;
-                    self.cpu.pc = pc;
-                    if let Some(r) = self.take(v, if stacks_next_pc(v) { next } else { pc }) {
-                        return r;
-                    }
-                    self.tick();
-                    continue;
-                }
-                Ok(Flow::ExceptionAfterPush(v)) => {
-                    self.cpu.pc = pc;
-                    // The push stands only when the exception is taken; a run that stops on it leaves the
-                    // registers as before the instruction, so it can resume (the pushed longword stays in memory).
-                    if self.policy.stop_on[v as usize] {
-                        self.cpu.a = saved;
-                    }
-                    if let Some(r) = self.take(v, pc) {
-                        return r;
-                    }
-                    self.tick();
-                    continue;
-                }
-                Ok(Flow::Wait) => {
-                    self.cpu.pc = next;
-                    self.tick();
-                    // RM 3.3.4.6: a STOP that starts traced, or whose immediate sets T, takes the trace exception
-                    // with PC after it instead of waiting.
-                    if traced || self.cpu.tracing() {
-                        if let Some(r) = self.take(vector::TRACE, next) {
-                            return r;
-                        }
-                        continue;
-                    }
-                    self.waiting = true;
-                    self.mem.horizon = 0;
-                    continue;
-                }
-                Ok(Flow::StopAfter(kind)) => {
-                    self.cpu.pc = next;
-                    self.tick();
-                    return self.stop(kind, String::new());
-                }
-                Ok(Flow::Stop(kind)) => {
-                    self.cpu.a = saved;
-                    self.cpu.pc = pc;
-                    let detail = match kind {
-                        Stop::Unmodelled if form.isa == Isa::Cau => "CAU".to_string(),
-                        Stop::Unmodelled => form.mnemonic.to_string(),
-                        _ => String::new(),
-                    };
-                    return self.stop(kind, detail);
-                }
-                Err(f) => {
-                    self.cpu.a = saved;
-                    self.cpu.pc = pc;
-                    return self.fault(f);
-                }
-            }
-            self.tick();
-            // RM 3.3.4.6: with T set when it began, a completed instruction is followed by a trace exception.
-            if traced && let Some(r) = self.take(vector::TRACE, self.cpu.pc) {
+            if let Some(r) = self.step(pc) {
                 return r;
             }
+        }
+    }
+
+    /// Count block entries from now on, starting from zero (`true`), or stop counting (`false`, the default).
+    pub fn profile(&mut self, on: bool) {
+        self.blocks.profile(on);
+    }
+
+    /// How many times execution entered each block since profiling started or the profile was last taken, by the
+    /// block's start address, sorted by it; empty when not profiling. A block is a straight run of instructions
+    /// ending at a branch, a jump, a write to SR or a 4 KiB page boundary. Instructions run one at a time (while
+    /// tracing, or fetched from outside RAM) are not counted.
+    pub fn take_profile(&mut self) -> Vec<(u32, u64)> {
+        self.blocks.take_profile()
+    }
+
+    /// Start a run: the instruction count to stop at.
+    fn begin(&mut self, limit: Limit) -> u64 {
+        self.mem.stop = None;
+        self.mem.reset_polls();
+        self.mem.horizon = 0;
+        limit
+            .max_instructions
+            .map_or(u64::MAX, |n| self.instructions.saturating_add(n))
+    }
+
+    /// At the horizon: drop the blocks over written code, then service the machine.
+    fn boundary(&mut self) -> Result<bool, StopReason> {
+        while let Some(page) = self.mem.written.pop() {
+            self.blocks.drop_page(page);
+        }
+        self.service()
+    }
+
+    /// Execute the block in `slot` from its start, up to the horizon, `until_pc` or the first instruction that
+    /// does not fall through to the next. `Some` ends the run.
+    fn run_block(&mut self, slot: u32, until_pc: Option<u32>) -> Option<StopReason> {
+        let block = self.blocks.block_mut(slot);
+        block.count += 1;
+        let mut n = block.insns.len();
+        if let Some(u) = until_pc
+            && u.wrapping_sub(block.start) < block.end.wrapping_sub(block.start)
+        {
+            n = block.index_of(u);
+        }
+        let (cpu, mem) = (&mut self.cpu, &mut self.mem);
+        let mut pc = block.start;
+        let mut done = 0;
+        let mut other = None;
+        for d in &block.insns[..n] {
+            mem.pc = pc;
+            let saved = cpu.a;
+            match cpu::exec::execute(cpu, mem, d) {
+                Ok(Flow::Next) => {
+                    pc = pc.wrapping_add(d.len as u32);
+                    cpu.pc = pc;
+                    done += 1;
+                    mem.now += 1;
+                    // A device access, a write to SR or to decoded code, an event or the instruction limit.
+                    if mem.now >= mem.horizon {
+                        break;
+                    }
+                }
+                Ok(Flow::Jump) => {
+                    done += 1;
+                    mem.now += 1;
+                    break;
+                }
+                r => {
+                    other = Some((r, pc, d.len, saved));
+                    break;
+                }
+            }
+        }
+        self.instructions += done;
+        let (r, pc, len, saved) = other?;
+        self.finish(r, pc, len, saved, false)
+    }
+
+    /// Decode and execute the instruction at `pc` on its own. `Some` ends the run.
+    fn step(&mut self, pc: u32) -> Option<StopReason> {
+        self.mem.pc = pc;
+        if pc & 1 != 0 {
+            // guess: jumps, branches and returns check their own targets (RM 3.3.4.2); a PC that is odd
+            // anyway (loaded by RTE, or set from outside) faults at the fetch, with itself as the stacked PC.
+            if let Some(r) = self.take(vector::ADDRESS_ERROR, pc) {
+                return Some(r);
+            }
+            self.tick();
+            return None;
+        }
+        let traced = self.cpu.tracing();
+        let saved = self.cpu.a;
+        let d = match cpu::decode(&mut self.mem, pc) {
+            Ok((d, _)) => d,
+            Err(DecodeError::Fault(f)) => return Some(self.fault(f)),
+            Err(DecodeError::Vector(v)) => {
+                if let Some(r) = self.take(v, pc) {
+                    return Some(r);
+                }
+                self.tick();
+                return None;
+            }
+        };
+        let r = cpu::exec::execute(&mut self.cpu, &mut self.mem, &d);
+        self.finish(r, pc, d.len, saved, traced)
+    }
+
+    /// Complete the instruction at `pc` (`len` bytes) after its handler returned `r`: set PC, count it, take the
+    /// exception or stop it asked for, and the trace exception when T was set as it began (`traced`). `saved` is
+    /// A0-A7 before it. `Some` ends the run.
+    fn finish(
+        &mut self,
+        r: Result<Flow, Fault>,
+        pc: u32,
+        len: u8,
+        saved: [u32; 8],
+        traced: bool,
+    ) -> Option<StopReason> {
+        let next = pc.wrapping_add(len as u32);
+        match r {
+            Ok(Flow::Next) => self.cpu.pc = next,
+            Ok(Flow::Jump) => {}
+            Ok(Flow::Exception(v)) => {
+                self.cpu.a = saved;
+                self.cpu.pc = pc;
+                if let Some(r) = self.take(v, if stacks_next_pc(v) { next } else { pc }) {
+                    return Some(r);
+                }
+                self.tick();
+                return None;
+            }
+            Ok(Flow::ExceptionAfterPush(v)) => {
+                self.cpu.pc = pc;
+                // The push stands only when the exception is taken; a run that stops on it leaves the
+                // registers as before the instruction, so it can resume (the pushed longword stays in memory).
+                if self.policy.stop_on[v as usize] {
+                    self.cpu.a = saved;
+                }
+                if let Some(r) = self.take(v, pc) {
+                    return Some(r);
+                }
+                self.tick();
+                return None;
+            }
+            Ok(Flow::Wait) => {
+                self.cpu.pc = next;
+                self.tick();
+                // RM 3.3.4.6: a STOP that starts traced, or whose immediate sets T, takes the trace exception
+                // with PC after it instead of waiting.
+                if traced || self.cpu.tracing() {
+                    return self.take(vector::TRACE, next);
+                }
+                self.waiting = true;
+                self.mem.horizon = 0;
+                return None;
+            }
+            Ok(Flow::StopAfter(kind)) => {
+                self.cpu.pc = next;
+                self.tick();
+                return Some(self.stop(kind, String::new()));
+            }
+            Ok(Flow::Stop(kind)) => {
+                self.cpu.a = saved;
+                self.cpu.pc = pc;
+                let detail = match kind {
+                    Stop::Unmodelled => self.form_name(pc),
+                    _ => String::new(),
+                };
+                return Some(self.stop(kind, detail));
+            }
+            Err(f) => {
+                self.cpu.a = saved;
+                self.cpu.pc = pc;
+                return Some(self.fault(f));
+            }
+        }
+        self.tick();
+        // RM 3.3.4.6: with T set when it began, a completed instruction is followed by a trace exception.
+        if traced {
+            return self.take(vector::TRACE, self.cpu.pc);
+        }
+        None
+    }
+
+    /// The mnemonic of the form at `pc` (it was just decoded there), or "CAU" for the CAU's forms.
+    fn form_name(&self, pc: u32) -> String {
+        let form = self
+            .mem
+            .peek(pc, 2)
+            .and_then(|b| crate::isa::decode(u16::from_be_bytes([b[0], b[1]])));
+        match form {
+            Some(f) if f.isa == Isa::Cau => "CAU".to_string(),
+            Some(f) => f.mnemonic.to_string(),
+            None => String::new(),
         }
     }
 
@@ -249,8 +402,7 @@ impl Machine {
             {
                 return Err(self.stop(Stop::TimeLimit, format!("{} ticks", self.mem.now)));
             }
-            let (irq, held) = self.deliverable();
-            if let Some(irq) = irq {
+            if let Some(irq) = self.deliverable() {
                 if self.policy.stop_on[irq.vector as usize] {
                     return Err(self.exception(irq.vector));
                 }
@@ -273,10 +425,6 @@ impl Machine {
                 let mut h = event.unwrap_or(u64::MAX);
                 if let Some(limit) = self.time_limit {
                     h = h.min(limit);
-                }
-                if held {
-                    // A request waits on SR[I]: any instruction may lower it.
-                    h = now + 1;
                 }
                 self.mem.horizon = h.max(now + 1);
                 return Ok(false);
@@ -316,23 +464,18 @@ impl Machine {
             .is_some_and(|irq| irq.level == 7 || irq.level > ipl)
     }
 
-    /// The request the core takes now, if any, and whether another request is held off by SR\[I\]. Samples the
-    /// level-7 line for its rising edge.
-    fn deliverable(&mut self) -> (Option<Irq>, bool) {
+    /// The request the core takes now, if any. Samples the level-7 line for its rising edge. A request held off by
+    /// SR\[I\] is looked at again after the next write to SR (MOVE to SR, STRLDSR, RTE and STOP end the run of
+    /// uninterrupted execution).
+    fn deliverable(&mut self) -> Option<Irq> {
         let line = self.mem.level7();
         if line != self.level7_line {
             self.level7_line = line;
             self.level7_edge = line;
         }
-        let Some(irq) = self.mem.pending(self.level7_edge) else {
-            return (None, false);
-        };
+        let irq = self.mem.pending(self.level7_edge)?;
         let ipl = (self.cpu.sr() >> 8) as u8 & 7;
-        if irq.level == 7 || irq.level > ipl {
-            (Some(irq), false)
-        } else {
-            (None, true)
-        }
+        (irq.level == 7 || irq.level > ipl).then_some(irq)
     }
 
     /// One instruction completed.
