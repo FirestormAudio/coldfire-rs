@@ -269,13 +269,19 @@ fn pcsr_keeps_dbg_and_doze_and_32bit_reads_pack() {
     w(&mut m, PMR, Size::Word, 0x1234);
     w(&mut m, PCSR, Size::Word, 0x0260); // PRE 2, DOZE, DBG
     assert_eq!(r(&mut m, PCSR, Size::Word), 0x0260);
-    assert_eq!(r(&mut m, PCSR, Size::Long), 0x0260_1234); // PCSR:PMR
 }
 
 #[test]
-fn pcsr_pmr_32bit_write_sets_pmr_before_enabling() {
-    // EN and a new PMR in one write run the new modulus from the start.
+fn longword_accesses_read_all_ones_and_write_nothing() {
+    // RM ch. 38 allows only byte and word accesses. Measured on an MCF54415 (PIT1, PCSR 0, PMR 0x83): a longword
+    // read at +0 or +4 returns 0xFFFFFFFF with no exception, and a longword write at +0 changes nothing.
     let (mut m, id) = regs();
-    w(&mut m, PCSR, Size::Long, (0x0003 << 16) | 49);
-    assert_eq!(next(&m, id), Some(50));
+    w(&mut m, PMR, Size::Word, 0x83);
+    for off in [0, 4] {
+        assert_eq!(r(&mut m, PIT0 + off, Size::Long), u32::MAX);
+    }
+    w(&mut m, PCSR, Size::Long, 0x0003_0031);
+    assert_eq!(r(&mut m, PCSR, Size::Word), 0);
+    assert_eq!(r(&mut m, PMR, Size::Word), 0x83);
+    assert_eq!(next(&m, id), None);
 }

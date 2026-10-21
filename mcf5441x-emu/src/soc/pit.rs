@@ -27,9 +27,11 @@ const WRITABLE: u16 = 0x0F7B;
 ///   a full 65536 counts (RM 38.3.2). PIF is set at each expiry, which stays on the original grid when the
 ///   timer is serviced late.
 ///
-/// Byte and word accesses address their lanes of the registers. A longword at +0 reads PCSR:PMR and writes PMR
-/// first, then PCSR, so an enabling write with a new modulus starts with it. (guess: the RM says longword
-/// accesses are bus errors; they are accepted because code written for a model that accepts them relies on it.)
+/// Byte and word accesses address their lanes of the registers: a byte at +0 is the high byte of PCSR (PRE and the
+/// reserved bits), at +1 its low byte, at +2 and +3 the bytes of PMR, and so on for PCNTR; a byte write to PCSR
+/// or PMR takes effect as the word write of that lane would. Longword accesses are not allowed (RM ch. 38): a
+/// longword read of any register returns 0xFFFFFFFF and a longword write changes nothing, with no exception
+/// (measured on an MCF54415).
 ///
 /// The timer drives source `source` of interrupt controller `controller` with PIF and PIE.
 #[derive(Debug)]
@@ -143,6 +145,9 @@ fn lane_mask(size: Size) -> u32 {
 
 impl Device for Pit {
     fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32 {
+        if size == Size::Long {
+            return u32::MAX;
+        }
         let (base, lane, n) = (offset & !3, offset & 3, size.bytes());
         if lane + n > 4 {
             return 0;
@@ -157,7 +162,7 @@ impl Device for Pit {
 
     fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx) {
         let (lane, n) = (offset & 3, size.bytes());
-        if offset >= 4 || lane + n > 4 {
+        if size == Size::Long || offset >= 4 || lane + n > 4 {
             return; // PCNTR and the rest of the window ignore writes
         }
         let shift = (4 - lane - n) * 8;
