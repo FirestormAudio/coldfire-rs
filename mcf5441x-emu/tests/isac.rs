@@ -13,8 +13,12 @@ fn measured_on_mcf54415() {
         ("mvs.b\t%d0, %d0", [0x80, 0, 0], 0xFFFF_FF80),
         // mvz.w of 0xffff8001 -> 0x00008001
         ("mvz.w\t%d0, %d0", [0xFFFF_8001, 0, 0], 0x0000_8001),
-        // remu.l: d0 % d1 (remainder into %d2, then moved to %d0), here 3 % 5
-        ("remu.l\t%d1, %d2:%d0\n\tmove.l\t%d2, %d0", [3, 5, 0x77], 3),
+        // remu.l: d0 % d1 (remainder into %d2, then moved to %d0), here 0x17 % 5
+        (
+            "remu.l\t%d1, %d2:%d0\n\tmove.l\t%d2, %d0",
+            [0x17, 5, 0x77],
+            3,
+        ),
         // ff1.l of 0x00010000 -> 15
         ("ff1.l\t%d0", [0x0001_0000, 0, 0], 15),
         // bitrev.l of 1 -> 0x80000000
