@@ -124,6 +124,11 @@ impl<'b> Bus<'b> {
         }
     }
 
+    /// Whether one RAM region covers the access of `size` at `addr` (else it reaches a device, or nothing).
+    pub fn is_ram(&mut self, addr: u32, size: Size) -> bool {
+        self.space.is_ram(addr, size.bytes())
+    }
+
     /// Copy `out.len()` bytes of RAM at `addr` into `out`. Fails with `Unmapped` at `addr` (as a byte access)
     /// unless one RAM region covers them all; devices are never read this way.
     pub fn read_bytes(&mut self, addr: u32, out: &mut [u8]) -> Result<(), Fault> {

@@ -590,9 +590,10 @@ impl Machine {
     /// with the lines as they could become, reports a level above SR\[I\], or level 7 when the level-7 line is
     /// not already held (a held line gives no new edge).
     ///
-    /// The lines as they could become are the asserted lines plus the sources every device with a pending event
-    /// lists from [`Device::wake_sources`]; when one of those devices cannot say, every source of every controller
-    /// is taken as asserted. While the core waits, SR is fixed and no instruction runs, so no controller register
+    /// The lines as they could become are the asserted lines plus the sources every device lists from
+    /// [`Device::wake_sources`], with a pending event or not (a bus master lists the routes of the requests it
+    /// would serve, which another device's event may raise); when a device with a pending event cannot say, every
+    /// source of every controller is taken as asserted. While the core waits, SR is fixed and no instruction runs, so no controller register
     /// is written: a device event can only change the request lines. The probe is exact as long as a controller's
     /// masks and levels change only through its registers, and the sources a device lists cover its events.
     // guess: an interrupt controller that changes its own masks or levels in `advance` (none is modelled: the chip's

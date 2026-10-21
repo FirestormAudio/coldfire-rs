@@ -52,7 +52,9 @@ pub trait Device: Any {
     }
     /// The interrupt sources (controller, source) that this device's future events, or the DMA it requests, could
     /// assert: pushed to `out`, returning `true`; `false` (the default) when the device cannot say, and any source
-    /// might be asserted.
+    /// might be asserted. A bus master lists the sources the requests it would serve could assert (the eDMA: the
+    /// routes of its enabled channels with interrupts); it is asked whether or not it has an event of its own.
+    /// While the core waits after STOP, a device without a pending event that cannot say is left out.
     fn wake_sources(&self, _out: &mut Vec<(usize, u8)>) -> bool {
         false
     }

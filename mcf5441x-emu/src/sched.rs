@@ -205,12 +205,20 @@ impl Devices {
         self.controllers().any(|(_, c)| c.level7(lines))
     }
 
-    /// Push to `out` the interrupt sources that the devices with a pending event list
-    /// ([`Device::wake_sources`]), in the order the devices were added; `false` as soon as one cannot say.
+    /// Push to `out` the interrupt sources every device lists ([`Device::wake_sources`]), in the order the
+    /// devices were added, whether it has a pending event or not (a bus master lists the routes of the requests it
+    /// would serve); `false` when a device with a pending event cannot say.
     pub(crate) fn wake_sources(&self, out: &mut Vec<(usize, u8)>) -> bool {
-        (0..self.models.len())
-            .filter_map(|i| self.try_get(i))
-            .filter(|d| d.next_event().is_some())
-            .all(|d| d.wake_sources(out))
+        let mut known = true;
+        for d in (0..self.models.len()).filter_map(|i| self.try_get(i)) {
+            let mark = out.len();
+            if !d.wake_sources(out) {
+                out.truncate(mark);
+                if d.next_event().is_some() {
+                    known = false;
+                }
+            }
+        }
+        known
     }
 }

@@ -233,6 +233,11 @@ impl Space {
         Some((i, off))
     }
 
+    /// Whether one RAM region covers `[addr, addr + len)`.
+    pub(crate) fn is_ram(&mut self, addr: u32, len: u32) -> bool {
+        self.find(addr, len).is_some()
+    }
+
     /// A RAM read: `None` unless one region covers the access.
     #[inline(always)]
     pub(crate) fn ram_read(&mut self, addr: u32, size: Size) -> Option<u32> {
@@ -831,8 +836,7 @@ impl Memory {
     }
 
     /// The request lines as they could become while the core waits after STOP: the asserted lines plus every
-    /// source the devices with a pending event list ([`Device::wake_sources`]); `None` when one of them cannot
-    /// say.
+    /// source the devices list ([`Device::wake_sources`]); `None` when a device with a pending event cannot say.
     pub(crate) fn wake_lines(&self) -> Option<IrqLines> {
         let mut sources = Vec::new();
         if !self.space.devices.wake_sources(&mut sources) {

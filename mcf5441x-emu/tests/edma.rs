@@ -1,9 +1,11 @@
 //! The eDMA (RM ch. 19), driven through its registers, with peripheral requests from a test device that drives
 //! DMA request lines.
 
+mod common;
+
 use std::collections::VecDeque;
 
-use mcf5441x_emu::soc::Edma;
+use mcf5441x_emu::soc::{Edma, Intc};
 use mcf5441x_emu::{Device, DeviceCx, DeviceId, Fault, Limit, Machine, Size, Stop, StopReason};
 
 const EDMA: u32 = 0xFC04_4000;
@@ -60,7 +62,11 @@ struct Port {
     out: Vec<u32>,
     budget: u32,
     stuck: bool,
+    /// A tick at which the FIFO receives [`ARRIVAL`].
+    event: Option<u64>,
 }
+
+const ARRIVAL: u32 = 0x55;
 
 impl Port {
     fn new(line: u8) -> Port {
@@ -71,6 +77,7 @@ impl Port {
             out: Vec::new(),
             budget: 0,
             stuck: false,
+            event: None,
         }
     }
 
@@ -113,6 +120,21 @@ impl Device for Port {
             self.out.push(value);
         }
         self.drive(cx);
+    }
+
+    fn next_event(&self) -> Option<u64> {
+        self.event
+    }
+
+    fn advance(&mut self, _: u64, cx: &mut DeviceCx) {
+        self.event = None;
+        self.fifo.push_back(ARRIVAL);
+        self.drive(cx);
+    }
+
+    /// Its events raise no interrupt of its own: only through the DMA it requests.
+    fn wake_sources(&self, _: &mut Vec<(usize, u8)>) -> bool {
+        true
     }
 }
 
@@ -316,10 +338,11 @@ fn major_loop_applies_slast_and_dlast() {
 
 #[test]
 fn unmodelled_features_halt() {
-    let cases: [(&[(Field, u32)], &str); 4] = [
+    let cases: [(&[(Field, u32)], &str); 5] = [
         (&[(ATTR, 0x0101)], "transfer size"),
         (&[(CITER, 0x8001)], "channel link"),
         (&[(CITER, 0)], "CITER 0"),
+        (&[(NBYTES, 0)], "NBYTES 0"),
         // RM 19.4.2's SOE/DOE are not modelled
         (&[(ATTR, 0x0202), (NBYTES, 4), (DOFF, 2)], "offset"),
     ];
@@ -865,4 +888,87 @@ fn a_bus_error_halts() {
         d.contains("eDMA channel 1") && d.contains("bus error"),
         "{d}"
     );
+}
+
+#[test]
+fn a_peripheral_holding_more_than_64_entries_is_served_whole() {
+    // 4096 minor loops of four longs from the receive register, behind one request
+    let (mut m, _, port) = board(59);
+    let dst = 0x4020_0000;
+    tcd(
+        &mut m,
+        59,
+        &[
+            (SADDR, PORT + RX),
+            (SOFF, 0),
+            (ATTR, 0x0202),
+            (NBYTES, 16),
+            (SLAST, 0),
+            (DADDR, dst),
+            (DOFF, 4),
+            (CITER, 4096),
+            (BITER, 4096),
+            (DLAST, 0),
+            (CSR, INTMAJOR),
+        ],
+    );
+    w(&mut m, SERQ, Size::Byte, 59);
+    with_port(&mut m, port, |p| p.fifo.extend(0..4096 * 4));
+    no_halt(&mut m);
+    assert!(m.device::<Port>(port).fifo.is_empty());
+    assert_ne!(get(&mut m, 59, CSR) & DONE, 0);
+    let got = m.mem.peek(dst, 4096 * 16).unwrap();
+    let expect: Vec<u8> = (0..4096 * 4u32).flat_map(u32::to_be_bytes).collect();
+    assert_eq!(got, expect);
+}
+
+#[test]
+fn a_request_served_without_end_halts() {
+    // every minor loop reads the port, which never lowers its request: a backstop of 1 << 20 minor loops
+    let (mut m, _, port) = board(20);
+    tcd(
+        &mut m,
+        20,
+        &[
+            (SADDR, PORT),
+            (SOFF, 0),
+            (ATTR, 0),
+            (NBYTES, 1),
+            (DADDR, 0x4010_0200),
+            (DOFF, 0),
+            (CITER, 1),
+            (BITER, 1),
+        ],
+    );
+    w(&mut m, SERQ, Size::Byte, 20);
+    with_port(&mut m, port, |p| p.stuck = true);
+    let r = pending_halt(&mut m);
+    assert_eq!(r.kind, Stop::Unmodelled, "{r:?}");
+    assert!(
+        r.detail.contains("eDMA channel 20") && r.detail.contains("1048576 minor loops"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn a_core_in_stop_wakes_on_the_interrupt_of_a_dma_it_waits_for() {
+    // The port's arrival raises no interrupt of its own; the eDMA channel it requests raises INTC1 source 28 at
+    // the end of its major loop. The STOP probe must count the eDMA's route.
+    const INTC1: u32 = 0xFC04_C000;
+    let src = "stop #0x2000\nend: nop\nhandler: move.l #0xFC04401C,%a0\nmove.b #36,(%a0)\nrte";
+    let (mut m, l) = common::prepare(src, &["end", "handler"]);
+    let ([_, intc1, _], _) = Intc::chip();
+    m.add_interrupt_controller(INTC1, 0x4000, Box::new(intc1));
+    m.add_bus_master(EDMA, 0x2000, Box::new(Edma::new()));
+    let port = m.add_device(PORT, 0x1000, Box::new(Port::new(36)));
+    w(&mut m, INTC1 + 0x40 + 28, Size::Byte, 3); // ICR28: level 3
+    w(&mut m, INTC1 + 0x0C, Size::Long, !(1 << 28)); // IMRL: source 28 unmasked
+    common::set_vector(&mut m, 64 + 64 + 28, l[1]);
+    rx_channel(&mut m, 0x4030_0000);
+    with_port(&mut m, port, |p| p.event = Some(1000));
+    m.set_time_limit(Some(100_000));
+    let r = m.run(common::until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.mem.peek(0x4030_0000, 1).unwrap(), [ARRIVAL as u8]);
+    assert!(m.now() >= 1000);
 }

@@ -55,13 +55,14 @@ const DONE: u16 = 0x80;
 /// CITER and BITER E_LINK.
 const ELINK: u16 = 0x8000;
 
-/// Minor loops one asserted request may run before the model gives up on it ever dropping.
-const MAX_LOOPS: u32 = 64;
+/// Minor loops one asserted request may run before the model gives up on it ever dropping (a backstop: a minor
+/// loop that touches no device cannot lower the request, and stops the serving at once).
+const MAX_LOOPS: u32 = 1 << 20;
 
 /// What one activation of a channel did.
 enum Activation {
-    /// A minor loop ran.
-    Moved,
+    /// A minor loop ran; whether any of its accesses reached a device.
+    Moved { device: bool },
     /// A configuration error was recorded; nothing moved.
     Error,
 }
@@ -81,8 +82,10 @@ enum Activation {
 /// A peripheral request is served until its line drops (each minor loop reads or writes the peripheral, which
 /// lowers its line when it has nothing more), at SERQ and at every instruction boundary
 /// ([`Device::service`]); channels are served from 63 down to 0, the order the reset group and channel priorities
-/// give (RM 19.4.1, RM 19.4.16). A request still asserted after 64 minor loops is refused (at SERQ) or halts the
-/// run with [`Stop::Unmodelled`] "channel N request never drops".
+/// give (RM 19.4.1, RM 19.4.16). A peripheral may hold any number of minor loops' worth behind one request. A
+/// minor loop whose accesses all hit RAM cannot lower the request: if the request is still asserted after one,
+/// the serving is refused (at SERQ) or halts the run with [`Stop::Unmodelled`] "channel N request never drops".
+/// As a backstop, a request still asserted after 2^20 minor loops is refused or halts the same way.
 ///
 /// A source or destination address that is not a multiple of the transfer size is a configuration error (RM
 /// 19.4.2): nothing moves, CITER and the TCD are unchanged but for START, DONE is not set, the channel's ERR bit is
@@ -106,10 +109,11 @@ enum Activation {
 ///
 /// and, when a channel is activated (refused when the activation comes from a register write, a halt when it
 /// comes from a request served at the boundary):
-/// - transfer sizes other than 8-bit or 32-bit on both sides, or NBYTES not a multiple of the size
+/// - transfer sizes other than 8-bit or 32-bit on both sides, NBYTES not a multiple of the size, or NBYTES 0
 /// - minor-loop channel linking (CITER or BITER E_LINK), CITER 0, SOFF or DOFF not a multiple of the size (the
 ///   NCE, SOE and DOE errors)
-/// - a bus error on a read or write (SBE, DBE)
+/// - a bus error on a read or write (SBE, DBE); the earlier units of that minor loop are already written, and
+///   the TCD is left as before it
 ///
 /// BWC is ignored: it only spaces the accesses out in time.
 #[derive(Debug)]
@@ -203,6 +207,11 @@ impl Edma {
         let attr = self.field(ch, ATTR, 2);
         let nbytes = self.field(ch, NBYTES, 4);
         let (ssize, dsize) = (attr >> 8 & 7, attr & 7);
+        if nbytes == 0 {
+            return Some(format!(
+                "eDMA channel {ch} NBYTES 0 (a 4 GiB minor loop, RM 19.4.17) is not modelled"
+            ));
+        }
         if ssize != dsize || !(ssize == 0 || ssize == 2) || !nbytes.is_multiple_of(1 << ssize) {
             return Some(format!(
                 "eDMA channel {ch} transfer size (ATTR {attr:#06x}, NBYTES {nbytes}): only 8-bit or 32-bit on \
@@ -250,6 +259,8 @@ impl Edma {
         let mut daddr = self.field(ch, DADDR, 4);
         if !saddr.is_multiple_of(bytes) || !daddr.is_multiple_of(bytes) {
             // Measured on an MCF54415: nothing moves, START clears, DONE is not set, CITER is unchanged.
+            // guess: an earlier DONE is kept (the older model). RM 19.6.4.1 step 3 clears DONE as the channel
+            // activates; whether that comes before the configuration check is not measured.
             self.es = (ch as u32) << 8
                 | if !saddr.is_multiple_of(bytes) {
                     SAE
@@ -265,7 +276,9 @@ impl Edma {
         let soff = i32::from(self.field(ch, SOFF, 2) as u16 as i16);
         let doff = i32::from(self.field(ch, DOFF, 2) as u16 as i16);
         let mut bus = cx.bus().expect("the eDMA is a bus master");
+        let mut device = false;
         for _ in 0..self.field(ch, NBYTES, 4) / bytes {
+            device |= !bus.is_ram(saddr, size) || !bus.is_ram(daddr, size);
             let v = bus.read(saddr, size).map_err(|f| {
                 format!("eDMA channel {ch} bus error reading {saddr:#010x} ({f:?}): not modelled")
             })?;
@@ -296,20 +309,29 @@ impl Edma {
         self.set_field(ch, DADDR, 4, daddr);
         self.set_field(ch, CITER, 2, citer);
         self.set_csr(ch, csr);
-        Ok(Activation::Moved)
+        Ok(Activation::Moved { device })
     }
 
     /// Serve channel `ch`'s peripheral request: minor loops while it is enabled and its line is asserted.
     fn serve(&mut self, ch: usize, cx: &mut DeviceCx) -> Result<(), String> {
         let mut loops = 0;
-        while self.erq & cx.dma.asserted() & 1 << ch != 0 {
+        let asserted = |cx: &DeviceCx| cx.dma.asserted() & 1 << ch != 0;
+        while self.erq & 1 << ch != 0 && asserted(cx) {
             if loops == MAX_LOOPS {
                 return Err(format!(
-                    "eDMA channel {ch} request never drops: still asserted after {MAX_LOOPS} minor loops"
+                    "eDMA channel {ch} served {MAX_LOOPS} minor loops without the request dropping"
                 ));
             }
             match self.activate(ch, cx)? {
-                Activation::Moved => loops += 1,
+                Activation::Moved { device } => {
+                    loops += 1;
+                    if !device && self.erq & 1 << ch != 0 && asserted(cx) {
+                        return Err(format!(
+                            "eDMA channel {ch} request never drops: a minor loop that reached no device left \
+                             it asserted"
+                        ));
+                    }
+                }
                 Activation::Error => break,
             }
         }
