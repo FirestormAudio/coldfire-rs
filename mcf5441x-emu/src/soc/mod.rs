@@ -1,21 +1,52 @@
 //! Models of the MCF5441x's on-chip modules.
 
+pub mod ddrmc;
 pub mod dspi;
 pub mod edma;
 pub mod esdhc;
 pub mod intc;
+pub mod nfc;
 pub mod pit;
+pub mod pll;
 pub mod ssi;
 pub mod stub;
 pub mod uart;
 pub mod usb;
 
+pub use ddrmc::Ddrmc;
 pub use dspi::{Dspi, SpiDevice};
 pub use edma::Edma;
 pub use esdhc::{Esdhc, EsdhcConfig};
 pub use intc::{GlobalIack, Intc};
+pub use nfc::{NandArray, Nfc};
 pub use pit::Pit;
+pub use pll::Pll;
 pub use ssi::{Ssi, SsiConfig, SsiCounters};
 pub use stub::{StubBlock, StubMode, Unmodelled};
 pub use uart::{Uart, UartConfig};
 pub use usb::{HostScript, Step, Token, UsbConfig, UsbKnobs, UsbOtg, UsbStats};
+
+/// The bits a `size` access at `offset` covers in the big-endian 32-bit register at `offset & !3`, as (shift,
+/// mask). The core splits misaligned accesses (RM Table 3-12), so an access never crosses a register.
+fn lanes(offset: u32, size: crate::mem::Size) -> (u32, u32) {
+    let bytes = size.bytes();
+    let shift = (4 - (offset & 3) - bytes) * 8;
+    let mask = if bytes == 4 {
+        u32::MAX
+    } else {
+        (1 << (bytes * 8)) - 1
+    };
+    (shift, mask)
+}
+
+/// The part of `reg` a `size` access at `offset` reads.
+fn lane_read(reg: u32, offset: u32, size: crate::mem::Size) -> u32 {
+    let (shift, mask) = lanes(offset, size);
+    reg >> shift & mask
+}
+
+/// `reg` with the part a `size` write of `value` at `offset` covers replaced.
+fn lane_merge(reg: u32, offset: u32, size: crate::mem::Size, value: u32) -> u32 {
+    let (shift, mask) = lanes(offset, size);
+    reg & !(mask << shift) | (value & mask) << shift
+}
