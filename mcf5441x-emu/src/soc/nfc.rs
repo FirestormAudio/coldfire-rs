@@ -178,6 +178,20 @@ impl Nfc {
         &self.array
     }
 
+    /// Put `array` behind the controller in place of the one there (a board putting its NAND in after the chip is
+    /// built, as [`boot`](crate::boot::boot) does).
+    ///
+    /// # Panics
+    /// When `array.payload` is larger than one buffer (0x900 bytes, RM 22.4.1).
+    pub fn set_array(&mut self, array: NandArray) {
+        assert!(
+            array.payload <= BUFFER_BYTES,
+            "NFC: a payload of {} bytes does not fit a 0x900-byte buffer",
+            array.payload
+        );
+        self.array = array;
+    }
+
     /// The rows read so far, in order.
     pub fn reads(&self) -> &[u32] {
         &self.reads

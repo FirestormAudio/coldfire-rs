@@ -263,6 +263,32 @@ assert_eq!(r.kind, Stop::UntilPc);
 assert_eq!(m.cpu.d[0], 6);
 ```
 
+### Booting from reset
+
+[`boot`](boot::boot) starts a program as the chip does from reset in each boot mode, doing what the boot hardware
+has done before the core fetches its reset vector: the serial boot facility copies the boot image from the SPI flash
+on DSPI0 PCS1 into the SRAM (RM ch. 11), FlexBus CS0 decodes a NOR flash at address 0 (RM 20.4.1.3), or the NFC
+shows the four boot pages at address 0 (RM 22.4.4). It then loads SP and PC from the image's first two longwords.
+[`sbf_image`](boot::sbf_image), [`nand_pages`](boot::nand_pages) and [`nand_boot_view`](boot::nand_boot_view) lay
+out an image as each medium holds it, and [`elf::sections`] and [`elf::symbols`] read the sections (with their run
+and load addresses) and symbols of a linked program to build it from.
+
+```
+use mcf5441x_emu::boot::{BootSource, boot, sbf_image};
+use mcf5441x_emu::parts::SpiNor;
+use mcf5441x_emu::soc::{ChipOptions, Mcf5441x};
+
+let mut m = Machine::new();
+m.mem.map_ram(0x8000_0000, 0x1_0000); // the SRAM, where the board's RAMBAR puts it
+let chip = Mcf5441x::build(&mut m, ChipOptions::default());
+// SP, PC, then `bra.s .`
+let image = [0x80, 0x01, 0x00, 0x00, 0x80, 0x00, 0x00, 0x08, 0x60, 0xFE, 0x4E, 0x71];
+let flash = SpiNor::new(1 << 20, [0x01, 0x20, 0x18, 0x4D, 0x01, 0x80], &sbf_image(&image, image.len(), 0));
+let pc = boot(&mut m, &chip, BootSource::Serial { flash, sram_base: 0x8000_0000 }).unwrap();
+assert_eq!((pc, m.cpu.a[7]), (0x8000_0008, 0x8001_0000));
+# use mcf5441x_emu::Machine;
+```
+
 ## License
 
 MIT OR Apache-2.0.
