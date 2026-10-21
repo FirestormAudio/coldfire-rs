@@ -426,9 +426,17 @@ fn emode_other_than_address_invariant_halts() {
 }
 
 #[test]
-fn sysctl_resets_self_clear() {
+fn rsta_leaves_sysctl_at_its_reset_value() {
+    // measured on an MCF54415: an RSTA write leaves SYSCTL at its reset value 0x8008 and drops the rest of the
+    // written value; the next plain write is stored
     let mut b = board(&[]);
+    b.w(SYSCTL, RSTA);
+    assert_eq!(b.r(SYSCTL), 0x8008);
+    assert_eq!(b.r(PROCTL), 0x20);
+    assert_eq!(b.r(WML), 0x0810_0810);
     b.w(SYSCTL, RSTA | INITA | 0x1058);
+    assert_eq!(b.r(SYSCTL), 0x8008);
+    b.w(SYSCTL, 0x1058);
     assert_eq!(b.r(SYSCTL), 0x1058);
 }
 
@@ -511,7 +519,7 @@ fn reset_values_follow_the_rm() {
         assert_eq!(b.r(off), v, "+{off:#x}");
     }
     // guess: RSTA puts every register back to its reset value (RM Table 25-13: "affects the entire host
-    // controller"), but for SYSCTL, which takes the written value without the self-clearing bits
+    // controller"); measured on an MCF54415 for SYSCTL (the rest of the written value is dropped), PROCTL and WML
     for (off, v) in [
         (DSADDR, 0x4010_0000),
         (BLKATTR, 3 << 16 | 512),
@@ -529,7 +537,6 @@ fn reset_values_follow_the_rm() {
     b.w(SYSCTL, 0x1050);
     b.w(SYSCTL, RSTA | 0x1050);
     for (off, v) in reset {
-        let v = if off == SYSCTL { 0x1050 } else { v };
         assert_eq!(b.r(off), v, "+{off:#x} after RSTA");
     }
 }
@@ -642,16 +649,18 @@ fn first_sysctl_write_after_reset_may_change_the_divider() {
     let d = b.refused(SYSCTL, 0x8008);
     assert!(d.contains("divider"), "{d}");
     b.w(SYSCTL, RSTA);
-    assert_eq!(b.r(SYSCTL), 0);
-    b.w(SYSCTL, 0x8008);
+    assert_eq!(b.r(SYSCTL), 0x8008);
+    b.w(SYSCTL, 0x8008); // SDCLKEN now set by a write
     let d = b.refused(SYSCTL, 0x1058);
     assert!(d.contains("divider"), "{d}");
-    // RSTA forgets the write that set SDCLKEN
+    // RSTA forgets the write that set SDCLKEN, and the value written with it is dropped (measured on an MCF54415):
+    // the reset SDCLKEN does not guard the divider
     let mut b = board(&[]);
     b.w(SYSCTL, 0x1058);
     b.w(SYSCTL, RSTA | 0x1058);
-    assert_eq!(b.r(SYSCTL), 0x1058);
-    let d = b.refused(SYSCTL, 0x2058);
+    assert_eq!(b.r(SYSCTL), 0x8008);
+    b.w(SYSCTL, 0x2058);
+    let d = b.refused(SYSCTL, 0x3058);
     assert!(d.contains("divider"), "{d}");
 }
 

@@ -121,11 +121,12 @@ struct Pending {
 ///   BREN and BWEN for the bus test; the rest reads as at reset (0xFF88_00F8: the lines high, SDSTB, the clocks
 ///   gated off — guess: the model's controller is always idle between instantaneous steps). DAT0 (bit 24) reads
 ///   low while the card is busy after CMD6. CIHB is never set: a response is immediate.
-/// - SYSCTL (0x8008, SDCLKEN set): stored; RSTA, RSTC, RSTD and INITA act and read 0. Changing SDCLKFS or DVS while
-///   SDCLKEN is set in both the old and the new value is refused (RM Table 25-13: change the frequency with SDCLKEN
-///   clear), but only when a SYSCTL write since the last reset (power-on or RSTA, the RSTA write's own value
-///   included) set SDCLKEN: the reset value's SDCLKEN does not count, as a driver's first write after reset sets its
-///   divider with SDCLKEN and works on the chip.
+/// - SYSCTL (0x8008, SDCLKEN set): stored; RSTA, RSTC, RSTD and INITA act and read 0. A write with RSTA leaves
+///   SYSCTL at 0x8008 and drops the rest of the written value (measured on an MCF54415). Changing SDCLKFS or DVS
+///   while SDCLKEN is set in both the old and the new value is refused (RM Table 25-13: change the frequency with
+///   SDCLKEN clear), but only when a SYSCTL write since the last reset (power-on or RSTA) set SDCLKEN: the reset
+///   value's SDCLKEN does not count, as a driver's first write after reset sets its divider with SDCLKEN and works
+///   on the chip.
 /// - IRQSTAT: write 1 to clear. A status bit is set only when its IRQSTATEN bit is (RM 25.3.11).
 /// - IRQSTATEN (0x117F_013F): reserved bits read 0; clearing a bit clears its status bit (RM 25.3.11).
 /// - IRQSIGEN (0): a write setting a reserved bit is refused. The interrupt request is asserted while IRQSTAT and
@@ -138,8 +139,8 @@ struct Pending {
 /// Resets (SYSCTL): RSTD cancels the data phase, empties the buffer, clears PRSSTAT's CDIHB, DLA, BREN and BWEN and
 /// IRQSTAT's BRR, BWR, DINT, BGE and TC (RM Table 25-13), and puts PROCTL back to 0x20 and WML to 0x0810_0810
 /// (measured on an MCF54415, not in the RM's list). RSTC clears IRQSTAT\[CC\]. RSTA does both and puts every register
-/// back to its reset value (guess: RM Table 25-13 has it reset the whole controller), but SYSCTL, which takes the
-/// written value. The card is not reset: a card left at 4 bits by a reset host fails every read (below).
+/// back to its reset value (measured on an MCF54415 for SYSCTL, PROCTL and WML; guess for the rest: RM Table 25-13
+/// has it reset the whole controller). The card is not reset: a card left at 4 bits by a reset host fails every read (below).
 ///
 /// A command (a write of XFERTYP) is checked in this order; each failing check refuses the write with
 /// [`Stop::Unmodelled`], the detail naming the eSDHC or the eMMC and the feature:
@@ -152,7 +153,9 @@ struct Pending {
 ///    transfer (MSBSEL without BCEN) or a block count of 0.
 ///
 /// Then the card answers at once: its response and IRQSTAT\[CC\], or IRQSTAT\[CTOE\] when it answers nothing (no
-/// card, or a card stuck sending). A data command sets CDIHB and DLA, and its data phase comes `data_latency` ticks
+/// card, or a card stuck sending). XFERTYP\[AC12EN\] is accepted, but no automatic CMD12 reaches the card (harmless
+/// while the card has no state machine to leave). The card holds DAT0 low for `cmd6_busy` ticks after CMD6: the busy
+/// is keyed on the command index, not on RSPTYP R1b, so CMD7 and CMD12 never hold DAT0. A data command sets CDIHB and DLA, and its data phase comes `data_latency` ticks
 /// later:
 /// - A host bus width (PROCTL\[DTW\]) other than the card's fails it with DCE (measured on an MCF54415).
 /// - Block reads (CMD8, CMD18): the data is loaded into the buffer as big-endian words, and the DMA request is
@@ -286,7 +289,8 @@ impl Esdhc {
             );
         }
         if v & RSTA != 0 {
-            // guess: every register back to its reset value
+            // guess: every register back to its reset value; measured on an MCF54415 for SYSCTL (the rest of the
+            // written value is dropped), PROCTL and WML
             *self = Esdhc {
                 card: self.card.take(),
                 busy_until: self.busy_until,
@@ -304,8 +308,10 @@ impl Esdhc {
         if v & (RSTA | RSTC) != 0 {
             self.irqstat &= !CC;
         }
-        self.sysctl = v & !(RSTA | RSTC | RSTD | INITA) & SYSCTL_BITS;
-        self.clock_written = v & SDCLKEN != 0;
+        if v & RSTA == 0 {
+            self.sysctl = v & !(RSTC | RSTD | INITA) & SYSCTL_BITS;
+            self.clock_written = v & SDCLKEN != 0;
+        }
         self.signal(cx);
         self.request(cx);
     }
