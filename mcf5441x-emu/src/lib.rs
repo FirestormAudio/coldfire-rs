@@ -11,6 +11,7 @@ pub mod machine;
 pub mod mem;
 pub mod parts;
 mod sched;
+pub mod semihost;
 pub mod soc;
 pub mod stop;
 
