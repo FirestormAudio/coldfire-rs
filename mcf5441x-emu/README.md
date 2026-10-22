@@ -9,8 +9,8 @@ a small device interface and decides what a stop means.
 
 - The integer instruction set of ISA_A, ISA_B and ISA_C, with condition codes, the hardware divider (DIVU/DIVS/REMU/REMS)
   and the EMAC (CFPRM ch. 6, RM ch. 5): four accumulators, MACSR, the mask register, fractional and saturating modes.
-- Values measured on an MCF54415 are reproduced: MVS, MVZ, REMU, FF1, BITREV, BYTEREV, MOV3Q, SATS and MAC; BRA.L
-  on ISA_C; the fault status of address-error frames (0100 for an odd JMP, BRA, BSR, JSR or RTS target or an odd PC
+- Values measured on an MCF54415 are reproduced: MVS and MVZ (the byte forms take an address register source too; CMP.B with one is
+  illegal), REMU, FF1, BITREV, BYTEREV, MOV3Q, SATS and MAC; BRA.L on ISA_C; the fault status of address-error frames (0100 for an odd JMP, BRA, BSR, JSR or RTS target or an odd PC
   in the frame an RTE would load, 1100 for a bad index extension word) and what each leaves on the stack (JSR pushes
   its return address first, BSR pushes nothing, RTS and RTE pop nothing); a MOVEC to 0xC04, which changes nothing;
   a WDEBUG write of 0x00020000 to CSR, which runs on; the ACCext01 and ACCext23 layouts; and the EMAC's overflow
@@ -54,7 +54,6 @@ the chip's peripherals ([Peripherals](#peripherals)) and the board's own:
 - `m.mem.map_mirror(base, size, of)` shows the RAM at `of..of + size` again at `base..base + size`: one backing store,
   so reads, writes, instruction fetch, bus masters and the host all see the same bytes, and a write through either
   range drops code cached from the other.
-
 - [`Device`] is the trait a peripheral implements: `read` and `write` at an offset in its window, plus optional
   `next_event` and `advance` for things it does by itself on the machine clock.
 - `add_device(base, size, device)` maps a device window; `add_timer(device)` adds one with no registers.
@@ -286,7 +285,10 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 - Clock gates: `build` starts with every gate open unless the options say otherwise; the chip resets with most of
   them closed. Reserved bits of PPM{H,L}Rn are stored like the others (guess: not measured).
 - Time: one instruction is one tick, so code runs at one instruction per tick of whatever clock the board's options
-  scale to; transfers, frames and register accesses take no bus time.
+  scale to; transfers, frames and register accesses take no bus time. In particular a DSPI frame takes no time (DSPI
+  frame time is a known gap): an endless TX-fill DMA stream that never ends the queue with EOQ stops on the eDMA's
+  backstop of 2^20 minor loops with a request that cannot drop, and so does a request of a clock-gated UART or DSPI
+  (a gated module keeps its lines, guess: not measured).
 - Interrupts the models do not raise are never asserted. Setting the enables of the SSI's, the DSPI's and the NFC's
   interrupts and of the eDMA error interrupt is refused (see each model); the DDR controller's INTMASK and the PLL's
   LOCIRQ and LOLIRQ are stored, but neither model ever raises its interrupt, and neither is wired to an interrupt
@@ -297,15 +299,19 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 - Bus masters' accesses are not split: a misaligned access from the eDMA or USB reaches a device whole. The chip's
   models refuse one that crosses a register.
 
-Open guesses (each a `guess:` comment in the code and its test): the PIT's expiry one count after PCNTR reads 0 and
-the prescaler's partial count on a PRE change; the UART hand-over to the shift register taking the shortest of the
-measured 2 to 9 instructions, and its transmit DMA request dropping inside the UTB write; the DSPI's FIFO counters with 16 entries and the deselect of a part reached by an
-idle-low select; the eSDHC's RSTA reset of the registers not measured and a data timeout one tick after the data
-phase; USB detach 100 µs after RS clears; the SSI's underrun sending silence and emptying the FIFO, where RM Table
-35-8 re-transmits the previous data; the word and longword accesses over the INTC's 8-bit SIMR, CIMR, CLMASK and
-SLMASK; the DDR controller's PADCR bit 9; the NFC's address increment after a single-page read and its ECC status
-byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once (LOCKS stays
-clear after a lost lock); the NOR flash's WEL and WIP timing around a failed program.
+Open guesses (each a `guess:` comment in the code and its test): the clock gates' held events (the PIT, the DMA
+timers, the SSI, the eSDHC and the USB timers continue where they stopped; the UARTs and the USB host script catch up
+on opening), the lines a gated module keeps, the reserved bits of PPMHR/PPMLR and the edge port latching no edge while
+gated; the edge port's pins starting high; the eDMA's 110 and 111 sizes as errors, the order of INT_MAJOR, D_REQ and
+the major link before the SGE error, and the order of queued linked starts (highest channel first); the PIT's expiry one count after PCNTR reads 0 and the prescaler's partial count on a PRE
+change; the UART hand-over to the shift register taking the shortest of the measured 2 to 9 instructions, and its
+transmit DMA request dropping inside the UTB write; the DSPI's FIFO counters with 16 entries and the deselect of a
+part reached by an idle-low select; the eSDHC's RSTA reset of the registers not measured and a data timeout one tick
+after the data phase; USB detach 100 µs after RS clears; the SSI's underrun sending silence and emptying the FIFO,
+where RM Table 35-8 re-transmits the previous data; the word and longword accesses over the INTC's 8-bit SIMR, CIMR,
+CLMASK and SLMASK; the DDR controller's PADCR bit 9; the NFC's address increment after a single-page read and its ECC
+status byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once (LOCKS
+stays clear after a lost lock); the NOR flash's WEL and WIP timing around a failed program.
 
 ## Running a program
 
