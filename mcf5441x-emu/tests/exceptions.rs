@@ -662,10 +662,15 @@ fn address_error_frames_for_rts_and_jsr() {
     let (mut m, l) = prepare(".short 0x6100,0x0201\nend: nop\nhandler: nop", &["handler"]);
     set_vector(&mut m, 3, l[0]);
     m.policy.stop_on[3] = false;
-    m.mem.write(STACK - 4, Size::Long, 0x5A5A_5A5A).unwrap();
+    m.mem.write(STACK - 12, Size::Long, 0x5A5A_5A5A).unwrap();
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.cpu.a[7], STACK - 8, "nothing pushed");
+    assert_eq!(
+        long(&mut m, STACK - 12),
+        0x5A5A_5A5A,
+        "no frame below a pushed return address"
+    );
     assert_eq!(
         long(&mut m, STACK - 8),
         fv(4, 3, 0x2700) | FS_FETCH,
@@ -835,7 +840,7 @@ fn wdebug_csr_write_of_pcd_runs_on() {
     assert_eq!(m.cpu.sr(), 0x2700);
     assert_eq!(m.instructions(), 2);
 
-    // The (d16,Ay) form reads its operand at the displaced address.
+    // The (d16,Ay) form reads its operand at the displaced address (CFPRM ch. 8; only (Ay) was measured).
     let (mut m, l) = prepare("wdebug.l 8(%a0)\nmoveq #1,%d0\nend:", &["end"]);
     m.mem.write(MEM + 8, Size::Long, 0x2C80_0002).unwrap();
     m.mem.write(MEM + 12, Size::Long, 0).unwrap();
@@ -867,6 +872,8 @@ fn wdebug_observable_writes_stop_unmodelled() {
         (0x0000_0010, "SSM"),
         (0x0004_0000, "BKD"),
         (0x0002_0400, "PCD with UHE"),
+        // guess: DBGH and FDBG drive the peripherals' debug-mode signal (RM Table 43-7), so they count as
+        // observable.
         (0x0000_0001, "DBGH"),
         // guess: a reserved bit RM Table 43-7 says must be cleared is undefined when set, so it stops.
         (0x0008_0000, "reserved bit 19"),
