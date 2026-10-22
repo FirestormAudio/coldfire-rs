@@ -5,20 +5,22 @@ use crate::device::{Device, DeviceCx};
 use crate::mem::Size;
 use crate::stop::Stop;
 
-/// The register longwords: EPPAR, EPDDR and EPIER at +0; EPDR, EPPDR and EPFR at +4.
+/// The register longwords: EPPAR and EPIER at +0, EPFR at +4.
 const PAR: u32 = 0x0;
-const DATA: u32 = 0x4;
+const FLAGS: u32 = 0x4;
 
-/// The edge port: EPPAR at +0, EPDDR at +2, EPIER at +3, EPDR at +4, EPPDR at +5, EPFR at +6.
+/// The edge port: EPPAR at +0, EPIER at +3, EPFR at +6 (RM Table 18-2).
 ///
 /// - EPPAR (reset 0): per pin, level-sensitive (active low), rising, falling or both edges (RM Table 18-3).
 /// - EPIER (reset 0): pin *n* asserts source *n* of interrupt controller `controller` while its EPIE bit is set and
 ///   either its EPF bit is set (edge modes) or the pin is low (level mode) (RM Table 18-4).
 /// - EPFR (reset 0): set by the selected edge on a pin in an edge mode, whatever EPIER holds; writing 1 clears a
 ///   bit (RM Table 18-5). Pin changes in level mode leave it alone.
-/// - EPDDR, EPDR and EPPDR: RM Table 18-2 lists only EPPAR, EPIER and EPFR. guess: they sit where other ColdFire
-///   edge ports have them (EPDDR +2, EPDR +4, EPPDR +5, all reset 0); a pin with its EPDDR bit set is driven by
-///   its EPDR bit, and EPPDR reads the levels on the pins, from which the edges are detected too.
+///
+/// There is no EPDDR, EPDR or EPPDR (as RM Table 18-2 lists): +2, +4 and +5 read 0 and a write to +2 or +4 is
+/// ignored, and every byte of +0..+7 reads 0 after reset, while EPPAR and EPIER read back what was written
+/// (measured on an MCF54415). guess: a write to +5 or +7 is ignored too, and the rest of the window reads 0 and
+/// ignores writes. The pins are inputs only; the program cannot read their levels.
 ///
 /// The pins IRQ1-IRQ7 are inputs the host drives with [`Eport::set_pin`], inside
 /// [`Machine::with_device`](crate::Machine::with_device); a change asserts or drops the interrupt at once (the
@@ -26,16 +28,14 @@ const DATA: u32 = 0x4;
 /// wires is the board's. IRQ0 has no interrupt source; its register bits are stored.
 ///
 /// Byte and word accesses address their lanes; a longword access is a bus error (RM 18.4) and is refused with
-/// [`Stop::Unmodelled`]. The supervisor-only access of EPPAR and EPIER (RM Table 18-2) is not checked. The rest of
-/// the window reads 0 and ignores writes. The registers change only by writes and by the host, so reads of them are
-/// poll-counted: a program waiting on a pin the host never changes stops with [`Stop::Poll`].
+/// [`Stop::Unmodelled`]. The supervisor-only access of EPPAR and EPIER (RM Table 18-2) is not checked. The
+/// registers change only by writes and by the host, so reads of them are poll-counted: a program waiting on an
+/// edge the host never makes stops with [`Stop::Poll`].
 #[derive(Debug)]
 pub struct Eport {
     controller: usize,
     eppar: u16,
-    epddr: u8,
     epier: u8,
-    epdr: u8,
     epfr: u8,
     /// The levels the host drives on the pins.
     inputs: u8,
@@ -48,9 +48,7 @@ impl Eport {
         Eport {
             controller,
             eppar: 0,
-            epddr: 0,
             epier: 0,
-            epdr: 0,
             epfr: 0,
             inputs: 0xFF,
         }
@@ -73,9 +71,9 @@ impl Eport {
         self.inputs >> n & 1 != 0
     }
 
-    /// The levels on the pins, as EPPDR reads them.
+    /// The levels on the pins IRQ0-IRQ7, one bit each.
     pub fn pins(&self) -> u8 {
-        (self.inputs & !self.epddr) | (self.epdr & self.epddr)
+        self.inputs
     }
 
     /// The mode of pin `n`: 0 level, 1 rising, 2 falling, 3 both (RM Table 18-3).
@@ -116,12 +114,8 @@ impl Eport {
 
     fn register(&self, reg: u32) -> u32 {
         match reg {
-            PAR => u32::from(self.eppar) << 16 | u32::from(self.epddr) << 8 | u32::from(self.epier),
-            DATA => {
-                u32::from(self.epdr) << 24
-                    | u32::from(self.pins()) << 16
-                    | u32::from(self.epfr) << 8
-            }
+            PAR => u32::from(self.eppar) << 16 | u32::from(self.epier),
+            FLAGS => u32::from(self.epfr) << 8,
             _ => 0,
         }
     }
@@ -162,21 +156,18 @@ impl Device for Eport {
         let reg = offset & !3;
         let covered = lane_merge(0, offset, size, u32::MAX);
         let new = lane_merge(self.register(reg), offset, size, value);
-        let was = self.pins();
         match reg {
             PAR => {
                 self.eppar = (new >> 16) as u16;
-                self.epddr = (new >> 8) as u8;
                 self.epier = new as u8;
             }
-            DATA => {
-                self.epdr = (new >> 24) as u8;
+            FLAGS => {
                 if covered & 0xFF00 != 0 {
                     self.epfr &= !(lane_merge(0, offset, size, value) >> 8) as u8;
                 }
             }
             _ => return,
         }
-        self.changed(was, cx);
+        self.drive(cx);
     }
 }

@@ -182,14 +182,14 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   masks it, and IPR never shows forced sources (both measured on an MCF54415).
 - **PIT0-3** (RM ch. 38): the prescaler, the modulus, reload and free-running modes, PIF and PIE; longword
   accesses read all ones and write nothing (measured on an MCF54415).
-- **DMA timers 0-3** (RM ch. 39): the bus clock (one per tick, as the PIT's), the bus clock / 16 or the DT*n*IN pin
-  (`ChipOptions::with_dtin`; by default it never toggles), the prescaler, MODE16, the reference with REF, ORRI and
-  free-run or restart, and DTCN cleared by any write. Capture mode, the output modes, DMA requests (DMAEN), the
-  1588 timebase and programmable delay stop the run with `Stop::Unmodelled`.
+- **DMA timers 0-3** (RM ch. 39): the bus clock (one per tick, as the PIT's; DMA timer 0 counts the bus clock, measured
+  on an MCF54415), the bus clock / 16 or the DT*n*IN pin (`ChipOptions::with_dtin`; by default it never toggles), the
+  prescaler, MODE16, the reference with REF, ORRI and free-run or restart, and DTCN cleared by any write. Capture mode,
+  the output modes, DMA requests (DMAEN), the 1588 timebase and programmable delay stop the run with `Stop::Unmodelled`.
 - **Edge port 0** (RM ch. 18): per-pin level or edge detection, EPIER and EPFR on INTC0 sources 1-7; the host drives
   pins IRQ1-IRQ7 with `Eport::set_pin` inside `Machine::with_device`, and a change asserts or drops the interrupt at
-  once. All pins start high (guess). EPDDR, EPDR and EPPDR, which RM Table 18-2 leaves out, are where other ColdFire
-  edge ports have them (guess).
+  once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2
+  lists): the program cannot read the pin levels.
 - **eDMA** (RM ch. 19): 64 channels served at their peripheral's request or by START/SSRT, 8- and 32-bit
   transfers, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR and D_REQ; misaligned addresses are configuration
   errors with ES as measured on an MCF54415. On the built chip SERQ is taken only on the request lines a model

@@ -33,8 +33,9 @@ const INV_65537: u32 = 0xFFFF_0001;
 
 /// One DMA timer: DTMR at +0, DTXMR at +2, DTER at +3, DTRR at +4, DTCR at +8, DTCN at +0xC (RM Table 39-1).
 ///
-/// One tick of the machine is one internal bus clock, the clock the PIT counts too (RM 39.3.1: fsys/2); what a
-/// tick is in time is the board's choice. The input clock (DTMR CLK) is the bus clock, the bus clock divided by 16,
+/// One tick of the machine is one internal bus clock, the clock the PIT counts too (RM 39.3.1: fsys/2); DMA timer 0
+/// at CLK = bus clock / 1 counts the bus clock (measured on an MCF54415). What a tick is in time is the board's
+/// choice. The input clock (DTMR CLK) is the bus clock, the bus clock divided by 16,
 /// or the DT*n*IN pin, whose falling edges come every [`Dtim::new`]'s `dtin` ticks; it is divided by PS + 1 and
 /// each prescaler output increments DTCN by 1, or by 65 537 with DTXMR MODE16 (RM Table 39-3).
 ///

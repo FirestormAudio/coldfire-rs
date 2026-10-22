@@ -86,7 +86,7 @@ fn dtim_reset_values_follow_the_rm() {
 
 #[test]
 fn dtim_counts_the_bus_clock() {
-    // DTMR0 = 3 (RST, CLK = bus clock / 1): DTCN counts one per tick.
+    // DTMR0 = 3 (RST, CLK = bus clock / 1): DTCN counts the bus clock (measured on an MCF54415), one per tick.
     let (mut m, _) = chip(ChipOptions::default());
     idle(&mut m, 100);
     w(&mut m, DTIM[0] + DTMR, Size::Word, RST | BUS);

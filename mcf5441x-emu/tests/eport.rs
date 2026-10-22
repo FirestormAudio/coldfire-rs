@@ -9,11 +9,7 @@ use mcf5441x_emu::{Fault, Machine, Size, Stop};
 /// Edge port 0 (RM Table 18-2).
 const EPORT: u32 = 0xFC09_0000;
 const EPPAR: u32 = EPORT;
-/// guess: EPDDR, EPDR and EPPDR where other ColdFire edge ports have them (not in RM Table 18-2).
-const EPDDR: u32 = EPORT + 2;
 const EPIER: u32 = EPORT + 3;
-const EPDR: u32 = EPORT + 4;
-const EPPDR: u32 = EPORT + 5;
 const EPFR: u32 = EPORT + 6;
 
 /// EPPAR modes (RM Table 18-3).
@@ -48,13 +44,16 @@ fn line(m: &Machine, n: u8) -> bool {
 
 #[test]
 fn eport_reset_values() {
-    // RM Table 18-2: EPPAR, EPIER and EPFR reset 0. guess: every pin starts high, EPDDR and EPDR 0.
-    let (mut m, _) = chip();
+    // RM Table 18-2: EPPAR, EPIER and EPFR reset 0; measured on an MCF54415: every byte of +0..+7 reads 0.
+    // guess: every pin starts high.
+    let (mut m, chip) = chip();
     assert_eq!(r(&mut m, EPPAR, Size::Word), 0);
     assert_eq!(r(&mut m, EPIER, Size::Byte), 0);
     assert_eq!(r(&mut m, EPFR, Size::Byte), 0);
-    assert_eq!(r(&mut m, EPPDR, Size::Byte), 0xFF);
-    assert_eq!(r(&mut m, EPDDR, Size::Byte), 0);
+    for off in 0..8 {
+        assert_eq!(r(&mut m, EPORT + off, Size::Byte), 0, "+{off}");
+    }
+    assert_eq!(m.device::<Eport>(chip.eport).pins(), 0xFF);
 }
 
 #[test]
@@ -126,21 +125,28 @@ fn eport_flag_clears_on_write_one() {
 }
 
 #[test]
-fn eport_pins_read_back_through_eppdr() {
-    // guess: EPPDR reads the pin levels; a pin with its EPDDR bit set is driven by EPDR
+fn eport_has_no_ddr_dr_or_pdr_measured() {
+    // measured on an MCF54415: writes of 0x02 to +2 and +4 read back 0 (no EPDDR, no EPDR), +5 reads 0 (no
+    // EPPDR), and EPPAR (word, 0x0030) and EPIER (0x04) read back as written. guess: writes to +5 and +7 are
+    // ignored too.
     let (mut m, chip) = chip();
-    pin(&mut m, &chip, 1, false);
+    w(&mut m, EPORT + 2, Size::Byte, 0x02);
+    w(&mut m, EPORT + 4, Size::Byte, 0x02);
+    w(&mut m, EPORT + 5, Size::Byte, 0x02);
+    w(&mut m, EPORT + 7, Size::Byte, 0x02);
+    w(&mut m, EPPAR, Size::Word, 0x0030);
+    w(&mut m, EPIER, Size::Byte, 0x04);
+    assert_eq!(r(&mut m, EPORT + 2, Size::Byte), 0);
+    assert_eq!(r(&mut m, EPORT + 4, Size::Byte), 0);
+    assert_eq!(r(&mut m, EPORT + 5, Size::Byte), 0);
+    assert_eq!(r(&mut m, EPORT + 7, Size::Byte), 0);
+    assert_eq!(r(&mut m, EPPAR, Size::Word), 0x0030);
+    assert_eq!(r(&mut m, EPIER, Size::Byte), 0x04);
+    assert_eq!(r(&mut m, EPORT + 2, Size::Word), 0x0004);
+    // a low pin shows nowhere in the registers: the pins are inputs the program cannot read
     pin(&mut m, &chip, 6, false);
-    assert_eq!(r(&mut m, EPPDR, Size::Byte), 0xFF & !(1 << 1) & !(1 << 6));
+    assert_eq!(r(&mut m, EPORT + 4, Size::Word), 0);
     assert!(!m.device::<Eport>(chip.eport).pin(6));
-    w(&mut m, EPDDR, Size::Byte, 1 << 6 | 1 << 3);
-    w(&mut m, EPDR, Size::Byte, 1 << 6);
-    assert_eq!(r(&mut m, EPPDR, Size::Byte), 0xFF & !(1 << 1) & !(1 << 3));
-    // EPPDR is read-only
-    w(&mut m, EPPDR, Size::Byte, 0);
-    assert_eq!(r(&mut m, EPPDR, Size::Byte), 0xFF & !(1 << 1) & !(1 << 3));
-    // word reads take two registers
-    assert_eq!(r(&mut m, EPDR, Size::Word), (1 << 6) << 8 | 0xF5);
     // longword accesses are a bus error (RM 18.4): the run stops
     assert_eq!(
         m.access(EPPAR, Size::Long, None),
