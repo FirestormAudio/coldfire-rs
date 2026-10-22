@@ -51,6 +51,10 @@ x86-64 machine. That is a measurement of that benchmark (`tests/speed.rs`), not 
 A [`Machine`] holds a [`Cpu`] (`m.cpu`), a [`Memory`] (`m.mem`) and the devices. Map RAM with `m.mem.map_ram`, then add
 the chip's peripherals ([Peripherals](#peripherals)) and the board's own:
 
+- `m.mem.map_mirror(base, size, of)` shows the RAM at `of..of + size` again at `base..base + size`: one backing store,
+  so reads, writes, instruction fetch, bus masters and the host all see the same bytes, and a write through either
+  range drops code cached from the other.
+
 - [`Device`] is the trait a peripheral implements: `read` and `write` at an offset in its window, plus optional
   `next_event` and `advance` for things it does by itself on the machine clock.
 - `add_device(base, size, device)` maps a device window; `add_timer(device)` adds one with no registers.

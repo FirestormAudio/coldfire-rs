@@ -5,6 +5,10 @@
 //! [`Bus`](crate::bus::Bus)); every such access also ends the current instruction's run of uninterrupted
 //! execution, so the machine looks at interrupts and events before the next instruction.
 //!
+//! A mirror ([`Memory::map_mirror`]) is a second address range for RAM already mapped: its lookup entry points at
+//! the same backing store, so every path that finds RAM (core accesses, instruction fetch, bus masters and the host)
+//! sees the same bytes through either range, at no cost to the lookup.
+//!
 //! Memory also keeps one bit per 4 KiB page for the pages holding decoded instructions. A write into such a page,
 //! by an instruction, a bus master or [`Memory::load`], clears the bit, reports the page to the machine and ends the run of
 //! uninterrupted execution, so the page's decoded blocks are dropped before the next instruction.
@@ -46,21 +50,19 @@ pub enum Fault {
     Device(Stop),
 }
 
-/// Big-endian byte storage at a base address.
-#[derive(Debug, Clone)]
+/// A RAM range in the address space: `len` bytes at `base`, held by a backing store from offset `at`. A region
+/// mapped by [`Memory::map_ram`] has a store of its own; a mirror points into the store of the RAM it mirrors.
+#[derive(Debug, Clone, Copy)]
 pub struct Ram {
     base: u32,
-    data: Vec<u8>,
+    len: u32,
+    /// Index of the backing store.
+    store: usize,
+    /// Offset of `base` in the store.
+    at: usize,
 }
 
 impl Ram {
-    fn new(base: u32, size: u32) -> Ram {
-        Ram {
-            base,
-            data: vec![0; size as usize],
-        }
-    }
-
     /// First address of the region.
     pub fn base(&self) -> u32 {
         self.base
@@ -68,20 +70,33 @@ impl Ram {
 
     /// Size in bytes.
     pub fn len(&self) -> u32 {
-        self.data.len() as u32
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.len == 0
     }
 
-    /// Offset of `[addr, addr + len)` when it lies wholly inside the region.
+    /// Offset in the backing store of `[addr, addr + len)` when it lies wholly inside the region.
     fn span(&self, addr: u32, len: u32) -> Option<usize> {
         let off = addr.checked_sub(self.base)? as usize;
         let end = off.checked_add(len as usize)?;
-        (end <= self.data.len()).then_some(off)
+        (end <= self.len as usize).then_some(self.at + off)
+    }
+
+    /// Whether the region overlaps `[base, last]`.
+    fn overlaps(&self, base: u32, last: u32) -> bool {
+        base as u64 <= self.base as u64 + self.len as u64 - 1 && self.base <= last
     }
 }
+
+/// A region no access of a byte or more lies in.
+const NO_RAM: Ram = Ram {
+    base: 0,
+    len: 0,
+    store: 0,
+    at: 0,
+};
 
 /// The default for [`Memory::set_poll_limit`].
 pub const DEFAULT_POLL_LIMIT: u32 = 10_000;
@@ -96,8 +111,13 @@ const SERVICE_ROUNDS: u32 = 64;
 pub(crate) struct Space {
     /// Sorted by base, non-overlapping.
     ram: Vec<Ram>,
-    /// Index of the region that served the last access.
-    last: usize,
+    /// The bytes the regions hold, one store per [`Memory::map_ram`].
+    stores: Vec<Vec<u8>>,
+    /// Whether any region is a mirror, so that a page of code may have other addresses.
+    mirrored: bool,
+    /// A copy of the region that served the last access, so that the next access to it needs no other load to
+    /// find its store.
+    last: Ram,
     pub(crate) devices: Devices,
     /// One bit per 4 KiB page of the address space: the page holds bytes of a decoded block.
     code: Box<[u64]>,
@@ -137,7 +157,9 @@ impl Default for Memory {
         Memory {
             space: Space {
                 ram: Vec::new(),
-                last: 0,
+                stores: Vec::new(),
+                mirrored: false,
+                last: NO_RAM,
                 devices: Devices::default(),
                 code: vec![0; 1 << (32 - PAGE_SHIFT - 6)].into_boxed_slice(),
                 written: Vec::new(),
@@ -219,18 +241,42 @@ fn window(what: &str, base: u32, size: u32) -> (u32, u32) {
 }
 
 impl Space {
-    /// Find the region holding `[addr, addr + len)`; returns its index and the offset.
+    /// Find the region holding `[addr, addr + len)`; returns its backing store and the offset in it.
     fn find(&mut self, addr: u32, len: u32) -> Option<(usize, usize)> {
-        if let Some(off) = self.ram.get(self.last).and_then(|r| r.span(addr, len)) {
-            return Some((self.last, off));
+        if let Some(off) = self.last.span(addr, len) {
+            return Some((self.last.store, off));
         }
         let i = self
             .ram
             .partition_point(|r| r.base <= addr)
             .checked_sub(1)?;
-        let off = self.ram[i].span(addr, len)?;
-        self.last = i;
-        Some((i, off))
+        let r = self.ram[i];
+        let off = r.span(addr, len)?;
+        self.last = r;
+        Some((r.store, off))
+    }
+
+    /// The pages holding the same bytes as some byte of `page`, `page` among them when it is RAM.
+    fn aliases(&self, page: u32) -> Vec<u32> {
+        let (first, last) = (
+            page << PAGE_SHIFT,
+            page << PAGE_SHIFT | ((1 << PAGE_SHIFT) - 1),
+        );
+        let mut pages = Vec::new();
+        for r in self.ram.iter().filter(|r| r.overlaps(first, last)) {
+            // The part of the page in `r`, as offsets in its store.
+            let lo = r.at + (first.max(r.base) - r.base) as usize;
+            let hi = r.at + (last.min(r.base + (r.len - 1)) - r.base) as usize;
+            for o in self.ram.iter().filter(|o| o.store == r.store) {
+                let (o_lo, o_hi) = (o.at, o.at + (o.len as usize - 1));
+                if lo <= o_hi && o_lo <= hi {
+                    let a = o.base + (lo.max(o_lo) - o.at) as u32;
+                    let b = o.base + (hi.min(o_hi) - o.at) as u32;
+                    pages.extend(a >> PAGE_SHIFT..=b >> PAGE_SHIFT);
+                }
+            }
+        }
+        pages
     }
 
     /// Whether one RAM region covers `[addr, addr + len)`.
@@ -243,7 +289,7 @@ impl Space {
     pub(crate) fn ram_read(&mut self, addr: u32, size: Size) -> Option<u32> {
         let n = size.bytes();
         let (i, off) = self.find(addr, n)?;
-        let b = &self.ram[i].data[off..off + n as usize];
+        let b = &self.stores[i][off..off + n as usize];
         Some(b.iter().fold(0u32, |v, &x| (v << 8) | x as u32))
     }
 
@@ -253,7 +299,7 @@ impl Space {
     pub(crate) fn ram_write(&mut self, addr: u32, size: Size, value: u32) -> Option<bool> {
         let n = size.bytes() as usize;
         let (i, off) = self.find(addr, n as u32)?;
-        self.ram[i].data[off..off + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
+        self.stores[i][off..off + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
         let (first, last) = (addr >> PAGE_SHIFT, (addr + (n as u32 - 1)) >> PAGE_SHIFT);
         let code = self.has_code(first) || self.has_code(last);
         if code {
@@ -269,14 +315,26 @@ impl Space {
     }
 
     /// RAM in pages `first..=last` was written: report the ones holding code in `written`, so that their blocks
-    /// are dropped before the next instruction.
+    /// are dropped before the next instruction. With mirrors, a page holding code has its bit set at every address
+    /// of its bytes ([`Memory::mark_code`]), and all of them are reported.
     #[cold]
     #[inline(never)]
     fn code_written(&mut self, first: u32, last: u32) {
         for page in first..=last {
-            if self.has_code(page) {
-                self.code[(page >> 6) as usize] &= !(1 << (page & 63));
-                self.written.push(page);
+            if !self.has_code(page) {
+                continue;
+            }
+            let mut pages = if self.mirrored {
+                self.aliases(page)
+            } else {
+                Vec::new()
+            };
+            pages.push(page);
+            for p in pages {
+                if self.has_code(p) {
+                    self.code[(p >> 6) as usize] &= !(1 << (p & 63));
+                    self.written.push(p);
+                }
             }
         }
     }
@@ -290,7 +348,7 @@ impl Space {
             addr,
             size: Size::Byte,
         })?;
-        self.ram[i].data[off..off + bytes.len()].copy_from_slice(bytes);
+        self.stores[i][off..off + bytes.len()].copy_from_slice(bytes);
         let last = addr + (bytes.len() as u32 - 1);
         self.code_written(addr >> PAGE_SHIFT, last >> PAGE_SHIFT);
         Ok(())
@@ -302,7 +360,7 @@ impl Space {
             return Some(());
         }
         let (i, off) = self.find(addr, out.len() as u32)?;
-        out.copy_from_slice(&self.ram[i].data[off..off + out.len()]);
+        out.copy_from_slice(&self.stores[i][off..off + out.len()]);
         Some(())
     }
 
@@ -409,27 +467,65 @@ impl Space {
 
 impl Memory {
     /// Map zeroed RAM at `base`. Panics when the region is empty, wraps the address space or overlaps another
-    /// region or a device.
+    /// region (a mirror among them) or a device.
     pub fn map_ram(&mut self, base: u32, size: u32) {
-        let (_, last) = window("RAM", base, size);
+        let store = self.space.stores.len();
+        self.insert_ram("RAM", base, size, store, 0);
+        self.space.stores.push(vec![0; size as usize]);
+    }
+
+    /// Map `[base, base + size)` as a mirror of the RAM at `[of, of + size)`: one backing store seen at both
+    /// ranges, by every access, instruction fetch, bus master and host call, with cached code dropped whichever
+    /// range writes over it. A mirror can itself be mirrored. Panics when the range is empty, wraps the address
+    /// space or overlaps RAM, a mirror or a device, or when no single RAM region (or mirror) covers `[of, of + size)`.
+    pub fn map_mirror(&mut self, base: u32, size: u32, of: u32) {
+        let target = self
+            .space
+            .ram
+            .iter()
+            .find_map(|r| r.span(of, size).map(|at| (r.store, at)));
+        let Some((store, at)) = target else {
+            panic!("mirror at {base:#x}: no RAM region covers {of:#x}+{size:#x}");
+        };
+        self.insert_ram("mirror", base, size, store, at);
+        self.space.mirrored = true;
+        // Code already decoded from the mirrored bytes is now at a second address as well.
+        let code = &self.space.code;
+        let pages: Vec<u32> = (0..code.len())
+            .filter(|&w| code[w] != 0)
+            .flat_map(|w| {
+                (0..64)
+                    .filter(move |b| code[w] >> b & 1 != 0)
+                    .map(move |b| (w * 64 + b) as u32)
+            })
+            .collect();
+        for page in pages {
+            self.mark_code(page, page);
+        }
+    }
+
+    /// Insert a region of `size` bytes at `base`, held by `store` from offset `at`, as [`Memory::map_ram`]
+    /// describes.
+    fn insert_ram(&mut self, what: &str, base: u32, size: u32, store: usize, at: usize) {
+        let (_, last) = window(what, base, size);
         let space = &mut self.space;
         assert!(
             !space.devices.overlaps(base, last),
-            "RAM overlaps a device at {base:#x}"
+            "{what} overlaps a device at {base:#x}"
         );
-        let end = base as u64 + size as u64;
-        let at = space.ram.partition_point(|r| r.base < base);
-        if let Some(prev) = at.checked_sub(1).map(|i| &space.ram[i]) {
-            assert!(
-                prev.base as u64 + prev.data.len() as u64 <= base as u64,
-                "RAM overlaps at {base:#x}"
-            );
-        }
-        if let Some(next) = space.ram.get(at) {
-            assert!(end <= next.base as u64, "RAM overlaps at {base:#x}");
-        }
-        space.ram.insert(at, Ram::new(base, size));
-        space.last = 0;
+        assert!(
+            !space.ram.iter().any(|r| r.overlaps(base, last)),
+            "{what} overlaps RAM at {base:#x}"
+        );
+        let i = space.ram.partition_point(|r| r.base < base);
+        let r = Ram {
+            base,
+            len: size,
+            store,
+            at,
+        };
+        space.ram.insert(i, r);
+        space.last = NO_RAM;
     }
 
     /// Read a big-endian value, zero-extended.
@@ -439,7 +535,7 @@ impl Memory {
         let Some((i, off)) = self.space.find(addr, n) else {
             return self.device_read(addr, size);
         };
-        let b = &self.space.ram[i].data[off..off + n as usize];
+        let b = &self.space.stores[i][off..off + n as usize];
         Ok(b.iter().fold(0u32, |v, &x| (v << 8) | x as u32))
     }
 
@@ -457,10 +553,16 @@ impl Memory {
         }
     }
 
-    /// Mark pages `first..=last` as holding bytes of a decoded block.
+    /// Mark pages `first..=last` as holding bytes of a decoded block, and with mirrors every other page holding
+    /// the same bytes, so that a write through any address of them drops the block.
     pub(crate) fn mark_code(&mut self, first: u32, last: u32) {
         for page in first..=last {
             self.space.code[(page >> 6) as usize] |= 1 << (page & 63);
+            if self.space.mirrored {
+                for p in self.space.aliases(page) {
+                    self.space.code[(p >> 6) as usize] |= 1 << (p & 63);
+                }
+            }
         }
     }
 
@@ -683,11 +785,7 @@ impl Memory {
     fn device_window(&mut self, base: u32, size: u32) -> (u32, u32) {
         let (base, last) = window("device", base, size);
         assert!(
-            !self
-                .space
-                .ram
-                .iter()
-                .any(|r| base as u64 <= r.base as u64 + r.len() as u64 - 1 && r.base <= last),
+            !self.space.ram.iter().any(|r| r.overlaps(base, last)),
             "device overlaps RAM at {base:#x}"
         );
         self.horizon = 0;
@@ -945,7 +1043,8 @@ impl Memory {
     pub fn peek(&self, addr: u32, len: u32) -> Option<Vec<u8>> {
         let ram = &self.space.ram;
         let i = ram.partition_point(|r| r.base <= addr).checked_sub(1)?;
-        let off = ram[i].span(addr, len)?;
-        Some(ram[i].data[off..off + len as usize].to_vec())
+        let r = &ram[i];
+        let off = r.span(addr, len)?;
+        Some(self.space.stores[r.store][off..off + len as usize].to_vec())
     }
 }
