@@ -42,6 +42,10 @@ const UART: [(u32, usize, u8, u8); 10] = [
     (0xEC07_0000, 1, 52, 34),
     (0xEC07_4000, 1, 53, 36),
 ];
+/// UART0-UART9's transmit DMA requests (RM Table 19-6).
+const UART_TX: [u8; 10] = [3, 5, 7, 17, 19, 21, 23, 33, 35, 37];
+/// DSPI0-DSPI3's receive (RFDF) and transmit (TFFF) DMA requests (RM Table 19-6).
+const DSPI_DMA: [(u8, u8); 4] = [(12, 13), (14, 15), (28, 29), (44, 45)];
 /// SSI0 and SSI1 (RM Table 1-3, slots 47 and 50) with their transmit 0 and receive 0 requests (RM Table 19-6).
 const SSI: [(u32, u8, u8); 2] = [(0xFC0B_C000, 50, 48), (0xFC0C_8000, 54, 52)];
 /// DSPI0-DSPI3 (RM Table 40-2).
@@ -256,6 +260,13 @@ fn check_uarts() {
         assert_eq!(r(&mut m, base + 0x0C, Size::Byte), 0x50 + n as u32);
         assert_eq!(m.dma_lines().asserted(), 0);
         assert_eq!(ipr(&mut m, c), 0);
+        w(&mut m, base + 0x08, Size::Byte, 0x04); // UCR: transmitter enable
+        let tx = UART_TX[n];
+        assert_eq!(
+            m.dma_lines().asserted(),
+            1 << tx,
+            "UART{n} transmit -> DMA request {tx}"
+        );
     }
 }
 
@@ -322,6 +333,23 @@ fn check_ssis() {
 }
 
 fn check_dspis() {
+    for (n, &base) in DSPI.iter().enumerate() {
+        let (mut m, _) = built();
+        let (rx, tx) = DSPI_DMA[n];
+        w(&mut m, base, Size::Long, 0x80FF_0C00); // MCR: master, every PCS idle high, clear FIFOs, running
+        w(&mut m, base + 0x30, Size::Long, 0x0303_0000); // RSER: TFFF and RFDF DMA requests
+        assert_eq!(
+            m.dma_lines().asserted(),
+            1 << tx,
+            "DSPI{n} TFFF -> DMA request {tx}"
+        );
+        w(&mut m, base + 0x34, Size::Long, 0x0800_0000); // PUSHR: one frame, EOQ
+        assert_eq!(
+            m.dma_lines().asserted(),
+            1 << tx | 1 << rx,
+            "DSPI{n} RFDF -> DMA request {rx}"
+        );
+    }
     let (mut m, chip) = built();
     for (n, &base) in DSPI.iter().enumerate() {
         m.device::<Dspi>(chip.dspi[n]);
@@ -607,28 +635,31 @@ fn uart_rx_through_edma_on_the_built_chip() {
 
 #[test]
 fn serq_on_a_channel_nothing_drives_is_refused() {
-    // UART transmit requests (RM Table 19-6: channel 3 is UART0 transmit) are never driven by the UART model:
-    // enabling one is refused, the channel named. A line a model drives, and a channel RM Table 19-6 lists as
-    // "available for software" (30, 31, 42, 43, 46, 47), take SERQ.
+    // The timer requests (RM Table 19-6: channel 8 is timer 0) are never driven by the DMA timer model: enabling
+    // one is refused, the channel named. A line a model drives (the UARTs' receive and transmit requests, the
+    // DSPIs', the SSIs', the eSDHC's), and a channel RM Table 19-6 lists as "available for software" (30, 31, 42,
+    // 43, 46, 47), take SERQ.
     let (mut m, _) = built();
     assert_eq!(
-        m.access(EDMA + 0x18, Size::Byte, Some(3)),
+        m.access(EDMA + 0x18, Size::Byte, Some(8)),
         Err(Fault::Device(Stop::Unmodelled))
     );
     let detail = m.take_refusal().expect("a refusal").detail;
     assert_eq!(
         detail,
-        "eDMA: channel 3: its peripheral request is not modelled"
+        "eDMA: channel 8: its peripheral request is not modelled"
     );
-    let (_, _, _, rx) = UART[0];
-    let driven = [rx, SSI[0].1, SSI[0].2, SSI[1].1, SSI[1].2, ESDHC_CH];
+    let driven = [SSI[0].1, SSI[0].2, SSI[1].1, SSI[1].2, ESDHC_CH];
     for ch in driven.into_iter().chain([30, 31, 42, 43, 46, 47]) {
         w(&mut m, EDMA + 0x18, Size::Byte, u32::from(ch));
     }
-    for ch in UART.map(|u| u.3) {
+    for ch in UART.map(|u| u.3).into_iter().chain(UART_TX) {
         w(&mut m, EDMA + 0x18, Size::Byte, u32::from(ch));
     }
-    for ch in [0, 12, 13, 39, 56, 58, 63] {
+    for ch in DSPI_DMA.into_iter().flat_map(|(rx, tx)| [rx, tx]) {
+        w(&mut m, EDMA + 0x18, Size::Byte, u32::from(ch));
+    }
+    for ch in [0, 1, 8, 11, 24, 38, 39, 56, 58, 63] {
         assert_eq!(
             m.access(EDMA + 0x18, Size::Byte, Some(ch)),
             Err(Fault::Device(Stop::Unmodelled)),

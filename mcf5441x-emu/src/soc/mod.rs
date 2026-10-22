@@ -18,7 +18,7 @@ pub mod uart;
 pub mod usb;
 
 pub use ddrmc::Ddrmc;
-pub use dspi::{Dspi, SpiDevice};
+pub use dspi::{Dspi, Frame, SpiDevice};
 pub use dtim::Dtim;
 pub use edma::Edma;
 pub use eport::Eport;

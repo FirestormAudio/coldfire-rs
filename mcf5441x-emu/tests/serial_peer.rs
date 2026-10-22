@@ -33,6 +33,7 @@ fn add(mut m: Machine) -> (Machine, DeviceId) {
             controller: 1,
             source: SOURCE,
             rx_dma: None,
+            tx_dma: None,
             ticks_per_byte: 100,
         })),
     );
@@ -259,6 +260,7 @@ fn attach_replaces_and_peer_downcasts() {
             controller: 1,
             source: SOURCE,
             rx_dma: None,
+            tx_dma: None,
             ticks_per_byte: 100,
         })
         .peer::<Recorder>();

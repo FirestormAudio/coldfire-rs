@@ -1,5 +1,5 @@
-//! The UARTs (RM ch. 41): UART9 on INTC1 source 53 with its receive DMA on eDMA channel 36, driven through its
-//! registers, by the host's line input and by snippets.
+//! The UARTs (RM ch. 41): UART9 on INTC1 source 53 with its receive DMA on eDMA channel 36 and its transmit DMA
+//! on channel 37, driven through its registers, by the host's line input and by snippets.
 
 mod common;
 
@@ -30,8 +30,13 @@ const FE: u32 = 0x40;
 const SOURCE: u8 = 53;
 /// UART9's receive DMA channel; its interrupt is INTC1 source 28.
 const CH: u8 = 36;
+/// UART9's transmit DMA channel (RM Table 19-6).
+const TX_CH: u8 = 37;
+/// The transmit ring channel 37 reads: 4 KiB, aligned for SMOD 12.
+const TX_RING: u32 = 0x4040_0000;
 
-/// RAM, INTC1, the eDMA and UART9 with 100 ticks per byte (its receive DMA on channel 36 when `dma`).
+/// RAM, INTC1, the eDMA and UART9 with 100 ticks per byte (its receive DMA on channel 36 and its transmit DMA on
+/// channel 37 when `dma`).
 fn board(dma: bool) -> (Machine, DeviceId) {
     let mut m = Machine::new();
     m.mem.map_ram(RAM, 0x0100_0000);
@@ -50,6 +55,7 @@ fn add(mut m: Machine, dma: bool) -> (Machine, DeviceId) {
             controller: 1,
             source: SOURCE,
             rx_dma: dma.then_some(CH),
+            tx_dma: dma.then_some(TX_CH),
             ticks_per_byte: 100,
         })),
     );
@@ -651,4 +657,132 @@ fn take_sent_drains_and_record_off_logs_nothing() {
     idle(&mut m, 500);
     assert!(uart(&m, id).sent().is_empty(), "not logged");
     assert_eq!(seen.borrow().len(), 2, "but the hook saw it");
+}
+
+/// The TCD word or longword at `off` of channel `ch`.
+fn tcd(m: &mut Machine, ch: u8, off: u32, size: Size) -> u32 {
+    let a = EDMA + 0x1000 + 32 * u32::from(ch) + off;
+    m.access(a, size, None).unwrap()
+}
+
+/// Channel 37 in the shape of a transmit ring: SADDR in a 4 KiB SMOD ring at [`TX_RING`] (8-bit, SOFF 1),
+/// DADDR UTB (DOFF 0), NBYTES 1, CITER = BITER = `count`, CSR `csr`. SERQ not written.
+fn tx_tcd(m: &mut Machine, start: u32, count: u32, csr: u32) {
+    let t = EDMA + 0x1000 + 32 * u32::from(TX_CH);
+    for (off, size, v) in [
+        (0x00, Size::Long, TX_RING + start), // SADDR
+        (0x04, Size::Word, 12 << 11),        // ATTR: SMOD 12, 8-bit both sides
+        (0x06, Size::Word, 1),               // SOFF
+        (0x08, Size::Long, 1),               // NBYTES
+        (0x10, Size::Long, URB),             // DADDR: UTB
+        (0x16, Size::Word, 0),               // DOFF
+        (0x14, Size::Word, count),           // CITER
+        (0x1C, Size::Word, count),           // BITER
+        (0x1E, Size::Word, csr),             // CSR
+    ] {
+        w_sized(m, t + off, size, v);
+    }
+}
+
+#[test]
+fn uart_tx_dma_moves_a_ring_into_utb_one_byte_per_txrdy() {
+    // A transmit ring as a UART's TCD drives it: 8-bit reads from a 4 KiB SMOD ring, one byte per minor loop into
+    // UTB, D_REQ. The transmit request is UISR[TXRDY] (RM 41.5.1.2), so each byte goes in when the holding
+    // register frees: the first at once, each later one when the one before moves to the shift register. Every
+    // byte is sent, once, in ring order across the wrap, one per character time.
+    const COUNT: u32 = 4200;
+    const START: u32 = 0xF00;
+    let (mut m, id) = board(true);
+    let ring: Vec<u8> = (0..4096u32).map(|i| (i * 7 + i / 256) as u8).collect();
+    m.mem.load(TX_RING, &ring).unwrap();
+    tx_tcd(&mut m, START, COUNT, 0x08); // CSR: D_REQ
+    w(&mut m, UCR, 0x04); // transmitter enable
+    assert_ne!(m.dma_lines().asserted() & 1 << TX_CH, 0, "TXRDY requests");
+    w(&mut m, EDMA + 0x18, u32::from(TX_CH)); // SERQ
+    let end = 3 + 100 * u64::from(COUNT);
+    idle(&mut m, end);
+    assert_eq!(uart(&m, id).tx_idle_at(), end);
+    let sent = uart(&m, id).sent();
+    assert_eq!(sent.len(), COUNT as usize);
+    for (i, &(t, b)) in sent.iter().enumerate() {
+        assert_eq!(b, ring[(START as usize + i) % 4096], "byte {i}");
+        assert_eq!(
+            t,
+            3 + 100 * i as u64,
+            "byte {i} leaves one character time after the one before"
+        );
+    }
+    assert_eq!(
+        uart(&m, id).dropped(),
+        0,
+        "none written over a full holding register"
+    );
+    assert_eq!(tcd(&mut m, TX_CH, 0x1E, Size::Word) & 0x80, 0x80, "DONE");
+    assert_eq!(
+        tcd(&mut m, TX_CH, 0x14, Size::Word),
+        COUNT,
+        "CITER reloaded"
+    );
+    assert_eq!(
+        tcd(&mut m, TX_CH, 0x00, Size::Long),
+        TX_RING + (START + COUNT) % 4096,
+        "SADDR wrapped in the ring"
+    );
+    assert_ne!(
+        m.dma_lines().asserted() & 1 << TX_CH,
+        0,
+        "TXRDY still requests; D_REQ cleared ERQ"
+    );
+}
+
+#[test]
+fn uart_tx_request_drops_inside_the_utb_write() {
+    // RM 41.5.1.2, RM Table 41-15: the transmit request is UISR[TXRDY]. UIMR does not mask it (RM 41.3.10: UISR is
+    // true status), the transmitter must be on (RM Table 41-6), and the UTB write clears it (RM 41.3.7) before the
+    // write returns. guess: the chip's request-to-acknowledge timing is not measured; the request falls inside
+    // the write so that a served channel puts one character into UTB per TXRDY.
+    let (mut m, id) = board(true);
+    let line = |m: &Machine| m.dma_lines().asserted() & 1 << TX_CH != 0;
+    assert!(!line(&m), "transmitter off");
+    w(&mut m, UCR, 0x04);
+    assert_eq!(r(&mut m, UISR), 0x01);
+    assert!(line(&m), "TXRDY with UIMR 0");
+    w(&mut m, URB, 0x41);
+    assert!(!line(&m), "the write lowered it");
+    idle(&mut m, 2);
+    assert!(!line(&m));
+    idle(&mut m, 3);
+    assert!(line(&m), "back with TXRDY, the hand-over");
+    w(&mut m, UCR, 0x08); // transmitter disable
+    assert!(!line(&m));
+
+    // The eDMA serving it: one minor loop per TXRDY, never a second write into the full holding register.
+    let (mut m, id2) = board(true);
+    m.mem.load(TX_RING, b"abcdefghij").unwrap();
+    tx_tcd(&mut m, 0, 10, 0);
+    w(&mut m, UCR, 0x04);
+    w(&mut m, EDMA + 0x18, u32::from(TX_CH)); // SERQ
+    assert_eq!(
+        tcd(&mut m, TX_CH, 0x14, Size::Word),
+        9,
+        "one minor loop at tick 0"
+    );
+    assert!(!line(&m));
+    idle(&mut m, 3);
+    assert_eq!(
+        tcd(&mut m, TX_CH, 0x14, Size::Word),
+        8,
+        "the next at the hand-over"
+    );
+    idle(&mut m, 102);
+    assert_eq!(
+        tcd(&mut m, TX_CH, 0x14, Size::Word),
+        8,
+        "waits for the shift register"
+    );
+    idle(&mut m, 103);
+    assert_eq!(tcd(&mut m, TX_CH, 0x14, Size::Word), 7);
+    assert_eq!(uart(&m, id2).dropped(), 0);
+    assert_eq!(uart(&m, id2).text(), "ab");
+    assert_eq!(uart(&m, id).dropped(), 0);
 }

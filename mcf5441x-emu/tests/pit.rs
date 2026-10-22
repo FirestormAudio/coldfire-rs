@@ -38,6 +38,7 @@ fn board_uart(src: &str, labels: &[&str]) -> (Machine, DeviceId, DeviceId, Vec<u
             controller: 1,
             source: 53,
             rx_dma: None,
+            tx_dma: None,
             ticks_per_byte: 0,
         })),
     );

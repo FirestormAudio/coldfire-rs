@@ -30,24 +30,29 @@ const DTIM: u32 = 0xFC07_0000;
 const DTIM_SOURCE: u8 = 32;
 /// Edge port 0 (RM Table 1-3): pin IRQn drives INTC0 source n, 1-7 (RM Table 17-15).
 const EPORT: u32 = 0xFC09_0000;
-/// UART0-UART9 (RM Table 1-3, Table 1-4): (base, controller, source, receive DMA request), RM Table 17-15,
-/// Table 17-16 and Table 19-6.
-const UART: [(u32, usize, u8, u8); 10] = [
-    (0xFC06_0000, 0, 26, 2),
-    (0xFC06_4000, 0, 27, 4),
-    (0xFC06_8000, 0, 28, 6),
-    (0xFC06_C000, 0, 29, 16),
-    (0xEC06_0000, 1, 48, 18),
-    (0xEC06_4000, 1, 49, 20),
-    (0xEC06_8000, 1, 50, 22),
-    (0xEC06_C000, 1, 51, 32),
-    (0xEC07_0000, 1, 52, 34),
-    (0xEC07_4000, 1, 53, 36),
+/// UART0-UART9 (RM Table 1-3, Table 1-4): (base, controller, source, receive DMA request, transmit DMA request),
+/// RM Table 17-15, Table 17-16 and Table 19-6.
+const UART: [(u32, usize, u8, u8, u8); 10] = [
+    (0xFC06_0000, 0, 26, 2, 3),
+    (0xFC06_4000, 0, 27, 4, 5),
+    (0xFC06_8000, 0, 28, 6, 7),
+    (0xFC06_C000, 0, 29, 16, 17),
+    (0xEC06_0000, 1, 48, 18, 19),
+    (0xEC06_4000, 1, 49, 20, 21),
+    (0xEC06_8000, 1, 50, 22, 23),
+    (0xEC06_C000, 1, 51, 32, 33),
+    (0xEC07_0000, 1, 52, 34, 35),
+    (0xEC07_4000, 1, 53, 36, 37),
 ];
 /// SSI0 and SSI1 (RM Table 1-3): (base, transmit 0 request, receive 0 request), RM Table 19-6.
 const SSI: [(u32, u8, u8); 2] = [(0xFC0B_C000, 50, 48), (0xFC0C_8000, 54, 52)];
-/// DSPI0-DSPI3 (RM Table 40-2).
-const DSPI: [u32; 4] = [0xFC05_C000, 0xFC03_C000, 0xEC03_8000, 0xEC03_C000];
+/// DSPI0-DSPI3 (RM Table 40-2): (base, receive request RFDF, transmit request TFFF), RM Table 19-6.
+const DSPI: [(u32, u8, u8); 4] = [
+    (0xFC05_C000, 12, 13),
+    (0xFC03_C000, 14, 15),
+    (0xEC03_8000, 28, 29),
+    (0xEC03_C000, 44, 45),
+];
 /// The eSDHC (RM Table 1-3): INTC2 source 31 (RM Table 17-17), DMA request 59 (RM Table 19-6).
 const ESDHC: u32 = 0xFC0C_C000;
 const ESDHC_SOURCE: u8 = 31;
@@ -403,11 +408,11 @@ impl Chip {
 /// | 0xFC08_0000 + 0x4000 n | 0x4000 | PIT0-3 | INTC2 13-16 | |
 /// | 0xFC07_0000 + 0x4000 n | 0x4000 | DMA timers 0-3 | INTC0 32-35 | |
 /// | 0xFC09_0000 | 0x4000 | Edge port 0 | INTC0 1-7 (pins IRQ1-IRQ7) | |
-/// | 0xFC06_0000 + 0x4000 n | 0x4000 | UART0-3 | INTC0 26-29 | receive 2, 4, 6, 16 |
-/// | 0xEC06_0000 + 0x4000 n | 0x4000 | UART4-7 | INTC1 48-51 | receive 18, 20, 22, 32 |
-/// | 0xEC07_0000, 0xEC07_4000 | 0x4000 | UART8, UART9 | INTC1 52, 53 | receive 34, 36 |
+/// | 0xFC06_0000 + 0x4000 n | 0x4000 | UART0-3 | INTC0 26-29 | receive 2, 4, 6, 16; transmit 3, 5, 7, 17 |
+/// | 0xEC06_0000 + 0x4000 n | 0x4000 | UART4-7 | INTC1 48-51 | receive 18, 20, 22, 32; transmit 19, 21, 23, 33 |
+/// | 0xEC07_0000, 0xEC07_4000 | 0x4000 | UART8, UART9 | INTC1 52, 53 | receive 34, 36; transmit 35, 37 |
 /// | 0xFC0B_C000, 0xFC0C_8000 | 0x4000 | SSI0, SSI1 | | TX0 50, 54; RX0 48, 52 |
-/// | 0xFC05_C000, 0xFC03_C000, 0xEC03_8000, 0xEC03_C000 | 0x4000 | DSPI0-3 | | |
+/// | 0xFC05_C000, 0xFC03_C000, 0xEC03_8000, 0xEC03_C000 | 0x4000 | DSPI0-3 | | RFDF 12, 14, 28, 44; TFFF 13, 15, 29, 45 |
 /// | 0xFC0C_C000 | 0x4000 | eSDHC | INTC2 31 | 59 |
 /// | 0xFC0B_0000 | 0x1000 | USB OTG (bus master) | INTC2 17 | |
 /// | 0xFC0B_8000 | 0x4000 | DDR controller | | |
@@ -436,8 +441,8 @@ impl Chip {
 /// loss of lock that would request its interrupt (or a reset) stops the run ([`Pll::set_locked`]).
 ///
 /// The eDMA ([`Edma::with_driven`]) takes SERQ only on the request lines in the table's last column (the
-/// software channels of RM Table 19-6 among them): on any other channel (the UART transmit requests, the DSPIs',
-/// the timers', ...) nothing would ever request, and SERQ is refused. A software start works on every channel.
+/// software channels of RM Table 19-6 among them): on any other channel (the timers', the I2C modules', the
+/// external DREQ pins, ...) nothing would ever request, and SERQ is refused. A software start works on every channel.
 ///
 /// Not mapped: the SRAM (the board maps it where its RAMBAR puts it, RM ch. 7), the DDR (its size is the
 /// board's), the FlexBus chip-select windows, and the reserved slots, which fault as unmapped.
@@ -463,7 +468,8 @@ impl Mcf5441x {
         // SERQ is taken on the request lines the models below drive and on the software channels only.
         let driven = UART
             .iter()
-            .map(|u| u.3)
+            .flat_map(|u| [u.3, u.4])
+            .chain(DSPI.iter().flat_map(|d| [d.1, d.2]))
             .chain(SSI.iter().flat_map(|s| [s.1, s.2]))
             .chain([ESDHC_DMA])
             .chain(SOFTWARE_DMA)
@@ -483,11 +489,12 @@ impl Mcf5441x {
         let eport = m.add_device(EPORT, SLOT, Box::new(Eport::new(0)));
 
         let uart = std::array::from_fn(|n| {
-            let (base, controller, source, rx) = UART[n];
+            let (base, controller, source, rx, tx) = UART[n];
             let config = UartConfig {
                 controller,
                 source,
                 rx_dma: Some(rx),
+                tx_dma: Some(tx),
                 ticks_per_byte: options.uart_ticks_per_byte[n],
             };
             m.add_device(base, SLOT, Box::new(Uart::new(config)))
@@ -504,13 +511,13 @@ impl Mcf5441x {
         });
 
         let nor_at = options.nor.as_ref().map(|&(d, pcs, _)| (d, pcs));
-        let mut dspis = [(); 4].map(|_| Dspi::new());
+        let mut dspis = DSPI.map(|(_, rx, tx)| Dspi::with_dma(rx, tx));
         if let Some((d, pcs, nor)) = options.nor {
             assert!(d < 4, "no DSPI{d}: DSPI0-DSPI3 only");
             dspis[usize::from(d)].attach(pcs, Box::new(nor));
         }
         let mut dspis = dspis.into_iter();
-        let dspi = DSPI.map(|base| m.add_device(base, SLOT, Box::new(dspis.next().unwrap())));
+        let dspi = DSPI.map(|(base, ..)| m.add_device(base, SLOT, Box::new(dspis.next().unwrap())));
 
         let esdhc = m.add_device(
             ESDHC,

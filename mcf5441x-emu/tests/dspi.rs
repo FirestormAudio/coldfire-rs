@@ -1,8 +1,10 @@
 //! The DSPI (RM ch. 40): DSPI0 with an SPI NOR flash on PCS1, driven through its registers the way a boot loader's
 //! read routine drives it (up to 4 frames in flight, pop then push, CONT on all frames but the last, EOQ on it).
 
+mod common;
+
 use mcf5441x_emu::parts::SpiNor;
-use mcf5441x_emu::soc::Dspi;
+use mcf5441x_emu::soc::{Dspi, Edma, Frame};
 use mcf5441x_emu::{DeviceId, Fault, Machine, Size, Stop};
 
 const DSPI: u32 = 0xFC05_C000;
@@ -410,19 +412,26 @@ fn fifo_pointers_and_entries_follow_the_rm() {
 
 #[test]
 fn unmodelled_uses_are_refused() {
-    // the tripwires: CTAS >= 2, frame sizes other than 8 and 16, two attached parts selected at once, an empty
-    // POPR, RSER requests, writes outside the writable registers
+    // the tripwires: frame sizes other than 8 and 16, two attached parts selected at once, an empty POPR, RSER
+    // interrupt requests and DMA requests with no request line, writes outside the writable registers
     let mut b = board(&[], JEDEC_64K);
-    let d = b.refused(PUSHR, Size::Long, Some(PCS1 | 2 << 28));
-    assert!(d.contains("CTAS 2"), "{d}");
     b.w(CTAR1, 0x5801_0000); // FMSZ 11: 12-bit frames
     let d = b.refused(PUSHR, Size::Long, Some(PCS1 | 1 << 28));
     assert!(d.contains("12-bit"), "{d}");
     let d = b.refused(POPR, Size::Long, None);
     assert!(d.contains("POPR") && d.contains("empty"), "{d}");
-    let d = b.refused(RSER, Size::Long, Some(0x0002_0000));
-    assert!(d.contains("RSER"), "{d}");
+    for v in [0x0002_0000, 0x0200_0000, 1 << 31, 1 << 28, 1 << 27, 1 << 19] {
+        let d = b.refused(RSER, Size::Long, Some(v));
+        assert!(d.contains("RSER") && d.contains("interrupt"), "{d}");
+    }
+    let d = b.refused(RSER, Size::Long, Some(0x0000_0001));
+    assert!(d.contains("RSER") && d.contains("reserved"), "{d}");
+    // Dspi::new has no DMA request lines
+    let d = b.refused(RSER, Size::Long, Some(0x0300_0000));
+    assert!(d.contains("RSER") && d.contains("no request line"), "{d}");
     assert_eq!(b.r(RSER), 0);
+    b.w(RSER, 0x0101_0000); // DIRS alone requests nothing: stored
+    assert_eq!(b.r(RSER), 0x0101_0000);
     let d = b.refused(RXFR0, Size::Long, Some(0));
     assert!(d.contains("+0x7c"), "{d}");
     assert!(b.dspi().frames().is_empty());
@@ -537,4 +546,273 @@ fn take_frames_drains_and_record_off_logs_nothing() {
     let got = b.transfer(&[0x9F], 3);
     assert_eq!(got, JEDEC_64K[..3], "the transfer still reaches the part");
     assert!(b.dspi().frames().is_empty());
+}
+
+fn frame(at: u64, data: u32, pcs: u8, cont: bool, ctas: u8) -> Frame {
+    Frame {
+        at,
+        data,
+        pcs,
+        cont,
+        ctas,
+    }
+}
+
+#[test]
+fn dspi_ctar2_to_7_select_frame_size_and_timing() {
+    // RM Table 40-3: eight CTARs; PUSHR[CTAS] picks the one whose FMSZ sizes the frame (RM 40.4.2.1). The timing
+    // fields are stored and read back; frames take no time whatever they say.
+    let mut b = board(&[], JEDEC_64K);
+    let ctars: [u32; 8] = [
+        CTAR_8,
+        CTAR_16,
+        0x7E00_0335, // 16-bit, CPOL, CPHA, PBR 0, CSSCK 0, PASC 0, PDT 0, BR 5, DT 3, ASC 3
+        0x3E00_1064, // 8-bit
+        0x3801_2345,
+        0x7802_3456,
+        0x3A11_1111,
+        0x7C22_2222,
+    ];
+    for (n, v) in ctars.into_iter().enumerate() {
+        b.w(CTAR0 + 4 * n as u32, v);
+    }
+    for (n, v) in ctars.into_iter().enumerate() {
+        assert_eq!(b.r(CTAR0 + 4 * n as u32), v, "CTAR{n}");
+    }
+    for ctas in 2..8u32 {
+        b.w(PUSHR, ctas << 28 | 0xA55A);
+    }
+    let want: Vec<Frame> = (2..8u8)
+        .map(|ctas| {
+            let data = if ctars[usize::from(ctas)] >> 27 & 0xF == 15 {
+                0xA55A
+            } else {
+                0x5A
+            };
+            frame(0, data, 0, false, ctas)
+        })
+        .collect();
+    assert_eq!(b.dspi().frame_log(), want);
+    // the 16-bit frames shift two bytes, the 8-bit ones one: the RX FIFO holds what the frames read back (no part
+    // selected: all ones within the frame)
+    let got: Vec<u32> = (0..6).map(|_| b.r(POPR)).collect();
+    assert_eq!(got, [0xFFFF, 0xFF, 0xFF, 0xFFFF, 0xFF, 0xFFFF]);
+    // the frame size check covers every CTAR
+    b.w(CTAR0 + 4 * 6, 0x5800_0000); // FMSZ 11
+    let d = b.refused(PUSHR, Size::Long, Some(6 << 28));
+    assert!(d.contains("12-bit") && d.contains("CTAR6"), "{d}");
+}
+
+const EDMA: u32 = 0xFC04_4000;
+/// DSPI0's RX FIFO drain and TX FIFO fill requests (RM Table 19-6).
+const RX_CH: u8 = 12;
+const TX_CH: u8 = 13;
+const TFFF_DMA: u32 = 0x0300_0000;
+const RFDF_DMA: u32 = 0x0003_0000;
+
+/// RAM, the eDMA and DSPI0 on request lines 12 and 13, with a NOR on PCS1: 8-bit frames through CTAR0, running.
+fn dma_board(contents: &[u8]) -> Board {
+    let mut m = Machine::new();
+    m.mem.map_ram(RAM, 0x0100_0000);
+    m.add_bus_master(EDMA, 0x2000, Box::new(Edma::new()));
+    let mut dspi = Dspi::with_dma(RX_CH, TX_CH);
+    dspi.attach(1, Box::new(SpiNor::new(SIZE, JEDEC_64K, contents)));
+    let dspi = m.add_device(DSPI, 0x4000, Box::new(dspi));
+    let mut b = Board { m, dspi };
+    b.w(CTAR0, CTAR_8);
+    b.w(MCR, MCR_RUN);
+    b
+}
+
+impl Board {
+    /// Channel `ch`'s TCD: 32-bit both sides, NBYTES 4, CITER = BITER = `count`, D_REQ.
+    fn tcd(&mut self, ch: u8, saddr: u32, soff: u32, daddr: u32, doff: u32, count: u32) {
+        let t = EDMA + 0x1000 + 32 * u32::from(ch);
+        for (off, size, v) in [
+            (0x00, Size::Long, saddr),
+            (0x04, Size::Word, 0x0202), // ATTR: 32-bit both sides
+            (0x06, Size::Word, soff),
+            (0x08, Size::Long, 4),
+            (0x10, Size::Long, daddr),
+            (0x16, Size::Word, doff),
+            (0x14, Size::Word, count),
+            (0x1C, Size::Word, count),
+            (0x1E, Size::Word, 0x08), // CSR: D_REQ
+        ] {
+            self.m.access(t + off, size, Some(v)).unwrap();
+        }
+    }
+
+    fn citer(&mut self, ch: u8) -> u32 {
+        let a = EDMA + 0x1000 + 32 * u32::from(ch) + 0x14;
+        self.m.access(a, Size::Word, None).unwrap()
+    }
+
+    fn serq(&mut self, ch: u8) {
+        self.m
+            .access(EDMA + 0x18, Size::Byte, Some(u32::from(ch)))
+            .unwrap();
+    }
+
+    fn line(&self, ch: u8) -> bool {
+        self.m.dma_lines().asserted() & 1 << ch != 0
+    }
+}
+
+#[test]
+fn dspi_tfff_dma_fills_the_tx_fifo() {
+    // RM 40.4.6.2: TFFF_RE with TFFF_DIRS makes TFFF (the TX FIFO is not full) a DMA request (line 13 for DSPI0,
+    // RM Table 19-6). The eDMA pushes PUSHR commands from memory. Frames take no time, so while the DSPI runs the
+    // FIFO never fills; an EOQ frame stops it (RM 40.4.1), the pushes then fill the FIFO, and the push that fills
+    // it drops the request. Clearing EOQF drains the FIFO and the request rises again.
+    let mut b = dma_board(&[]);
+    const CMDS: u32 = 0x4010_0000;
+    // no chip select: the frames reach no part
+    let mut cmds = vec![EOQ | 0x06]; // stops the queue
+    cmds.extend((0..19u32).map(|i| CONT | i));
+    cmds.push(EOQ | 0x55);
+    let bytes: Vec<u8> = cmds.iter().flat_map(|c| c.to_be_bytes()).collect();
+    b.m.mem.load(CMDS, &bytes).unwrap();
+    b.tcd(TX_CH, CMDS, 4, DSPI + PUSHR, 0, cmds.len() as u32);
+    assert!(!b.line(TX_CH), "RSER 0: no request");
+    b.w(RSER, TFFF_DMA);
+    assert_eq!(b.r(RSER), TFFF_DMA);
+    assert!(b.line(TX_CH), "TFFF requests");
+    // guess: TFFF follows the FIFO, so writing 1 to it (RM Table 40-7: w1c) does not lower the request
+    b.w(SR, TFFF);
+    assert!(b.line(TX_CH), "still requests");
+    b.serq(TX_CH);
+    // the EOQ frame went out; 16 more filled the FIFO
+    assert_eq!(b.dspi().frame_log().len(), 1);
+    let sr = b.r(SR);
+    assert_eq!(sr & (TFFF | EOQF), EOQF, "full, stopped");
+    assert_eq!(sr >> 12 & 0xF, 15, "TXCTR reads 15 with 16 held");
+    assert!(
+        !b.line(TX_CH),
+        "the push that filled the FIFO dropped the request"
+    );
+    assert_eq!(b.citer(TX_CH), 21 - 17);
+    b.w(SR, EOQF);
+    // the 16 waiting frames, then the last 4 pushed by the eDMA, the final one with EOQ
+    let log = b.dspi().frame_log();
+    assert_eq!(log.len(), 21);
+    let data: Vec<u32> = log.iter().map(|f| f.data).collect();
+    let want: Vec<u32> = cmds.iter().map(|c| c & 0xFF).collect();
+    assert_eq!(data, want, "every command once, in order");
+    assert_ne!(b.r(SR) & EOQF, 0);
+    assert_eq!(b.citer(TX_CH), 21, "major loop done, CITER reloaded");
+    assert!(b.line(TX_CH), "TFFF still requests; D_REQ cleared ERQ");
+}
+
+#[test]
+fn dspi_rfdf_dma_drains_the_rx_fifo() {
+    // RM 40.4.6.5: RFDF_RE with RFDF_DIRS makes RFDF (the RX FIFO is not empty) a DMA request (line 12 for DSPI0,
+    // RM Table 19-6). The eDMA pops POPR into memory; the pop that empties the FIFO drops the request.
+    let mut b = dma_board(&[]);
+    const BUF: u32 = 0x4020_0000;
+    b.tcd(RX_CH, DSPI + POPR, 0, BUF, 4, 6);
+    b.w(RSER, RFDF_DMA);
+    // RDID: 0x9F then five reads; the request is up while the eDMA is not enabled for it
+    b.w(PUSHR, PCS1 | CONT | 0x9F);
+    b.w(PUSHR, PCS1 | CONT);
+    assert!(b.line(RX_CH), "RFDF requests");
+    assert_eq!(b.r(SR) >> 4 & 0xF, 2, "RXCTR");
+    b.serq(RX_CH);
+    assert!(!b.line(RX_CH), "the pop that emptied the FIFO dropped it");
+    assert_eq!(b.citer(RX_CH), 4, "two minor loops");
+    for i in 0..4 {
+        b.w(PUSHR, PCS1 | if i == 3 { EOQ } else { CONT });
+        assert!(!b.line(RX_CH), "drained after each frame");
+    }
+    assert_eq!(b.r(SR) & (RFDF | 0xF0), 0, "RX FIFO empty");
+    let got: Vec<u32> = (0..6)
+        .map(|i| b.m.mem.read(BUF + 4 * i, Size::Long).unwrap())
+        .collect();
+    assert_eq!(got[0], 0xFF);
+    assert_eq!(
+        got[1..],
+        JEDEC_64K[..5]
+            .iter()
+            .map(|&x| u32::from(x))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(b.citer(RX_CH), 6, "major loop done");
+}
+
+#[test]
+fn dspi1_codec_setup_from_ref_t_runs() {
+    // DSPI1 as a codec driver sets it up: CTAR2 0x7E000335 (16-bit), CTAR3 0x3E001064 (8-bit), RSER 0x03000000
+    // (the TFFF DMA request, line 15, RM Table 19-6), then the eDMA pushes the commands, CTAS 3, the last with EOQ,
+    // and the code polls SR[EOQF]. Every frame is recorded with its CTAS.
+    const DSPI1: u32 = 0xFC03_C000;
+    const CMDS: u32 = 0x4030_0000;
+    let src = "move.l #0xFC03C000,%a0\n\
+               move.l #0x80010C00,(%a0)\n\
+               move.l #0x7E000335,%d1\n\
+               move.l %d1,0x14(%a0)\n\
+               move.l #0x3E001064,%d1\n\
+               move.l %d1,0x18(%a0)\n\
+               move.l #0x03000000,%d1\n\
+               move.l %d1,0x30(%a0)\n\
+               move.l #0xFC044018,%a1\n\
+               move.b #15,(%a1)\n\
+               1: move.l 0x2C(%a0),%d0\n\
+               btst #28,%d0\n\
+               beq.s 1b\n\
+               move.l #0x10000000,%d1\n\
+               move.l %d1,0x2C(%a0)\n\
+               end: nop";
+    let (mut m, l) = common::prepare(src, &["end"]);
+    m.add_bus_master(EDMA, 0x2000, Box::new(Edma::new()));
+    let id = m.add_device(DSPI1, 0x4000, Box::new(Dspi::with_dma(14, 15)));
+    let cmds: Vec<u32> = [0x12, 0x34, 0x56, 0x78, 0x9A]
+        .iter()
+        .enumerate()
+        .map(|(i, &d)| 3 << 28 | PCS0 | if i == 4 { EOQ } else { CONT } | d)
+        .chain([2 << 28 | PCS0 | EOQ | 0xBEEF])
+        .collect();
+    let bytes: Vec<u8> = cmds.iter().flat_map(|c| c.to_be_bytes()).collect();
+    m.mem.load(CMDS, &bytes).unwrap();
+    let t = EDMA + 0x1000 + 32 * 15;
+    for (off, size, v) in [
+        (0x00, Size::Long, CMDS),
+        (0x04, Size::Word, 0x0202),
+        (0x06, Size::Word, 4),
+        (0x08, Size::Long, 4),
+        (0x10, Size::Long, DSPI1 + PUSHR),
+        (0x16, Size::Word, 0),
+        (0x14, Size::Word, cmds.len() as u32),
+        (0x1C, Size::Word, cmds.len() as u32),
+        (0x1E, Size::Word, 0x08),
+    ] {
+        m.access(t + off, size, Some(v)).unwrap();
+    }
+    m.set_time_limit(Some(10_000));
+    let r = m.run(common::until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    let log: Vec<(u32, u8, bool, u8)> = m
+        .device::<Dspi>(id)
+        .frame_log()
+        .iter()
+        .map(|f| (f.data, f.pcs, f.cont, f.ctas))
+        .collect();
+    assert_eq!(
+        log[..5],
+        [
+            (0x12, 1, true, 3),
+            (0x34, 1, true, 3),
+            (0x56, 1, true, 3),
+            (0x78, 1, true, 3),
+            (0x9A, 1, false, 3),
+        ],
+        "the queue up to its EOQ, CTAS 3: 8-bit frames"
+    );
+    // the 16-bit frame waited in the TX FIFO behind EOQF until the code cleared it
+    assert_eq!(log[5..], [(0xBEEF, 1, false, 2)]);
+    let sr = m.access(DSPI1 + SR, Size::Long, None).unwrap();
+    assert_eq!(
+        sr & (EOQF | 0xF000),
+        EOQF,
+        "the second queue ended; TX FIFO empty"
+    );
 }

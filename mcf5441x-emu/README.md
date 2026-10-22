@@ -129,11 +129,11 @@ assert_eq!(m.access(0xFC06_000C, mcf5441x_emu::Size::Byte, None), Ok(u32::from(b
 | 0xFC08_0000 + 0x4000 n | PIT0-PIT3 | INTC2 13-16 | |
 | 0xFC07_0000 + 0x4000 n | DMA timers 0-3 | INTC0 32-35 | |
 | 0xFC09_0000 | Edge port 0 | INTC0 1-7 (pins IRQ1-IRQ7) | |
-| 0xFC06_0000 + 0x4000 n | UART0-UART3 | INTC0 26-29 | receive: 2, 4, 6, 16 |
-| 0xEC06_0000 + 0x4000 n | UART4-UART7 | INTC1 48-51 | receive: 18, 20, 22, 32 |
-| 0xEC07_0000, 0xEC07_4000 | UART8, UART9 | INTC1 52, 53 | receive: 34, 36 |
+| 0xFC06_0000 + 0x4000 n | UART0-UART3 | INTC0 26-29 | receive: 2, 4, 6, 16; transmit: 3, 5, 7, 17 |
+| 0xEC06_0000 + 0x4000 n | UART4-UART7 | INTC1 48-51 | receive: 18, 20, 22, 32; transmit: 19, 21, 23, 33 |
+| 0xEC07_0000, 0xEC07_4000 | UART8, UART9 | INTC1 52, 53 | receive: 34, 36; transmit: 35, 37 |
 | 0xFC0B_C000, 0xFC0C_8000 | SSI0, SSI1 | | TX0: 50, 54; RX0: 48, 52 |
-| 0xFC05_C000, 0xFC03_C000, 0xEC03_8000, 0xEC03_C000 | DSPI0-DSPI3 (RM Table 40-2) | | |
+| 0xFC05_C000, 0xFC03_C000, 0xEC03_8000, 0xEC03_C000 | DSPI0-DSPI3 (RM Table 40-2) | | RFDF: 12, 14, 28, 44; TFFF: 13, 15, 29, 45 |
 | 0xFC0C_C000 | eSDHC | INTC2 31 | 59 |
 | 0xFC0B_0000 (4 KB) | USB OTG, a bus master | INTC2 17 | |
 | 0xFC0B_8000 | DDR controller | | |
@@ -204,7 +204,9 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
 - **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character
   per character time (a status read 3 ticks after a write to an idle transmitter sees TXRDY again: measured on an
   MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing
-  errors; the receive DMA request. A [`SerialPeer`](soc::SerialPeer) attached with `Uart::attach` stands for whatever
+  errors; the receive DMA request (RXRDY) and the transmit DMA request (UISR TXRDY, RM 41.5.1.2: no UIMR mask, no
+  enable of its own), which drops inside the UTB write that fills the holding register, so a served channel puts one
+  character into UTB per TXRDY (guess: the chip's request timing is not measured). A [`SerialPeer`](soc::SerialPeer) attached with `Uart::attach` stands for whatever
   is on the far end of the lines: it is called with each character as it leaves the shift register and at its own
   events, and sends characters back (or ends the run) through a [`PeerCx`](soc::PeerCx); `Uart::peer` and `peer_mut`
   give it back by type.
@@ -212,8 +214,9 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   the watermark DMA requests; 24-bit words send bits 23:0 of a FIFO word (measured on an MCF54415); an underrun sends
   silence and empties the FIFO (where the RM re-transmits the previous data). The host supplies the received samples
   and reads what was sent.
-- **DSPI0-3** (RM ch. 40): master mode, 8- and 16-bit frames through CTAR0/1, the FIFOs, EOQ and the transfer counter;
-  frames take no time. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select.
+- **DSPI0-3** (RM ch. 40): master mode, 8- and 16-bit frames through any of CTAR0-7 (PUSHR CTAS), the FIFOs, EOQ
+  and the transfer counter; the TFFF (TX FIFO fill) and RFDF (RX FIFO drain) DMA requests (RSER RE with DIRS);
+  frames take no time and are logged with their CTAS. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select.
 - **eSDHC** (RM ch. 25): commands, responses and block reads through DATPORT, drained by eDMA channel 59, with an
   [`Emmc`](parts::Emmc) (read-only) behind it; the reset values and the RSTA/RSTD behaviour measured on an MCF54415.
 - **USB OTG** (RM ch. 24): device mode with dQHs and dTDs in memory, endpoints 0-3, and host primitives (setup, IN
@@ -235,9 +238,9 @@ A feature a model leaves out is a tripwire, not a silent difference: the access 
 instruction does not complete, PC stays on it) and the run stops with `Stop::Unmodelled`, the detail naming the block
 and the feature. Among them: eDMA CR HALT, CLM, EMLM, HOE, CX/ECX and group priorities, error interrupts and SERQ on a
 channel nothing drives; UART FIFO-full receive requests, multidrop and loopback modes; SSI configurations outside I2S
-master or network mode with FIFO 0, and its own interrupts; DSPI slave mode, CTAR2-7, interrupt and DMA requests, a
-push to a full FIFO; eSDHC write commands, its internal DMA and a clock divider change with the clock on; USB host
-mode, little-endian buffers and full-speed bulk packets over 64 bytes; NFC commands other than page reads, and its
+master or network mode with FIFO 0, and its own interrupts; DSPI slave mode, interrupt requests, a push to a full
+FIFO; eSDHC write commands, its internal DMA and a clock divider change with the clock on; USB host mode,
+little-endian buffers and full-speed bulk packets over 64 bytes; NFC commands other than page reads, and its
 interrupt; access sizes a register does not take. A tripwire reached by a device on its own (an eDMA request that
 never drops, a USB DMA access that fails) halts the run with the same kind after the instruction. Each model's
 documentation lists its own.
@@ -280,15 +283,15 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
   interrupts and of the eDMA error interrupt is refused (see each model); the DDR controller's INTMASK and the PLL's
   LOCIRQ and LOLIRQ are stored, but neither model ever raises its interrupt, and neither is wired to an interrupt
   controller; a PLL loss of lock that would request the interrupt (or a reset) stops the run instead.
-- DMA requests nothing drives: the UART transmit requests (and every request line of a block that is not modelled,
-  or whose model does not request DMA) are never asserted. On the built chip, SERQ on such a channel is refused,
+- DMA requests nothing drives: the request lines of a block that is not modelled, or whose model does not request
+  DMA (the DMA timers', the I2C modules', the external DREQ pins), are never asserted. On the built chip, SERQ on such a channel is refused,
   naming the channel; a software start (START, SSRT) works on any channel.
 - Bus masters' accesses are not split: a misaligned access from the eDMA or USB reaches a device whole. The chip's
   models refuse one that crosses a register.
 
 Open guesses (each a `guess:` comment in the code and its test): the PIT's expiry one count after PCNTR reads 0 and
 the prescaler's partial count on a PRE change; the UART hand-over to the shift register taking the shortest of the
-measured 2 to 9 instructions; the DSPI's FIFO counters with 16 entries and the deselect of a part reached by an
+measured 2 to 9 instructions, and its transmit DMA request dropping inside the UTB write; the DSPI's FIFO counters with 16 entries and the deselect of a part reached by an
 idle-low select; the eSDHC's RSTA reset of the registers not measured and a data timeout one tick after the data
 phase; USB detach 100 µs after RS clears; the SSI's underrun sending silence and emptying the FIFO, where RM Table
 35-8 re-transmits the previous data; the word and longword accesses over the INTC's 8-bit SIMR, CIMR, CLMASK and

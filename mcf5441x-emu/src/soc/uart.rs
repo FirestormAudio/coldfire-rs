@@ -44,6 +44,8 @@ pub struct UartConfig {
     pub source: u8,
     /// The DMA request line of its receive request (RM Table 19-6), if it is wired to the eDMA.
     pub rx_dma: Option<u8>,
+    /// The DMA request line of its transmit request (RM Table 19-6), if it is wired to the eDMA.
+    pub tx_dma: Option<u8>,
     /// The ticks one character takes on the line, start bit to stop bit: the board's baud rate in ticks. 0 makes
     /// sending and receiving instant.
     pub ticks_per_byte: u64,
@@ -157,7 +159,7 @@ fn schedule(
 /// (guess: RM Table 41-6 says characters loaded while the transmitter is disabled are not sent). Each character
 /// is recorded ([`Uart::sent`], unless [`Uart::record`] turned the log off; [`Uart::on_byte`] and the peer see it
 /// either way) with the tick it begins shifting out: when it starts on the line, which is what a peer on the line
-/// sees. The transmit DMA request is not driven.
+/// sees.
 ///
 /// The receiver: a character arrives `ticks_per_byte` after its start bit, and lands in the holding register,
 /// setting RXRDY, when the receiver is on and the register is empty. Otherwise it is lost ([`Uart::lost`]): with
@@ -168,7 +170,14 @@ fn schedule(
 ///
 /// Requests: the interrupt (source [`UartConfig::source`] of controller [`UartConfig::controller`]) is
 /// `UIMR[0] & TXRDY | UIMR[1] & RXRDY`; the receive DMA request (line [`UartConfig::rx_dma`]) is RXRDY (RM
-/// 41.5.1.2), so the eDMA's read of URB empties the holding register and lowers it.
+/// 41.5.1.2), so the eDMA's read of URB empties the holding register and lowers it. The transmit DMA request
+/// (line [`UartConfig::tx_dma`]) is UISR\[TXRDY\] (RM 41.5.1.2, RM Table 41-15): the transmitter is enabled and
+/// its holding register is free. UIMR does not mask it (UISR gives true status whatever UIMR holds, RM 41.3.10)
+/// and the UART has no DMA enable of its own: the eDMA's ERQ bit for the channel is the only gate (RM 41.5.1.1
+/// step 4, RM Table 19-6). A UTB write fills the holding register and clears TXRDY (RM 41.3.7), so the request
+/// drops inside that write, before the access returns: an eDMA serving it runs one minor loop per TXRDY and
+/// serves again when the character moves to the shift register (guess: the chip's request-to-acknowledge timing
+/// is not measured; a request left up across the write would put more characters into UTB than it holds).
 pub struct Uart {
     config: UartConfig,
     umr: [u8; 2],
@@ -363,6 +372,9 @@ impl Uart {
         if let Some(ch) = self.config.rx_dma {
             cx.dma.set(ch, self.rbr.is_some());
         }
+        if let Some(ch) = self.config.tx_dma {
+            cx.dma.set(ch, self.tx_on && self.holding.is_none());
+        }
     }
 
     fn arrive(&mut self, b: Option<u8>) {
@@ -431,23 +443,27 @@ impl Uart {
 
     /// Bring the transmitter to `cx.now`: move a held character into the shift register when it is due, and tell
     /// the peer.
-    fn catch_up(&mut self, cx: &mut DeviceCx) {
-        if let (Some(at), Some((b, _))) = (self.move_at(), self.holding)
-            && at <= cx.now
-        {
-            self.holding = None;
-            self.shift_end = at + self.config.ticks_per_byte;
-            if self.record {
-                self.sent.push((at, b));
-            }
-            if let Some(f) = &mut self.hook {
-                f(at, b);
-            }
-            if let Some(p) = &mut self.peer {
-                let tpb = self.config.ticks_per_byte;
-                p.transmitted(b, &mut Self::peer_cx(&mut self.rx_pending, tpb, at, cx));
-            }
+    /// Returns whether a character moved (TXRDY rose).
+    fn catch_up(&mut self, cx: &mut DeviceCx) -> bool {
+        let (Some(at), Some((b, _))) = (self.move_at(), self.holding) else {
+            return false;
+        };
+        if at > cx.now {
+            return false;
         }
+        self.holding = None;
+        self.shift_end = at + self.config.ticks_per_byte;
+        if self.record {
+            self.sent.push((at, b));
+        }
+        if let Some(f) = &mut self.hook {
+            f(at, b);
+        }
+        if let Some(p) = &mut self.peer {
+            let tpb = self.config.ticks_per_byte;
+            p.transmitted(b, &mut Self::peer_cx(&mut self.rx_pending, tpb, at, cx));
+        }
+        true
     }
 
     /// Refuse a mode register write selecting a mode this model leaves out.
@@ -477,7 +493,9 @@ impl Uart {
 
 impl Device for Uart {
     fn read(&mut self, offset: u32, _size: Size, cx: &mut DeviceCx) -> u32 {
-        self.catch_up(cx);
+        if self.catch_up(cx) {
+            self.drive(cx);
+        }
         let v = match offset {
             UMR => {
                 let i = usize::from(self.umr2);
