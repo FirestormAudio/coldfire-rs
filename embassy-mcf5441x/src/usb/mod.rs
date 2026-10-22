@@ -422,9 +422,11 @@ fn stale_check(i: usize, n: usize, is_in: bool) -> impl Fn() -> bool {
     move || RESET_SEQ.load(Relaxed) != reset || EP_SEQ[i].load(Relaxed) != ep || !enabled(n, is_in)
 }
 
+/// Whether endpoint `n` is configured. False until the controller runs: before `Bus::enable` opens the clock gate the
+/// controller's registers read all ones, which would show every endpoint as enabled.
 fn enabled(n: usize, is_in: bool) -> bool {
     let e = if is_in { epcr::TXE } else { epcr::RXE };
-    unsafe { r32(epcr_reg(n)) & e != 0 }
+    RUNNING.load(Relaxed) && unsafe { r32(epcr_reg(n)) & e != 0 }
 }
 
 /// Whether a host is attached (PORTSC1 CCS): it has seen the device on the bus. This says nothing about a program
@@ -860,6 +862,13 @@ impl embassy_usb_driver::ControlPipe for ControlPipe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_endpoint_is_disabled_until_the_controller_runs() {
+        // not running: no register is read (there is none on the host), and nothing reads as enabled
+        assert!(!RUNNING.load(Relaxed));
+        assert!(!enabled(1, false) && !enabled(1, true));
+    }
 
     #[test]
     fn config_defaults_to_mode_0x0a_at_level_6() {
