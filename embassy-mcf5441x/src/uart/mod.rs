@@ -96,6 +96,8 @@ pub(crate) const fn drain_spins(tx_was_on: bool) -> u32 {
 }
 
 const USR_ERRORS: u8 = 0x70;
+/// UMR1: RXRDY requests (RXIRQ 0), block error mode (ERR 1), no parity (PM 0b10), 8 bits (B/C 0b11).
+const UMR1: u8 = 0x33;
 
 pub(crate) mod sealed {
     pub trait Instance {
@@ -179,9 +181,10 @@ pub(crate) fn mux_rx<T: Instance, P: RxPin<T>>(_pin: &Peri<'_, P>) {
 }
 
 /// Ungate the UART and set the line up as proven on hardware: reset receiver, transmitter and mode pointer,
-/// both clocks from the bus (UCSR 0xDD), 8N1 (UMR1 0x13, UMR2 0x07), the divider, transmitter on. The receiver
+/// both clocks from the bus (UCSR 0xDD), 8N1 (UMR1 0x33, UMR2 0x07), the divider, transmitter on. The receiver
 /// stays off. If an earlier line setup left the transmitter on (a console on this port), waits (boundedly) for it
-/// to drain before resetting it.
+/// to drain before resetting it. Hardware ran UMR1 0x13, the same line with character error mode; block error
+/// mode (ERR) is from the RM.
 pub(crate) fn line_setup<T: Instance>(baud: u32) -> Result<(), ConfigError> {
     let d = divider(clocks::clocks().bus_hz, baud)?;
     clocks::ungate(T::GATE);
@@ -195,7 +198,10 @@ pub(crate) fn line_setup<T: Instance>(baud: u32) -> Result<(), ConfigError> {
     r.ucr().write_value(pac::uart0::regs::Ucr(0x30)); // reset transmitter
     r.ucr().write_value(pac::uart0::regs::Ucr(0x10)); // reset mode-register pointer
     r.ucsr().write_value(pac::uart0::regs::Ucsr(0xDD));
-    r.umr1().write_value(pac::uart0::regs::Umr1(0x13));
+    // guess: UMR1[ERR] = 1, block mode (RM 41.4.2.3): FE, PE and RB accumulate in USR until RESET ERROR STATUS
+    // (UCR 0x40, `take_error`). In character mode they belong to the character at the top of the FIFO, so receive
+    // DMA takes the status away with the character and the driver never sees a framing error.
+    r.umr1().write_value(pac::uart0::regs::Umr1(UMR1));
     r.umr2().write_value(pac::uart0::regs::Umr2(0x07));
     r.ubg1().write_value((d >> 8) as u8);
     r.ubg2().write_value(d as u8);
@@ -412,6 +418,14 @@ mod tests {
     fn the_blocking_receiver_is_an_embedded_io_reader() {
         fn r<T: embedded_io::Read>() {}
         r::<UartRx<'static>>();
+    }
+
+    #[test]
+    fn line_setup_is_8n1_with_receive_errors_in_block_mode() {
+        // guess: block mode is from the RM (41.4.2.3); hardware ran character mode (0x13)
+        assert_eq!(UMR1 & 0x20, 0x20, "ERR: errors stay in USR until RESET ERROR STATUS");
+        assert_eq!(UMR1 & 0x1F, 0x13, "no parity, 8 bits");
+        assert_eq!(UMR1 & 0xC0, 0, "no RTS control, RXRDY interrupt");
     }
 
     #[test]
