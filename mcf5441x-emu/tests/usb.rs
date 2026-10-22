@@ -729,3 +729,152 @@ fn take_writes_drains_and_record_off_logs_nothing() {
     assert_eq!(t.r(BURSTSIZE), 0x108, "the write still lands");
     assert!(t.dev().stats().writes.is_empty());
 }
+
+// the general-purpose timers (RM 24.3.2) ------------------------------------------------------------------------
+
+const GPTIMER0LD: u32 = 0x80;
+const GPTIMER0CTL: u32 = 0x84;
+const GPTIMER1LD: u32 = 0x88;
+const GPTIMER1CTL: u32 = 0x8C;
+const TI0: u32 = 1 << 24;
+const TI1: u32 = 1 << 25;
+const RUN_REPEAT: u32 = 0x8100_0000;
+
+impl Rig {
+    /// Idle the machine to `us` microseconds after tick 0.
+    fn at_us(&mut self, us: u64) {
+        assert!(self.m.idle_until(us * US).is_none());
+    }
+}
+
+#[test]
+fn gptimer_repeat_sets_ti0_every_period() {
+    let mut t = rig();
+    t.w(GPTIMER0LD, 0x270F);
+    t.w(GPTIMER0CTL, RUN_REPEAT);
+    t.at_us(9_999);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    t.at_us(10_000);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
+    t.w(USBSTS, TI0);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    t.at_us(19_999);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    t.at_us(20_000);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
+    assert_eq!(t.r(USBSTS) & TI1, 0);
+    t.w(USBSTS, TI0);
+    t.at_us(29_999);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    t.at_us(30_000);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
+}
+
+#[test]
+fn gptimer_one_shot_stops() {
+    let mut t = rig();
+    t.w(GPTIMER1LD, 99);
+    t.w(GPTIMER1CTL, 0x8000_0000);
+    t.at_us(100);
+    assert_eq!(t.r(USBSTS) & TI1, TI1);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    t.w(USBSTS, TI1);
+    t.at_us(1_000);
+    assert_eq!(t.r(USBSTS) & TI1, 0);
+    assert_eq!(t.r(GPTIMER1CTL), 0x8000_0000);
+    use mcf5441x_emu::Device;
+    assert_eq!(t.dev().next_event(), None);
+}
+
+#[test]
+fn gptimer_interrupt_with_tie0() {
+    let mut t = rig();
+    t.w(GPTIMER0LD, 49);
+    t.w(GPTIMER0CTL, RUN_REPEAT);
+    t.at_us(60);
+    assert!(!t.irq(), "TIE0 clear");
+    t.w(USBSTS, TI0);
+    t.w(USBINTR, TI0);
+    assert!(!t.irq());
+    let mut out = Vec::new();
+    use mcf5441x_emu::Device;
+    assert!(t.dev().wake_sources(&mut out));
+    assert_eq!(out, [(2, SOURCE)], "a running timer with TIE wakes STOP");
+    t.at_us(100);
+    assert!(t.irq());
+    t.w(USBSTS, TI0);
+    assert!(!t.irq());
+    // a stopped timer wakes nothing
+    t.w(GPTIMER0CTL, 0);
+    let mut out = Vec::new();
+    assert!(t.dev().wake_sources(&mut out));
+    assert!(out.is_empty());
+}
+
+#[test]
+fn gptimer_count_reads_the_remaining_us() {
+    let mut t = rig();
+    t.w(GPTIMER0LD, 1_000);
+    assert_eq!(t.r(GPTIMER0LD), 1_000);
+    // guess: GPTLD loads the count while the timer is stopped
+    assert_eq!(t.r(GPTIMER0CTL), 1_000);
+    t.w(GPTIMER0CTL, 0x8000_0000);
+    t.at_us(250);
+    assert_eq!(t.r(GPTIMER0CTL), 0x8000_0000 | 750);
+    // clearing RUN holds the count; setting it continues from there
+    t.w(GPTIMER0CTL, 0);
+    t.at_us(400);
+    assert_eq!(t.r(GPTIMER0CTL), 750);
+    t.w(GPTIMER0CTL, 0x8000_0000);
+    t.at_us(500);
+    assert_eq!(t.r(GPTIMER0CTL), 0x8000_0000 | 650);
+    t.at_us(1_149);
+    assert_eq!(t.r(GPTIMER0CTL), 0x8000_0000 | 1);
+    t.at_us(1_150);
+    assert_eq!(t.r(GPTIMER0CTL) & 0xFF_FFFF, 0);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    t.at_us(1_151);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
+    assert_eq!(t.r(GPTIMER0CTL) & 0xFF_FFFF, 0);
+}
+
+#[test]
+fn gptimer_reset_reloads() {
+    let mut t = rig();
+    t.w(GPTIMER0LD, 1_000);
+    t.w(GPTIMER0CTL, RUN_REPEAT);
+    t.at_us(600);
+    t.w(GPTIMER0CTL, RUN_REPEAT | 1 << 30);
+    assert_eq!(
+        t.r(GPTIMER0CTL),
+        RUN_REPEAT | 1_000,
+        "RST reads 0 and reloads"
+    );
+    t.at_us(1_500);
+    assert_eq!(t.r(USBSTS) & TI0, 0, "the period restarted at the reset");
+    assert_eq!(t.r(GPTIMER0CTL), RUN_REPEAT | 100);
+    t.at_us(1_601);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
+    // a controller reset clears the timers
+    t.w(USBCMD, 2);
+    assert_eq!(t.r(GPTIMER0LD), 0);
+    assert_eq!(t.r(GPTIMER0CTL), 0);
+}
+
+#[test]
+fn gptimer_gate_holds_the_count() {
+    let mut t = rig();
+    t.m.set_clock_gate(t.usb, Some(44));
+    t.w(GPTIMER0LD, 999);
+    t.w(GPTIMER0CTL, 0x8000_0000);
+    t.at_us(500);
+    t.m.set_clock_gates(1 << 44);
+    t.at_us(5_000);
+    t.m.set_clock_gates(0);
+    // guess: closed for 4500 µs, the count resumes where it stopped
+    assert_eq!(t.r(GPTIMER0CTL), 0x8000_0000 | 499);
+    t.at_us(5_499);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    t.at_us(5_500);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
+}

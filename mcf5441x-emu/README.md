@@ -163,8 +163,8 @@ module's gate is closed:
 - a read of it returns all ones at every size, for the core and for bus masters alike (measured on an MCF54415);
 - a write to it is dropped (measured on an MCF54415);
 - its events are held: it is not advanced or serviced, and it lists no wake sources; the PIT, the DMA timers, the
-  SSI and the eSDHC stop their clocks and continue where they stopped when the gate opens, while the other models
-  with events (the UARTs, USB) catch up when it opens (guess: not measured);
+  USB OTG's general-purpose timers, the SSI and the eSDHC stop their clocks and continue where they stopped when the gate opens, while the other models
+  with events (the UARTs, the USB host script and detach) catch up when it opens (guess: not measured);
 - its interrupt and DMA request lines stay as it left them (guess: not measured), and an interrupt controller's
   requests still reach the core.
 
@@ -221,7 +221,9 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   [`Emmc`](parts::Emmc) (read-only) behind it; the reset values and the RSTA/RSTD behaviour measured on an MCF54415.
 - **USB OTG** (RM ch. 24): device mode with dQHs and dTDs in memory, endpoints 0-3, and host primitives (setup, IN
   and OUT packets, bus resets, scripts on the machine's clock). A high-speed IN of more than 64 bytes from the DDR
-  window (0x4000_0000-0x7FFF_FFFF) never completes (measured on an MCF54415); from SRAM it does.
+  window (0x4000_0000-0x7FFF_FFFF) never completes (measured on an MCF54415); from SRAM it does. The two
+  general-purpose timers (GPTIMER0/1LD and CTL) count down in microseconds, set USBSTS[TI0/TI1] at zero and
+  interrupt with USBINTR[TIE0/TIE1]; they are event driven and stop with the clock gate (guess: not measured).
 - **DDR controller** (RM ch. 21): the registers, with the reset values and the INTSTATUS after START measured on an
   MCF54415; the DDR itself is RAM. `Ddrmc::set_init_completes(false)` models a DRAM that never finishes initializing.
 - **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, locked unless the host says otherwise

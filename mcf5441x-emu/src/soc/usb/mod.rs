@@ -19,6 +19,9 @@ const HWHOST: u32 = 0x008;
 const HWDEVICE: u32 = 0x00C;
 const HWTXBUF: u32 = 0x010;
 const HWRXBUF: u32 = 0x014;
+/// GPTIMER0LD, GPTIMER0CTL, GPTIMER1LD, GPTIMER1CTL (RM 24.3.2).
+const GPTIMER0LD: u32 = 0x080;
+const GPTIMER1CTL: u32 = 0x08C;
 const CAPLENGTH: u32 = 0x100;
 const HCSPARAMS: u32 = 0x104;
 const HCCPARAMS: u32 = 0x108;
@@ -82,6 +85,14 @@ const URI: u32 = 1 << 6;
 /// The write-1-to-clear status bits, which USBINTR enables.
 const STS_W1C: u32 = 0x0301_05FF;
 
+/// GPTIMERnCTL (RM Table 24-12) and the timers' interrupt bits in USBSTS (TI0, TI1; the enables TIE0, TIE1 are the
+/// same bits of USBINTR).
+const GPT_RUN: u32 = 1 << 31;
+const GPT_RST: u32 = 1 << 30;
+const GPT_MODE: u32 = 1 << 24;
+const GPT_COUNT: u32 = 0x00FF_FFFF;
+const TI0: u32 = 1 << 24;
+
 /// PORTSC1 (RM Table 24-33).
 const CCS: u32 = 1 << 0;
 const PR: u32 = 1 << 8;
@@ -139,6 +150,60 @@ pub struct UsbConfig {
     /// The memory a high-speed IN packet of more than 64 bytes cannot stream from (see [`UsbOtg`]); `None` when
     /// every memory keeps up.
     pub slow_memory: Option<Range<u32>>,
+}
+
+/// One general-purpose timer (RM 24.3.2): the count at the tick `anchor`, counting down in microseconds.
+#[derive(Debug, Clone, Default)]
+struct GpTimer {
+    ld: u32,
+    run: bool,
+    repeat: bool,
+    /// The count at `anchor`.
+    count: u32,
+    anchor: u64,
+    /// The tick of the next expiry while counting.
+    deadline: Option<u64>,
+}
+
+impl GpTimer {
+    /// The microseconds left at `now`.
+    fn count_at(&self, now: u64, tpu: u64) -> u32 {
+        match self.deadline {
+            Some(_) => {
+                let gone = now.saturating_sub(self.anchor) / tpu;
+                u64::from(self.count).saturating_sub(gone) as u32
+            }
+            None => self.count,
+        }
+    }
+
+    /// Count from `count` µs at `now`.
+    fn start(&mut self, count: u32, now: u64, tpu: u64) {
+        self.count = count;
+        self.anchor = now;
+        self.deadline = Some(now + (u64::from(count) + 1) * tpu);
+    }
+
+    /// Take the expiries due at `now`; whether there was one.
+    fn expire(&mut self, now: u64, tpu: u64) -> bool {
+        let Some(d) = self.deadline.filter(|&d| d <= now) else {
+            return false;
+        };
+        if self.repeat {
+            let period = (u64::from(self.ld) + 1) * tpu;
+            self.anchor = d + (now - d) / period * period;
+            self.count = self.ld;
+            self.deadline = Some(self.anchor + period);
+        } else {
+            self.count = 0;
+            self.deadline = None;
+        }
+        true
+    }
+
+    fn ctl(&self, now: u64, tpu: u64) -> u32 {
+        u32::from(self.run) << 31 | u32::from(self.repeat) << 24 | self.count_at(now, tpu)
+    }
 }
 
 /// What the device answers a host packet with.
@@ -250,9 +315,25 @@ pub struct UsbStats {
 ///   BSV, BSE and BSVIS follow [`UsbOtg::vbus`].
 /// - EPSETUPSR, EPCOMPLETE: write 1 to clear. EPSR: the primed endpoints. EPPRIME and EPFLUSH act and read 0.
 /// - EPCR0-EPCR3 (0x0080_0080, 0...): stored; TXR and RXR read 0. EPCR0 is always control and enabled.
-/// - FRINDEX, the GPTIMERs, ULPI_VIEWPORT and the rest of the window read 0 and ignore writes.
+/// - GPTIMER0LD/GPTIMER1LD (0x80, 0x88): the 24-bit load value, minus 1 in microseconds. GPTIMER0CTL/GPTIMER1CTL
+///   (0x84, 0x8C): RUN (31), RST (30, self-clearing, reads 0), MODE (24, 1 = repeat) and GPTCNT (23:0), which
+///   reads the microseconds left. See the timers below.
+/// - FRINDEX, ULPI_VIEWPORT and the rest of the window read 0 and ignore writes.
 ///
 /// The interrupt request is asserted while USBSTS and USBINTR share a bit, or an OTGSC status bit is enabled.
+///
+/// The general-purpose timers count down in microseconds ([`UsbConfig::ticks_per_us`] ticks each) from GPTLD to 0
+/// and expire one microsecond later, so a period is GPTLD + 1 µs (a load of 9999 is 10 ms). An expiry sets
+/// USBSTS\[TI0\] or \[TI1\] (write 1 to clear), which interrupts while USBINTR\[TIE0\] or \[TIE1\] is set. In
+/// repeat mode the count reloads from GPTLD and goes on; in one-shot mode it stays 0 and the timer stops (RUN
+/// reads as written). RST reloads the count and, with RUN, restarts the period; setting RUN restarts the period
+/// from the count the timer holds; clearing RUN holds the count. The timers are event driven
+/// ([`Device::next_event`]): nothing steps per tick. They are part of the controller's reset. While the clock gate
+/// is closed ([`Device::gate`]) the count stops and resumes where it stopped.
+/// - guess: writing GPTLD while the timer is not running loads the count (so GPTLD then RUN counts GPTLD without
+///   RST); while it runs, the new GPTLD applies at the next reload.
+/// - guess: the expiry comes GPTLD + 1 µs after the load (the count reads 0 for the last microsecond).
+/// - guess: setting RUN again after a one-shot expiry, without RST, expires again 1 µs later.
 ///
 /// Endpoints 0-3. dQH(ep, dir) is at EPLISTADDR + 64 × (2 × ep + dir) (dir 1 = IN), dTDs are 32 bytes (RM 24.5.2),
 /// as big-endian words; the setup buffer at dQH(0, OUT) + 0x28 holds the 8 bytes little-endian within each word.
@@ -271,7 +352,7 @@ pub struct UsbStats {
 /// bit-stuff error (RM Table 24-55) the controller retries without retiring the dTD.
 ///
 /// Not modelled: host mode, isochronous endpoints, data toggles, SOF and FRINDEX, suspend and resume, the ATDTW
-/// tripwire, the NAK registers, the GPTIMERs, TXFILLTUNING and the ULPI viewport. These halt the run with
+/// tripwire, the NAK registers, TXFILLTUNING and the ULPI viewport. These halt the run with
 /// [`Stop::Unmodelled`] (refused when a register access reaches them): an IN dQH without ZLT (automatic zero-length
 /// packets), a data-endpoint IN with packets over 64 bytes at full speed (64 is bulk's limit), and a DMA access that
 /// fails (the RM's system error for it is not modelled).
@@ -290,6 +371,9 @@ pub struct UsbOtg {
     epsr: u32,
     complete: u32,
     epcr: [u32; ENDPOINTS],
+    timers: [GpTimer; 2],
+    /// The tick the clock gate closed, while it is closed.
+    gated_at: Option<u64>,
     /// A bus reset is in progress (between `bus_reset_start` and `bus_reset_end`).
     in_reset: bool,
     /// The driver flushed the endpoints during the bus reset.
@@ -338,6 +422,8 @@ impl UsbOtg {
             epsr: 0,
             complete: 0,
             epcr: [EPCR0_RESET, 0, 0, 0],
+            timers: Default::default(),
+            gated_at: None,
             in_reset: false,
             reset_acked: false,
             detach_at: None,
@@ -779,11 +865,19 @@ impl UsbOtg {
         Ok(Token::Ack)
     }
 
-    fn read32(&self, off: u32) -> u32 {
+    fn read32(&self, off: u32, now: u64) -> u32 {
         if let Some(&(_, v)) = CONSTANTS.iter().find(|&&(o, _)| o == off) {
             return v;
         }
         match off {
+            GPTIMER0LD..=GPTIMER1CTL => {
+                let (n, t) = (((off - GPTIMER0LD) / 8) as usize, self.tpu());
+                if off & 4 == 0 {
+                    self.timers[n].ld
+                } else {
+                    self.timers[n].ctl(now, t)
+                }
+            }
             USBCMD => self.usbcmd,
             USBSTS => self.usbsts,
             USBINTR => self.usbintr,
@@ -803,6 +897,7 @@ impl UsbOtg {
 
     fn write32(&mut self, off: u32, v: u32, cx: &mut DeviceCx) -> Result<(), String> {
         match off {
+            GPTIMER0LD..=GPTIMER1CTL => self.write_gptimer(off, v, cx.now),
             USBCMD => return self.write_usbcmd(v, cx.now),
             USBSTS => self.usbsts &= !(v & STS_W1C),
             USBINTR => self.usbintr = v,
@@ -860,6 +955,42 @@ impl UsbOtg {
         Ok(())
     }
 
+    /// Ticks per microsecond, at least 1.
+    fn tpu(&self) -> u64 {
+        self.config.ticks_per_us.max(1)
+    }
+
+    fn write_gptimer(&mut self, off: u32, v: u32, now: u64) {
+        let (n, tpu) = (((off - GPTIMER0LD) / 8) as usize, self.tpu());
+        let t = &mut self.timers[n];
+        let was = t.count_at(now, tpu);
+        if off & 4 == 0 {
+            t.ld = v & GPT_COUNT;
+            if !t.run {
+                t.count = t.ld; // guess: loading GPTLD loads the count while stopped
+            }
+            return;
+        }
+        let run = v & GPT_RUN != 0;
+        let rising = run && !t.run;
+        t.repeat = v & GPT_MODE != 0;
+        if v & GPT_RST != 0 {
+            t.count = t.ld;
+            t.deadline = None;
+        } else if t.deadline.is_some() {
+            t.count = was; // the count so far, from here
+            t.anchor = now;
+        }
+        t.run = run;
+        if !run {
+            t.deadline = None;
+        } else if v & GPT_RST != 0 || rising {
+            // guess: RUN rising continues from the count the timer holds
+            let from = if v & GPT_RST != 0 { t.count } else { was };
+            t.start(from, now, tpu);
+        }
+    }
+
     fn write_usbcmd(&mut self, v: u32, now: u64) -> Result<(), String> {
         if v & RST != 0 {
             self.stats.resets += 1;
@@ -904,7 +1035,7 @@ impl Device for UsbOtg {
             return 0;
         }
         self.settle(cx.now);
-        self.read32(offset & !3) >> (8 * (4 - n - lane))
+        self.read32(offset & !3, cx.now) >> (8 * (4 - n - lane))
     }
 
     fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx) {
@@ -930,10 +1061,22 @@ impl Device for UsbOtg {
     }
 
     fn next_event(&self) -> Option<u64> {
-        self.next
+        let timers = self.timers.iter().filter_map(|t| t.deadline);
+        timers.chain(self.next).min()
     }
 
     fn advance(&mut self, now: u64, cx: &mut DeviceCx) {
+        let tpu = self.tpu();
+        let mut fired = false;
+        for (i, t) in self.timers.iter_mut().enumerate() {
+            if t.expire(now, tpu) {
+                self.usbsts |= TI0 << i;
+                fired = true;
+            }
+        }
+        if fired {
+            self.signal(cx);
+        }
         if self.next.is_none_or(|t| now < t) {
             return;
         }
@@ -969,9 +1112,28 @@ impl Device for UsbOtg {
         false
     }
 
-    /// The USB interrupt while a host script runs: nothing else raises it by itself.
+    // guess: a gated controller's timers stop counting and resume where they stopped (not measured).
+    fn gate(&mut self, closed: bool, now: u64) {
+        if closed {
+            self.gated_at = Some(now);
+        } else if let Some(at) = self.gated_at.take() {
+            let d = now.saturating_sub(at);
+            for t in &mut self.timers {
+                t.anchor += d;
+                t.deadline = t.deadline.map(|x| x + d);
+            }
+        }
+    }
+
+    /// The USB interrupt while a host script runs or a timer with its enable counts: nothing else raises it by
+    /// itself.
     fn wake_sources(&self, out: &mut Vec<(usize, u8)>) -> bool {
-        if self.script.is_some() {
+        let timer = self
+            .timers
+            .iter()
+            .enumerate()
+            .any(|(i, t)| t.deadline.is_some() && self.usbintr & TI0 << i != 0);
+        if self.script.is_some() || timer {
             out.push((self.config.controller, self.config.source));
         }
         true
