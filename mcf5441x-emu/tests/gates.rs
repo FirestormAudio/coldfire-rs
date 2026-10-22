@@ -1,9 +1,9 @@
 //! The clock gates (RM 9.2.2-9.2.4): PPMSR0/1, PPMCR0/1, PPMHR0/1 and PPMLR0/1 in the SCM, and what a gated module
-//! does. A gated module reading all ones and the reset values are measured on an MCF54415; a gated module dropping
-//! writes and holding its events are guesses.
+//! does. A gated module reading all ones at every size, dropping writes, and the reset values are measured on an
+//! MCF54415; a gated module holding its events and keeping its lines are guesses.
 
 use mcf5441x_emu::soc::{Chip, ChipOptions, Gates, Mcf5441x, Pit, StubBlock};
-use mcf5441x_emu::{Machine, Size};
+use mcf5441x_emu::{Limit, Machine, Size, Stop};
 
 const DDR: u32 = 0x4000_0000;
 
@@ -63,8 +63,8 @@ fn registers(m: &mut Machine) -> [u32; 4] {
 
 #[test]
 fn a_gated_module_reads_all_ones() {
-    // measured on an MCF54415: SSI1 (and the eSDHC, the DDR controller) after reset, and DMA timer 2 under a boot
-    // chain, read all ones at every size
+    // measured on an MCF54415: SSI1 after reset reads all ones at long, word and byte size; the eSDHC and the DDR
+    // controller after reset, and DMA timer 2 under a boot chain, read all ones
     let (mut m, _) = chip(Gates::Reset);
     for addr in [SSI_CR, SSI_FCSR, SSI1 + 0x3FFC] {
         assert_eq!(r(&mut m, addr, Size::Long), 0xFFFF_FFFF, "{addr:#x}");
@@ -94,11 +94,12 @@ fn opening_the_gate_through_ppmcr0_gives_reset_values() {
 }
 
 #[test]
-fn writes_to_a_gated_module_are_dropped_guess() {
-    // guess: a write to a gated module is dropped (not measured)
+fn writes_to_a_gated_module_are_dropped() {
+    // measured on an MCF54415: CR written 3 while SSI1 was gated reads 0 once the gate is open
     let (mut m, _) = chip(Gates::Reset);
     w(&mut m, SSI_IER, Size::Long, 0);
     w(&mut m, SSI_FCSR, Size::Long, 0x0044_0044);
+    w(&mut m, SSI_CR, Size::Long, 3);
     // a write the model would refuse never reaches it
     w(&mut m, SSI_CR, Size::Long, 0xFFFF_FFFF);
     w(&mut m, DMA_TIMER_2, Size::Long, 1);
@@ -194,7 +195,7 @@ fn ppmsr_and_ppmcr_set_and_clear_one_or_all() {
         [0xABCD, 0x5C, !(1 << 4 | 1 << 31), 0x1234_5678]
     );
     assert_eq!(r(&mut m, PPMLR1 + 1, Size::Byte), 0x34);
-    // a longword write at +0x2C is a PPMSR0, PPMCR0, PPMSR1 and PPMCR1 write, in that order
+    // guess: a longword write at +0x2C is a PPMSR0, PPMCR0, PPMSR1 and PPMCR1 write, in that order (not measured)
     w(&mut m, PPMSR0, Size::Long, 0x0102_4040);
     assert_eq!(chip.gates(&m), [0xABCD, 0x5A, 0, 0]);
 }
@@ -244,4 +245,26 @@ fn a_gated_module_keeps_its_lines_guess() {
     w(&mut m, PPMCR0, Size::Byte, PIT0_CD);
     w(&mut m, PCSR, Size::Word, EN | RLD | 0x08 | 0x04);
     assert_eq!(m.mem.irq_lines().asserted(2) & pif, 0);
+}
+
+#[test]
+fn a_gated_interrupt_controller_still_delivers_guess() {
+    // guess: an interrupt controller whose gate is closed still delivers its requests; only its registers are
+    // gated (not measured)
+    const INTC2: u32 = 0xFC05_0000;
+    let (mut m, _) = chip(Gates::Open);
+    w(&mut m, INTC2 + 0x40 + 13, Size::Byte, 3); // ICR13: level 3
+    w(&mut m, INTC2 + 0x0C, Size::Long, !(1 << 13 | 1)); // IMRL: source 13 and MASKALL clear
+    w(&mut m, PPMSR0, Size::Byte, 20); // INTC2: CD20 (RM Table 9-6)
+    assert_eq!(r(&mut m, INTC2 + 0x0C, Size::Long), 0xFFFF_FFFF);
+    m.mem.irq_lines_mut().set(2, 13, true);
+    m.mem.load(DDR, &[0x4E, 0x71, 0x4E, 0x71]).unwrap(); // nop; nop
+    m.cpu.pc = DDR;
+    m.cpu.set_sr(0x2000);
+    m.policy.stop_on[205] = true; // INTC2 source 13
+    let stop = m.run(Limit {
+        max_instructions: Some(2),
+        ..Limit::default()
+    });
+    assert_eq!(stop.kind, Stop::Exception(205), "{stop:?}");
 }

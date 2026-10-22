@@ -43,6 +43,7 @@ pub fn gates([hr0, lr0, hr1, lr1]: [u32; 4]) -> u128 {
 ///
 /// Accesses address bytes: a word or longword access covers the registers of each of its bytes, in address order
 /// (a longword write at +0x2C is a PPMSR0, PPMCR0, PPMSR1 and PPMCR1 write).
+// guess: a word or longword write over PPMSRn and PPMCRn acts as its byte writes in address order (not measured).
 // guess: every bit of PPM{H,L}Rn is stored, the reserved ones too; RM Figures 9-4 to 9-7 show some reserved bits as
 // fixed, which is not modelled (not measured).
 #[derive(Debug, Default)]

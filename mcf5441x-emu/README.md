@@ -87,7 +87,8 @@ eSDHC's data latency and CMD6 busy time), and the clock gates at the start. Noth
 frequency. `ChipOptions::default()` is the chip with nothing on it (no parts, the PLL values of the default reset
 configuration, UARTs with no character time (0 ticks: sending and receiving are instant), one tick per frame and
 microsecond, every clock gate open); the `with_nor`, `with_card`, `with_nand`, `with_pll`, `with_uart_ticks`,
-`with_ssi_ticks`, `with_usb_ticks_per_us`, `with_sd_timing` and `with_gates` builders change one part of it. `Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
+`with_ssi_ticks`, `with_usb_ticks_per_us`, `with_sd_timing` and `with_gates` builders change one part of it.
+`Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
 
 ```
 use mcf5441x_emu::Machine;
@@ -157,8 +158,8 @@ PPMCR0/1 set and clear one CDn bit, or all of them with SAMCD and CAMCD, and PPM
 to its gate; the SCM, the crossbar switch, the global IACK slot and RGPIO have none, and neither has RAM. While a
 module's gate is closed:
 
-- a read of it returns all ones at every size (measured on an MCF54415), for the core and for bus masters alike;
-- a write to it is dropped (guess: not measured);
+- a read of it returns all ones at every size, for the core and for bus masters alike (measured on an MCF54415);
+- a write to it is dropped (measured on an MCF54415);
 - its events are held: it is not advanced or serviced, and it lists no wake sources; the PIT, the SSI and the eSDHC
   stop their clocks and continue where they stopped when the gate opens, while the other models with events (the
   UARTs, USB) catch up when it opens (guess: not measured);

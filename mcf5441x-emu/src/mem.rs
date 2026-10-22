@@ -361,9 +361,8 @@ impl Space {
     }
 
     /// An access to device `i` at `off`, as [`Space::call`]: the value read (0 for a write) and whether the
-    /// device's reads are poll-counted. A gated device is not called: a read returns all ones (measured on an
-    /// MCF54415) and is poll-counted, and a write is dropped.
-    // guess: a write to a module whose clock is gated is dropped (not measured).
+    /// device's reads are poll-counted. A gated device is not called: a read returns all ones at every size and a
+    /// write is dropped (both measured on an MCF54415); the read is poll-counted.
     pub(crate) fn access(
         &mut self,
         i: usize,
@@ -751,8 +750,9 @@ impl Memory {
 
     /// Tie device `id` to clock gate `gate` (0-127), or to none (the default: never gated). While its gate is
     /// closed the device is *gated*: an access to it reads all ones or is dropped without calling it, and its
-    /// events are held (see [`Device::gate`]). Calls from the host ([`Machine::with_device`](crate::Machine::with_device),
-    /// [`Memory::device_mut`]) still reach it. Panics when `gate` is above 127.
+    /// events are held (see [`Device::gate`]). Calls from the host
+    /// ([`Machine::with_device`](crate::Machine::with_device), [`Memory::device_mut`]) still reach it. Panics when
+    /// `gate` is above 127.
     pub fn set_clock_gate(&mut self, id: DeviceId, gate: Option<u8>) {
         self.horizon = 0;
         self.space.devices.set_gate(id.0, gate, self.now);

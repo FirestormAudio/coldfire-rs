@@ -168,8 +168,8 @@ const CLOCK_GATES: [(&str, u32, u8); 58] = [
 /// gives PPMHR0 0x7E1E_FBFF: the chip also has CD56 and CD55 set. A power-on reset was not measured.
 pub const RESET_GATES: [u32; 4] = [0x7F9E_FBFF, 0xFFDE_F300, 0xFFFF_FFCF, 0x3F00_C0F4];
 
-/// The clock gates [`Mcf5441x::build`] starts with (RM 9.2.4): a gated module reads all ones at every size
-/// (measured on an MCF54415), a write to it is dropped and it neither counts nor raises anything (guess: not
+/// The clock gates [`Mcf5441x::build`] starts with (RM 9.2.4): a gated module reads all ones at every size and a
+/// write to it is dropped (both measured on an MCF54415); it neither counts nor raises anything (guess: not
 /// measured; see [`Device::gate`](crate::Device::gate)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Gates {
@@ -403,10 +403,13 @@ impl Chip {
 ///
 /// Clock gates (RM 9.2.4): every module in a peripheral slot with a CDn bit (RM Tables 9-5 to 9-8) is tied to its
 /// gate, `64 s + n` for CDn of PPM{H,L}R`s` ([`Machine::set_clock_gate`]); the SCM, the crossbar switch, the
-/// global IACK slot and RGPIO have none. While a module's gate is closed, it reads all ones at every size (measured
-/// on an MCF54415), and a write to it is dropped and its events are held, its lines kept as they were (guess: not
-/// measured). [`ChipOptions::gates`] sets the gates at the start: by default all open, not the reset state. Every other module of RM Table 1-3 and Table 1-4 is an [`Unmodelled`] block over its 16 KB slot,
-/// named as the table names it, and so is RGPIO at 0x8C00_0000-0x8FFF_FFFF: an access stops the run with
+/// global IACK slot and RGPIO have none. While a module's gate is closed, it reads all ones at every size and a
+/// write to it is dropped (both measured on an MCF54415); its events are held and its lines kept as they were
+/// (guess: not measured). [`ChipOptions::gates`] sets the gates at the start: by default all open, not the reset
+/// state.
+///
+/// Every other module of RM Table 1-3 and Table 1-4 is an [`Unmodelled`] block over its 16 KB slot, named as the
+/// table names it, and so is RGPIO at 0x8C00_0000-0x8FFF_FFFF: an access stops the run with
 /// [`Stop::Unmodelled`](crate::Stop::Unmodelled) and the detail `"<module> +<offset>"`.
 ///
 /// The interrupt sources the models leave unwired are not driven: SSI, DSPI and NFC raise no interrupts (their
