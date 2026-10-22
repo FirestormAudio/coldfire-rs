@@ -209,9 +209,10 @@ impl SpiNor {
         self.record = on;
     }
 
-    /// Latch the E_ERR, P_ERR and WIP bits of status register 1 as `sr` gives them, as a failed program or erase
-    /// before the run would have left them: they read set until CLSR. The other bits of `sr` are ignored (WEL is
-    /// WREN's and WRDI's). Status reads that see WIP after a successful program or erase
+    /// Replace the latched E_ERR, P_ERR and WIP bits of status register 1 with those of `sr`, as a failed program
+    /// or erase before the run would have left them: bits set read set until CLSR, and bits clear are cleared (so
+    /// `set_status(0)` clears an error the part latched itself, as CLSR would). The other bits of `sr` are ignored
+    /// (WEL is WREN's and WRDI's). Status reads that see WIP after a successful program or erase
     /// ([`NorFaults::busy_polls`]) are not changed.
     pub fn set_status(&mut self, sr: u8) {
         self.status = sr & (E_ERR | P_ERR | WIP);

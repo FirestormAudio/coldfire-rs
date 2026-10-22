@@ -70,7 +70,9 @@ pub struct Limit {
     /// complete, PC stays on it and the registers are as before it, as for a refused device access (an access the
     /// same instruction made before it, such as the read of a read-modify-write when `kind` is
     /// [`AccessKind::Write`], or an earlier register of a MOVEM, stands). The detail names the access and its
-    /// address. Instruction fetches, bus masters and the host's accesses are not watched. `len` 0 watches
-    /// nothing; a range past the end of the address space stops there. `None` (the default) costs nothing.
+    /// address. Instruction fetches and decoding, bus masters, the host's accesses and accesses through a mirror
+    /// of the range's RAM ([`Memory::map_mirror`](crate::Memory::map_mirror)) are not watched. `len` 0 watches
+    /// nothing; a range past the end of the address space stops there. The watch lasts for its run only: between
+    /// runs every access sees the range as it is. `None` (the default) costs nothing.
     pub until_access: Option<(u32, u32, AccessKind)>,
 }

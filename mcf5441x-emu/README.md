@@ -72,12 +72,13 @@ the chip's peripherals ([Peripherals](#peripherals)) and the board's own:
 
 `Machine::run(Limit)` returns a [`StopReason`] with a [`Stop`] kind, the program counter and a detail string.
 A [`Limit`] bounds a run by `until_pc` and `max_instructions`; `set_time_limit` bounds it by the clock. `until_access`
-is an access breakpoint: `(base, len, AccessKind::Read | Write | Any)` stops the run before the first operand access
-of the core (or stacking by an exception) that touches the range, RAM or device, leaving the instruction as a faulting
-one is; without it RAM accesses cost what they did. Stops include `UntilPc`, `UntilAccess`, `InstructionLimit`,
-`TimeLimit`, `HaltedForever` (STOP with nothing that can wake the core), `Illegal`, `Unmapped`, `Poll`, `Unmodelled`,
-`Exception(vector)` and `Halt(reason)`. A faulting instruction does not complete: PC stays on it, and a later run can
-resume.
+is an access breakpoint for one run: `(base, len, AccessKind::Read | Write | Any)` stops it before the first operand
+access of the core (or an exception's stacking or vector fetch) that touches the range, RAM or device, leaving the
+instruction as a faulting one is. Instruction fetch and decoding, bus masters, the host's accesses and accesses
+through a mirror of the range's RAM are not watched; without a breakpoint RAM accesses cost what they did. Stops
+include `UntilPc`, `UntilAccess`, `InstructionLimit`, `TimeLimit`, `HaltedForever` (STOP with nothing that can wake
+the core), `Illegal`, `Unmapped`, `Poll`, `Unmodelled`, `Exception(vector)` and `Halt(reason)`. A faulting instruction
+does not complete: PC stays on it, and a later run can resume.
 
 For debugging a board model: `m.mem.trace(true)` records device accesses (`take_trace`), a poll detector stops a loop
 that reads one device register over and over with no write in between (`set_poll_limit`), and `m.profile(true)` counts

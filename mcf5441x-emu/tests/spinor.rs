@@ -285,3 +285,17 @@ fn a_latched_nor_error_reads_until_clsr() {
     cmd(&mut nor, &[0x30]);
     assert_eq!(rdsr(&mut nor), 0x00);
 }
+
+#[test]
+fn set_status_replaces_the_latched_bits() {
+    // The latch is set to what is given, not ORed into: an error the part latched itself is cleared by 0.
+    let mut nor = nor256();
+    nor.faults().fail_program.insert(0x200);
+    cmd(&mut nor, &[0x06]);
+    cmd(&mut nor, &with(0x02, &a3(0x200), &[0x00]));
+    assert_eq!(rdsr(&mut nor), 0x41);
+    nor.set_status(0x20);
+    assert_eq!(rdsr(&mut nor), 0x20, "P_ERR replaced by E_ERR");
+    nor.set_status(0);
+    assert_eq!(rdsr(&mut nor), 0x00);
+}

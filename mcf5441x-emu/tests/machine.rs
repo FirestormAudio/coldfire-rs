@@ -317,3 +317,24 @@ fn until_access_on_ram() {
     let r = m.run(watching(l[1], w + 7, 0, AccessKind::Any));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
 }
+
+#[test]
+fn the_access_breakpoint_ends_with_its_run() {
+    // After a watched run, whether it stopped at the watch or not, the core's accesses between runs and the next run
+    // without a watch see the watched bytes as RAM.
+    let w = common::MEM + 0x1000;
+    let (mut m, l) = prepare("at: move.l %d0,(%a1)\nend: nop", &["at", "end"]);
+    m.cpu.a[1] = w;
+    m.cpu.d[0] = 0x1234_5678;
+    let r = m.run(watching(l[0], w, 4, AccessKind::Any));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.mem.write(w, Size::Long, 0xA5A5_A5A5), Ok(()));
+    assert_eq!(m.mem.read(w, Size::Long), Ok(0xA5A5_A5A5));
+    let r = m.run(watching(l[1], w, 4, AccessKind::Any));
+    assert_eq!((r.kind, r.pc), (Stop::UntilAccess, l[0]), "{r:?}");
+    assert_eq!(m.mem.read(w, Size::Long), Ok(0xA5A5_A5A5));
+    assert_eq!(m.mem.write(w + 2, Size::Word, 0x0101), Ok(()));
+    let r = m.run(until(l[1]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.mem.read(w, Size::Long), Ok(0x1234_5678));
+}

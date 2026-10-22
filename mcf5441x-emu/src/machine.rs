@@ -350,9 +350,11 @@ impl Machine {
             .map_or(u64::MAX, |n| self.instructions.saturating_add(n))
     }
 
-    /// End a run: a halt asked for by an access that then faulted is dropped.
+    /// End a run: a halt asked for by an access that then faulted is dropped, and the access breakpoint is
+    /// removed, so that accesses between runs see the watched bytes as they are.
     fn end(&mut self) {
         self.mem.stop = None;
+        self.mem.set_watch(None);
     }
 
     /// At the horizon: drop the blocks over written code, then service the machine, then drop the blocks over
