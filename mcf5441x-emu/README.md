@@ -78,17 +78,17 @@ block entries (`take_profile`).
 ## Peripherals
 
 [`Mcf5441x::build`](soc::Mcf5441x::build) maps the chip's modules into a machine at their RM addresses (RM Table 1-3,
-Table 1-4), each wired to its interrupt source (RM Table 17-15, Table 17-16, Table 17-17) and DMA request line (RM
-Table 19-6), and returns their ids in a [`Chip`](soc::Chip). What the chip does not decide comes from
+Table 1-4), each wired to its interrupt source (RM Table 17-15, Table 17-16, Table 17-17) and DMA request line (RM Table
+19-6), and returns their ids in a [`Chip`](soc::Chip). What the chip does not decide comes from
 [`ChipOptions`](soc::ChipOptions): the parts behind the chip (the SPI NOR flash and the DSPI and chip select it is on,
-the eMMC, the NAND array), the PLL_CR and PLL_DR values the reset configuration left, and the time scale of every
-clock in machine ticks (each UART's character time, each SSI's frame period, ticks per microsecond for USB, the
-eSDHC's data latency and CMD6 busy time), and the clock gates at the start. Nothing in the models assumes a clock
-frequency. `ChipOptions::default()` is the chip with nothing on it (no parts, the PLL values of the default reset
-configuration, UARTs with no character time (0 ticks: sending and receiving are instant), one tick per frame and
-microsecond, every clock gate open); the `with_nor`, `with_card`, `with_nand`, `with_pll`, `with_uart_ticks`,
-`with_ssi_ticks`, `with_usb_ticks_per_us`, `with_sd_timing` and `with_gates` builders change one part of it.
-`Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
+the eMMC, the NAND array), the PLL_CR and PLL_DR values the reset configuration left, and the time scale of every clock
+in machine ticks (each UART's character time, each SSI's frame period, ticks per microsecond for USB, the eSDHC's data
+latency and CMD6 busy time), the clock gates at the start, and the rate of each DMA timer's DT*n*IN pin. Nothing in the
+models assumes a clock frequency. `ChipOptions::default()` is the chip with nothing on it (no parts, the PLL values of
+the default reset configuration, UARTs with no character time (0 ticks: sending and receiving are instant), one tick per
+frame and microsecond, every clock gate open, no DT*n*IN pin toggling); the `with_nor`, `with_card`, `with_nand`,
+`with_pll`, `with_uart_ticks`, `with_ssi_ticks`, `with_usb_ticks_per_us`, `with_sd_timing`, `with_gates` and `with_dtin`
+builders change one part of it. `Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
 
 ```
 use mcf5441x_emu::Machine;
@@ -109,6 +109,7 @@ let chip = Mcf5441x::build(
         sd_data_latency: 1000,
         sd_cmd6_busy: 2000,
         gates: Gates::Open,
+        dtin: [None; 4],
     },
 );
 // UART0: receiver enable, a character on the line at tick 0, in URB one character time later.
@@ -126,6 +127,8 @@ assert_eq!(m.access(0xFC06_000C, mcf5441x_emu::Size::Byte, None), Ok(u32::from(b
 | 0xFC05_4000 | global IACK registers | | |
 | 0xFC04_4000 (8 KB) | eDMA, a bus master | channels 0-15: INTC0 8-23; 16-55: INTC1 8-47; 56-63: INTC2 0 | software: 30, 31, 42, 43, 46, 47 |
 | 0xFC08_0000 + 0x4000 n | PIT0-PIT3 | INTC2 13-16 | |
+| 0xFC07_0000 + 0x4000 n | DMA timers 0-3 | INTC0 32-35 | |
+| 0xFC09_0000 | Edge port 0 | INTC0 1-7 (pins IRQ1-IRQ7) | |
 | 0xFC06_0000 + 0x4000 n | UART0-UART3 | INTC0 26-29 | receive: 2, 4, 6, 16 |
 | 0xEC06_0000 + 0x4000 n | UART4-UART7 | INTC1 48-51 | receive: 18, 20, 22, 32 |
 | 0xEC07_0000, 0xEC07_4000 | UART8, UART9 | INTC1 52, 53 | receive: 34, 36 |
@@ -143,12 +146,11 @@ order, so INTC0 wins over INTC1 and INTC1 over INTC2 at an equal level (RM 17.3.
 Stub blocks, which accept every access and read back the last value written at each offset
 ([`StubBlock`](soc::StubBlock)): the crossbar switch (0xFC00_4000), the FlexBus registers (0xFC00_8000), the SCM
 (0xFC04_0000), the CCM with the reset controller and power management (0xEC09_0000) and pin multiplexing and GPIO
-(0xEC09_4000). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, the I2Cs, the DMA timers, the edge
-port, the ADC and DACs, the RTC, the SIM, the USB host, the RNG, the Ethernet MACs and switch, 1-Wire and the mcPWM)
-and RGPIO (0x8C00_0000) is an [`Unmodelled`](soc::Unmodelled) block: an access stops the run with
-`Stop::Unmodelled` and the module's name and offset as the detail, with PC on the instruction. The SRAM (where the
-board's RAMBAR puts it, RM ch. 7) and the DDR (its size is the board's) are not mapped by `build`; the reserved slots
-fault as unmapped.
+(0xEC09_4000). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, the I2Cs, the ADC and DACs, the RTC, the
+SIM, the USB host, the RNG, the Ethernet MACs and switch, 1-Wire and the mcPWM) and RGPIO (0x8C00_0000) is an
+[`Unmodelled`](soc::Unmodelled) block: an access stops the run with `Stop::Unmodelled` and the module's name and offset
+as the detail, with PC on the instruction. The SRAM (where the board's RAMBAR puts it, RM ch. 7) and the DDR (its size
+is the board's) are not mapped by `build`; the reserved slots fault as unmapped.
 
 ### Clock gates
 
@@ -160,9 +162,9 @@ module's gate is closed:
 
 - a read of it returns all ones at every size, for the core and for bus masters alike (measured on an MCF54415);
 - a write to it is dropped (measured on an MCF54415);
-- its events are held: it is not advanced or serviced, and it lists no wake sources; the PIT, the SSI and the eSDHC
-  stop their clocks and continue where they stopped when the gate opens, while the other models with events (the
-  UARTs, USB) catch up when it opens (guess: not measured);
+- its events are held: it is not advanced or serviced, and it lists no wake sources; the PIT, the DMA timers, the
+  SSI and the eSDHC stop their clocks and continue where they stopped when the gate opens, while the other models
+  with events (the UARTs, USB) catch up when it opens (guess: not measured);
 - its interrupt and DMA request lines stay as it left them (guess: not measured), and an interrupt controller's
   requests still reach the core.
 
@@ -180,6 +182,14 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   masks it, and IPR never shows forced sources (both measured on an MCF54415).
 - **PIT0-3** (RM ch. 38): the prescaler, the modulus, reload and free-running modes, PIF and PIE; longword
   accesses read all ones and write nothing (measured on an MCF54415).
+- **DMA timers 0-3** (RM ch. 39): the bus clock (one per tick, as the PIT's), the bus clock / 16 or the DT*n*IN pin
+  (`ChipOptions::with_dtin`; by default it never toggles), the prescaler, MODE16, the reference with REF, ORRI and
+  free-run or restart, and DTCN cleared by any write. Capture mode, the output modes, DMA requests (DMAEN), the
+  1588 timebase and programmable delay stop the run with `Stop::Unmodelled`.
+- **Edge port 0** (RM ch. 18): per-pin level or edge detection, EPIER and EPFR on INTC0 sources 1-7; the host drives
+  pins IRQ1-IRQ7 with `Eport::set_pin` inside `Machine::with_device`, and a change asserts or drops the interrupt at
+  once. All pins start high (guess). EPDDR, EPDR and EPPDR, which RM Table 18-2 leaves out, are where other ColdFire
+  edge ports have them (guess).
 - **eDMA** (RM ch. 19): 64 channels served at their peripheral's request or by START/SSRT, 8- and 32-bit
   transfers, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR and D_REQ; misaligned addresses are configuration
   errors with ES as measured on an MCF54415. On the built chip SERQ is taken only on the request lines a model

@@ -26,7 +26,7 @@ const SSI_CR: u32 = SSI1 + 0x10;
 const SSI_ISR: u32 = SSI1 + 0x14;
 const SSI_IER: u32 = SSI1 + 0x18;
 const SSI_FCSR: u32 = SSI1 + 0x2C;
-/// DMA timer 2 (RM Table 1-3), CD30 of PPMLR0 (RM Table 9-6): not modelled.
+/// DMA timer 2 (RM Table 1-3), CD30 of PPMLR0 (RM Table 9-6).
 const DMA_TIMER_2: u32 = 0xFC07_8000;
 /// PIT0 (RM Table 1-3), CD32 of PPMHR0 (RM Table 9-5).
 const PIT0: u32 = 0xFC08_0000;
@@ -71,7 +71,7 @@ fn a_gated_module_reads_all_ones() {
         assert_eq!(r(&mut m, addr + 2, Size::Word), 0xFFFF, "{addr:#x}");
         assert_eq!(r(&mut m, addr + 3, Size::Byte), 0xFF, "{addr:#x}");
     }
-    // a module nobody models reads all ones too, instead of stopping the run
+    // so does DMA timer 2
     assert_eq!(r(&mut m, DMA_TIMER_2, Size::Long), 0xFFFF_FFFF);
     // a misaligned access is split, and every piece reads ones
     assert_eq!(r(&mut m, SSI_CR + 1, Size::Long), 0xFFFF_FFFF);

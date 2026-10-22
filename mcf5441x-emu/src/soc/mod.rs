@@ -2,7 +2,9 @@
 
 pub mod ddrmc;
 pub mod dspi;
+pub mod dtim;
 pub mod edma;
+pub mod eport;
 pub mod esdhc;
 pub mod intc;
 pub mod map;
@@ -17,7 +19,9 @@ pub mod usb;
 
 pub use ddrmc::Ddrmc;
 pub use dspi::{Dspi, SpiDevice};
+pub use dtim::Dtim;
 pub use edma::Edma;
+pub use eport::Eport;
 pub use esdhc::{Esdhc, EsdhcConfig};
 pub use intc::{GlobalIack, Intc};
 pub use map::{Chip, ChipOptions, Gates, Mcf5441x};

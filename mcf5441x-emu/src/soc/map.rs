@@ -7,8 +7,9 @@ use crate::parts::{Emmc, SpiNor};
 
 use super::scm::{self, POWER_MANAGEMENT};
 use super::{
-    Ddrmc, Dspi, Edma, Esdhc, EsdhcConfig, Intc, NandArray, Nfc, Pit, Pll, PowerManagement, Ssi,
-    SsiConfig, StubBlock, StubMode, Uart, UartConfig, Unmodelled, UsbConfig, UsbOtg,
+    Ddrmc, Dspi, Dtim, Edma, Eport, Esdhc, EsdhcConfig, Intc, NandArray, Nfc, Pit, Pll,
+    PowerManagement, Ssi, SsiConfig, StubBlock, StubMode, Uart, UartConfig, Unmodelled, UsbConfig,
+    UsbOtg,
 };
 
 /// Each peripheral slot is 16 KB (RM 1.8.1).
@@ -24,6 +25,11 @@ const SOFTWARE_DMA: [u8; 6] = [30, 31, 42, 43, 46, 47];
 /// PIT0-PIT3 (RM Table 1-3): INTC2 sources 13-16 (RM Table 17-17).
 const PIT: u32 = 0xFC08_0000;
 const PIT_SOURCE: u8 = 13;
+/// DMA timers 0-3 (RM Table 1-3): INTC0 sources 32-35 (RM Table 17-15).
+const DTIM: u32 = 0xFC07_0000;
+const DTIM_SOURCE: u8 = 32;
+/// Edge port 0 (RM Table 1-3): pin IRQn drives INTC0 source n, 1-7 (RM Table 17-15).
+const EPORT: u32 = 0xFC09_0000;
 /// UART0-UART9 (RM Table 1-3, Table 1-4): (base, controller, source, receive DMA request), RM Table 17-15,
 /// Table 17-16 and Table 19-6.
 const UART: [(u32, usize, u8, u8); 10] = [
@@ -68,16 +74,11 @@ const STUBS: [(&str, u32); 5] = [
 ];
 
 /// The modules of RM Table 1-3 and Table 1-4 nobody models, each over its 16 KB slot.
-const UNMODELLED: [(&str, u32); 26] = [
+const UNMODELLED: [(&str, u32); 21] = [
     ("FlexCAN 0", 0xFC02_0000),
     ("FlexCAN 1", 0xFC02_4000),
     ("I2C 1", 0xFC03_8000),
     ("I2C 0", 0xFC05_8000),
-    ("DMA timer 0", 0xFC07_0000),
-    ("DMA timer 1", 0xFC07_4000),
-    ("DMA timer 2", 0xFC07_8000),
-    ("DMA timer 3", 0xFC07_C000),
-    ("Edge port 0", 0xFC09_0000),
     ("ADC", 0xFC09_4000),
     ("DAC 0", 0xFC09_8000),
     ("DAC 1", 0xFC09_C000),
@@ -228,6 +229,9 @@ pub struct ChipOptions {
     pub sd_cmd6_busy: u64,
     /// The clock gates at the start ([`Gates`]).
     pub gates: Gates,
+    /// Each DMA timer's DT*n*IN pin: ticks between its falling edges, or `None` when it never toggles (see
+    /// [`Dtim::new`]), DTIN0 to DTIN3.
+    pub dtin: [Option<u64>; 4],
 }
 
 impl Default for ChipOptions {
@@ -235,7 +239,7 @@ impl Default for ChipOptions {
     /// default reset configuration (RCON) leaves (RM Figures 8-3 and 8-4); UARTs with no character time (0 ticks
     /// per byte); SSIs with a frame every tick; USB with 1 tick per microsecond; the eSDHC with a data latency of
     /// 1 tick and a CMD6 busy of 1 tick; every clock gate open ([`Gates::Open`], not the chip's reset state, which
-    /// [`Gates::Reset`] gives).
+    /// [`Gates::Reset`] gives); no DT*n*IN pin ever toggles.
     fn default() -> ChipOptions {
         ChipOptions {
             nor: None,
@@ -248,6 +252,7 @@ impl Default for ChipOptions {
             sd_data_latency: 1,
             sd_cmd6_busy: 1,
             gates: Gates::Open,
+            dtin: [None; 4],
         }
     }
 }
@@ -307,6 +312,13 @@ impl ChipOptions {
         self.gates = gates;
         self
     }
+
+    /// Give DMA timer `n`'s DT*n*IN pin a falling edge every `ticks_per_edge` ticks, or none (`None`, the default).
+    /// Panics when `n` is above 3; [`Mcf5441x::build`] rejects a period of 0.
+    pub fn with_dtin(mut self, n: usize, ticks_per_edge: Option<u64>) -> ChipOptions {
+        self.dtin[n] = ticks_per_edge;
+        self
+    }
 }
 
 /// The devices [`Mcf5441x::build`] added, for [`Machine::device`] and [`Machine::with_device`].
@@ -318,6 +330,10 @@ pub struct Chip {
     pub iack: DeviceId,
     /// PIT0-PIT3 ([`Pit`]).
     pub pit: [DeviceId; 4],
+    /// DMA timers 0-3 ([`Dtim`]).
+    pub dtim: [DeviceId; 4],
+    /// Edge port 0 ([`Eport`]).
+    pub eport: DeviceId,
     /// The eDMA ([`Edma`]).
     pub edma: DeviceId,
     /// UART0-UART9 ([`Uart`]).
@@ -385,6 +401,8 @@ impl Chip {
 /// | 0xFC05_4000 | 0x4000 | global IACK | | |
 /// | 0xFC04_4000 | 0x2000 | eDMA (bus master) | its own routes, see [`Edma`] | software: 30, 31, 42, 43, 46, 47 |
 /// | 0xFC08_0000 + 0x4000 n | 0x4000 | PIT0-3 | INTC2 13-16 | |
+/// | 0xFC07_0000 + 0x4000 n | 0x4000 | DMA timers 0-3 | INTC0 32-35 | |
+/// | 0xFC09_0000 | 0x4000 | Edge port 0 | INTC0 1-7 (pins IRQ1-IRQ7) | |
 /// | 0xFC06_0000 + 0x4000 n | 0x4000 | UART0-3 | INTC0 26-29 | receive 2, 4, 6, 16 |
 /// | 0xEC06_0000 + 0x4000 n | 0x4000 | UART4-7 | INTC1 48-51 | receive 18, 20, 22, 32 |
 /// | 0xEC07_0000, 0xEC07_4000 | 0x4000 | UART8, UART9 | INTC1 52, 53 | receive 34, 36 |
@@ -431,7 +449,7 @@ impl Mcf5441x {
     /// # Panics
     /// When a window overlaps RAM or a device `m` already has, when [`ChipOptions::nor`] names a DSPI above 3 or
     /// a PCS above 7, or when a model's constructor rejects an option (an SSI frame period of 0, a NAND payload
-    /// larger than an NFC buffer).
+    /// larger than an NFC buffer, a DT*n*IN period of 0).
     pub fn build(m: &mut Machine, options: ChipOptions) -> Chip {
         let ([intc0, intc1, intc2], iack) = Intc::chip();
         // In this order: the controllers' indices are the order they are added (RM 17.3.2).
@@ -456,6 +474,13 @@ impl Mcf5441x {
             let base = PIT + SLOT * u32::from(n);
             m.add_device(base, SLOT, Box::new(Pit::new(2, PIT_SOURCE + n)))
         });
+
+        let dtim = [0u8, 1, 2, 3].map(|n| {
+            let base = DTIM + SLOT * u32::from(n);
+            let dtin = options.dtin[usize::from(n)];
+            m.add_device(base, SLOT, Box::new(Dtim::new(n, 0, DTIM_SOURCE + n, dtin)))
+        });
+        let eport = m.add_device(EPORT, SLOT, Box::new(Eport::new(0)));
 
         let uart = std::array::from_fn(|n| {
             let (base, controller, source, rx) = UART[n];
@@ -554,6 +579,8 @@ impl Mcf5441x {
             intc,
             iack,
             pit,
+            dtim,
+            eport,
             edma,
             uart,
             ssi,

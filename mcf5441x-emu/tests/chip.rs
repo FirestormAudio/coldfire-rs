@@ -66,16 +66,11 @@ const STUBS: [(&str, u32); 5] = [
     ("GPIO", 0xEC09_4000),
 ];
 /// Every other module of RM Table 1-3 and Table 1-4, and RGPIO (RM Table 1-2, RM ch. 16).
-const UNMODELLED: [(&str, u32); 25] = [
+const UNMODELLED: [(&str, u32); 20] = [
     ("FlexCAN 0", 0xFC02_0000),
     ("FlexCAN 1", 0xFC02_4000),
     ("I2C 1", 0xFC03_8000),
     ("I2C 0", 0xFC05_8000),
-    ("DMA timer 0", 0xFC07_0000),
-    ("DMA timer 1", 0xFC07_4000),
-    ("DMA timer 2", 0xFC07_8000),
-    ("DMA timer 3", 0xFC07_C000),
-    ("Edge port 0", 0xFC09_0000),
     ("ADC", 0xFC09_4000),
     ("DAC 0", 0xFC09_8000),
     ("DAC 1", 0xFC09_C000),
@@ -137,6 +132,7 @@ fn options() -> ChipOptions {
         sd_data_latency: SD_LATENCY,
         sd_cmd6_busy: SD_BUSY,
         gates: Gates::Open,
+        dtin: [None; 4],
     }
 }
 
