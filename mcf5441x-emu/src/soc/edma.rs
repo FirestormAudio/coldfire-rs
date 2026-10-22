@@ -125,17 +125,19 @@ fn unit(bytes: u32) -> Size {
 /// 16-byte transfer is a burst of 4 longword accesses at consecutive addresses. Then CITER counts
 /// down (9 bits wide with E_LINK, 15 without), an INT_HALF interrupt is raised when it reaches BITER / 2 (for
 /// BITER 2 and up) and when it reaches 0 the major loop completes:
-/// - CITER reloads from BITER, SLAST is added to SADDR, and DLAST to DADDR unless E_SG is set
+/// - CITER reloads from BITER, SLAST is added to SADDR, and DLAST to DADDR unless E_SG loads a TCD
 /// - DONE is set, INT_MAJOR raises the interrupt and D_REQ clears the ERQ bit
-/// - with E_SG (scatter/gather), the 32-byte TCD at DLAST_SGA is read through the bus into the channel's TCD; if its
-///   CSR has START, that start is honoured
-/// - with MAJOR_E_LINK, the channel MAJOR_LINKCH gets START.
+/// - with MAJOR_E_LINK, the channel MAJOR_LINKCH gets START
+/// - then, with E_SG (scatter/gather), the 32-byte TCD at DLAST_SGA is read through the bus into the channel's TCD
+///   and DONE is set onto its CSR. The load overwrites a START the link gave the channel itself; a START in the
+///   loaded CSR is honoured. That order and DONE are measured on an MCF54415.
 ///
 /// With CITER E_LINK, every minor loop but the last gives the channel CITER LINKCH START (RM 19.6.6). An activation
 /// clears DONE and START. A start set by a link or a loaded TCD runs within the same call, before the call
 /// returns: the started channels run one minor loop per START, highest channel first, until none is left (guess:
-/// the model's fixed order stands in for arbitration, as for requests). A start that sets off more than 2^20 minor
-/// loops is refused or halts the run with [`Stop::Unmodelled`].
+/// the order the reset channel priorities give, RM 19.4.16, stands in for arbitration). A start that sets off
+/// more than 2^20 minor loops, or a started channel this model cannot run, is refused or halts the run with
+/// [`Stop::Unmodelled`], and START is cleared on the channels still queued.
 ///
 /// A peripheral request is served until its line drops (each minor loop reads or writes the peripheral, which
 /// lowers its line when it has nothing more), at SERQ and at every instruction boundary
@@ -153,10 +155,13 @@ fn unit(bytes: u32) -> Size {
 /// clears it and ES keeps the channel and SAE/DAE (measured on an MCF54415). A request left asserted after an error
 /// is not served again until the next boundary. A reserved SSIZE or DSIZE encoding (011, 101, 110, 111; there
 /// is no 32-byte size) is a configuration error the same way, with SAE, SOE, DAE and DOE all set in ES (measured
-/// on an MCF54415 for 011 and 101 on both sides; guess: 110, 111 and a reserved size on one side alike). A DLAST_SGA that is not a multiple of 32 when a major loop with
-/// E_SG completes is the SGE configuration error: ES records the channel with SGE and the ERR bit is set (guess,
-/// not measured: the minor loop has moved its data, SADDR, DADDR and CITER are written back as at any completion
-/// but DLAST is not added, and nothing else of the completion happens: no DONE, interrupt, D_REQ, link or load).
+/// on an MCF54415 for 011 and 101 on both sides; guess: 110, 111 and a reserved size on one side alike).
+///
+/// A DLAST_SGA that is not a multiple of 32 when a major loop with E_SG completes is the SGE configuration error,
+/// found after the completion (measured on an MCF54415): the minor loop has moved its data, CITER is reloaded,
+/// SLAST is added to SADDR and DLAST_SGA to DADDR, DONE is set and E_SG kept; ES records the channel with SGE and
+/// the ERR bit is set; no TCD is loaded. The INT_MAJOR interrupt, D_REQ and the major-loop link come before it
+/// (guess: RM's order, not measured).
 ///
 /// Interrupt routes (RM Table 17-15, Table 17-16, Table 17-17): channels 0-15 drive INTC0 sources 8-23, channels
 /// 16-55 INTC1 sources 8-47, and channels 56-63 share INTC2 source 0. The interrupt of a channel holds until CINT.
@@ -182,8 +187,11 @@ fn unit(bytes: u32) -> Size {
 /// - NBYTES not a multiple of both sizes, or NBYTES 0
 /// - CITER E_LINK not equal to BITER E_LINK, CITER 0, SOFF or DOFF not a multiple of its size (the NCE, SOE and
 ///   DOE errors)
-/// - a bus error on a read or write (SBE, DBE), or on the scatter/gather load; the earlier units of that minor
-///   loop are already written, and the TCD is left as before it
+/// - a bus error on a read or write (SBE, DBE): the earlier units of that minor loop are already written, and
+///   the TCD is left as before it
+/// - a bus error on the scatter/gather load: by then the minor loop has moved its data and the completion is done
+///   (SADDR, DADDR and CITER written back, DONE set, the interrupt raised, D_REQ applied); the major-loop link's
+///   START is cleared again and no TCD is loaded
 ///
 /// With DONE set, a TCD write forces E_SG and MAJOR_E_LINK to 0 (RM Table 19-31). BWC is ignored: it only spaces
 /// the accesses out in time.
@@ -434,22 +442,19 @@ impl Edma {
             }
             return Ok(Activation::Moved { device });
         }
-        // The major loop is complete; a minor-loop link gives way to the major-loop link (RM 19.6.6).
+        // The major loop is complete, in RM's order (measured on an MCF54415): the final adjustments and DONE,
+        // the interrupt and D_REQ, the major-loop link, then scatter/gather. A minor-loop link gives way to the
+        // major-loop link (RM 19.6.6).
         let dlast = self.field(ch, DLAST, 4);
+        let load = csr & ESG != 0 && dlast.is_multiple_of(32);
         saddr = saddr.wrapping_add(self.field(ch, SLAST, 4));
-        if csr & ESG == 0 {
+        if !load {
+            // Measured on an MCF54415: a misaligned DLAST_SGA is added to DADDR, as DLAST.
             daddr = daddr.wrapping_add(dlast);
         }
         self.set_field(ch, SADDR, 4, saddr);
         self.set_field(ch, DADDR, 4, daddr);
         self.set_field(ch, CITER, 2, biter);
-        if csr & ESG != 0 && !dlast.is_multiple_of(32) {
-            // guess: the completion stops at the scatter/gather check (RM 19.4.2): no DONE, interrupt, D_REQ or
-            // link. Not measured.
-            self.set_csr(ch, csr);
-            self.error(ch, SGE);
-            return Ok(Activation::Error);
-        }
         csr |= DONE;
         self.set_csr(ch, csr);
         if csr & INTMAJOR != 0 {
@@ -459,49 +464,75 @@ impl Edma {
             self.erq &= !(1 << ch);
             cx.dma.set_enabled(self.erq);
         }
-        if csr & ESG != 0 {
-            let mut bus = cx.bus().expect("the eDMA is a bus master");
-            let mut next = [0u8; 32];
-            for (i, word) in next.chunks_mut(4).enumerate() {
-                let a = dlast.wrapping_add(4 * i as u32);
-                device |= !bus.is_ram(a, Size::Long);
-                let v = bus.read(a, Size::Long).map_err(|f| {
-                    format!(
-                        "eDMA channel {ch} bus error loading the scatter/gather TCD at {a:#010x} ({f:?}): not \
-                         modelled"
-                    )
-                })?;
-                word.copy_from_slice(&v.to_be_bytes());
-            }
-            // guess: the loaded TCD replaces the whole TCD as it is in memory, its CSR included, so DONE is
-            // whatever the loaded CSR holds (normally 0). Not measured.
-            self.tcd[ch * 32..ch * 32 + 32].copy_from_slice(&next);
-            if self.csr(ch) & START != 0 {
-                *starts |= 1 << ch;
-            }
-        }
         if csr & MAJORELINK != 0 {
             self.link((csr >> 8 & 0x3F) as usize, starts);
+        }
+        if csr & ESG == 0 {
+            return Ok(Activation::Moved { device });
+        }
+        if !load {
+            // Measured on an MCF54415: the SGE error comes after the completion (data moved, DONE set, E_SG kept,
+            // CITER reloaded, DLAST_SGA added to DADDR) and nothing is loaded. guess: the INT_MAJOR interrupt,
+            // D_REQ and the major-loop link still happen, as they come before scatter/gather in RM's order.
+            self.error(ch, SGE);
+            return Ok(Activation::Error);
+        }
+        let mut bus = cx.bus().expect("the eDMA is a bus master");
+        let mut next = [0u8; 32];
+        for (i, word) in next.chunks_mut(4).enumerate() {
+            let a = dlast.wrapping_add(4 * i as u32);
+            device |= !bus.is_ram(a, Size::Long);
+            let v = bus.read(a, Size::Long).map_err(|f| {
+                format!(
+                    "eDMA channel {ch} bus error loading the scatter/gather TCD at {a:#010x} ({f:?}): not modelled"
+                )
+            })?;
+            word.copy_from_slice(&v.to_be_bytes());
+        }
+        // Measured on an MCF54415: the loaded TCD replaces the whole TCD, so a START the major-loop link gave this
+        // channel is overwritten, and DONE is set onto the loaded CSR. A START in the loaded CSR is honoured.
+        self.tcd[ch * 32..ch * 32 + 32].copy_from_slice(&next);
+        self.set_csr(ch, self.csr(ch) | DONE);
+        if self.csr(ch) & START != 0 {
+            *starts |= 1 << ch;
         }
         Ok(Activation::Moved { device })
     }
 
-    /// Run the channels in `starts` (each has START) and every channel they start in turn, one minor loop per
-    /// START, highest channel first, until none is left. Returns whether any access reached a device.
+    /// Clear START on the channels in `starts`: queued starts a refused chain leaves unrun.
+    fn abandon(&mut self, starts: u64) {
+        for ch in (0..64).filter(|ch| starts & 1 << ch != 0) {
+            self.set_csr(ch, self.csr(ch) & !START);
+        }
+    }
+
+    /// Run the channels in `starts` and every channel they start in turn, one minor loop per START, highest
+    /// channel first (guess: the order the reset channel priorities give, RM 19.4.16), until none is left. A
+    /// queued channel whose START is gone (overwritten by a scatter/gather load) does not run. Returns whether any
+    /// access reached a device. On an error, START is cleared on the failing channel and every one still queued.
     fn run_started(&mut self, mut starts: u64, cx: &mut DeviceCx) -> Result<bool, String> {
         let mut device = false;
         let mut loops = 0;
         while starts != 0 {
             let ch = 63 - starts.leading_zeros() as usize;
             starts &= !(1 << ch);
+            if self.csr(ch) & START == 0 {
+                continue;
+            }
             if loops == MAX_LOOPS {
+                self.abandon(starts | 1 << ch);
                 return Err(format!(
                     "eDMA channel {ch}: linked starts ran {MAX_LOOPS} minor loops without ending"
                 ));
             }
             loops += 1;
-            if let Activation::Moved { device: d } = self.activate(ch, cx, &mut starts)? {
-                device |= d;
+            match self.activate(ch, cx, &mut starts) {
+                Ok(Activation::Moved { device: d }) => device |= d,
+                Ok(Activation::Error) => {}
+                Err(why) => {
+                    self.abandon(starts | 1 << ch);
+                    return Err(why);
+                }
             }
         }
         Ok(device)
@@ -515,6 +546,7 @@ impl Edma {
         if let Err(why) = self.activate(ch, cx, &mut starts) {
             let (at, old) = restore;
             self.tcd[at..at + old.len()].copy_from_slice(old);
+            self.abandon(starts);
             cx.refuse(Stop::Unmodelled, why);
             return;
         }
@@ -534,7 +566,9 @@ impl Edma {
                 ));
             }
             let mut starts = 0;
-            let activation = self.activate(ch, cx, &mut starts)?;
+            let activation = self
+                .activate(ch, cx, &mut starts)
+                .inspect_err(|_| self.abandon(starts))?;
             let linked = self.run_started(starts, cx)?;
             match activation {
                 Activation::Moved { device } => {

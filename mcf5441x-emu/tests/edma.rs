@@ -1230,9 +1230,10 @@ fn scatter_gather_loads_the_next_tcd_and_runs_it() {
         source(&m, 0, 15),
         "A's INT_MAJOR: channel 7 -> INTC0 source 15"
     );
-    // the channel's TCD is C as it sits in memory; guess: DONE as the loaded CSR has it (clear)
-    for (f, v) in &c {
-        assert_eq!(get(&mut m, 7, *f), *v, "{f:?}");
+    // the channel's TCD is C as it sits in memory, with DONE set onto its CSR (measured on an MCF54415)
+    for &(f, v) in &c {
+        let v = if f == CSR { v | DONE } else { v };
+        assert_eq!(get(&mut m, 7, f), v, "{f:?}");
     }
     w(&mut m, CINT, Size::Byte, 7);
     w(&mut m, SSRT, Size::Byte, 7);
@@ -1245,37 +1246,284 @@ fn scatter_gather_loads_the_next_tcd_and_runs_it() {
 }
 
 #[test]
-fn scatter_gather_misaligned_is_sge() {
-    // RM 19.4.2: DLAST_SGA not on a 32-byte boundary is the SGE configuration error, found as the major loop
-    // completes
-    let (mut m, _, _) = board(7);
-    let (src, dst, sga) = (0x4041_0000, 0x4042_0000, 0x4040_0010);
+fn misaligned_dlast_sga_moves_the_data_sets_done_and_adds_it_to_daddr_measured() {
+    // measured on an MCF54415: channel 1, one 4-byte minor loop, CSR E_SG | START, DLAST_SGA an aligned TCD + 4.
+    // The completion happens, then SGE: data moved, DONE set, E_SG kept, CITER reloaded, SADDR advanced (SLAST 0),
+    // DLAST_SGA added to DADDR as DLAST, no TCD loaded; ES VLD | ERRCHN | SGE
+    let (mut m, _, _) = board(1);
+    let (src, dst, tcd_at) = (0x4041_0000, 0x4042_0000, 0x4040_0000);
+    let sga = tcd_at + 4;
     m.mem.load(src, &[1, 2, 3, 4]).unwrap();
+    m.mem
+        .load(tcd_at, &tcd_image(&copy4(src, 0x4043_0000)))
+        .unwrap();
+    let mut a = copy4(src, dst);
+    a.extend([(DLAST, sga), (CSR, START | ESG)]);
+    tcd(&mut m, 1, &a);
+    assert_eq!(m.mem.peek(dst, 4).unwrap(), [1, 2, 3, 4], "the data moved");
+    assert_eq!(r(&mut m, ES, Size::Long), 0x8000_0104, "VLD, ERRCHN 1, SGE");
+    assert_eq!(r(&mut m, ERRL, Size::Long), 1 << 1);
+    assert_eq!(get(&mut m, 1, CSR), 0x0090, "DONE, E_SG kept, START clear");
+    assert_eq!(get(&mut m, 1, CITER), 1, "reloaded from BITER");
+    assert_eq!(get(&mut m, 1, SADDR), src + 4);
+    assert_eq!(
+        get(&mut m, 1, DADDR),
+        (dst + 4).wrapping_add(sga),
+        "DLAST_SGA added as DLAST"
+    );
+    assert_eq!(get(&mut m, 1, DLAST), sga, "no TCD loaded");
+    assert_eq!(m.mem.peek(0x4043_0000, 4).unwrap(), [0; 4]);
+    w(&mut m, CERR, Size::Byte, 1);
+    assert_eq!(r(&mut m, ES, Size::Long), 0x0000_0104);
+    // guess: INT_MAJOR still raises the interrupt, which comes before scatter/gather in RM's order
+    w(&mut m, CDNE, Size::Byte, 1); // with DONE set, E_SG would be written as 0
     let mut a = copy4(src, dst);
     a.extend([(DLAST, sga), (CSR, START | ESG | INTMAJOR)]);
-    tcd(&mut m, 7, &a);
+    tcd(&mut m, 1, &a);
+    assert_eq!(r(&mut m, ES, Size::Long), 0x8000_0104);
+    assert!(source(&m, 0, 9), "channel 1 -> INTC0 source 9");
+    no_halt(&mut m);
+}
+
+#[test]
+fn major_link_start_is_overwritten_by_the_scatter_gather_load_measured() {
+    // measured on an MCF54415: E_SG and MAJOR_E_LINK to the channel itself. RM's order: interrupts, the major
+    // link, then the load, which overwrites the link's START: the loaded TCD is in place and does not run
+    let (mut m, _, _) = board(1);
+    let (src, sga) = (0x4041_0000, 0x4040_0000);
+    let (d1, d2) = (0x4042_0000, 0x4042_0100);
+    m.mem.load(src, &[1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
+    let mut loaded = copy4(src + 4, d2);
+    loaded.extend([(DLAST, 0), (CSR, 0)]);
+    m.mem.load(sga, &tcd_image(&loaded)).unwrap();
+    let mut a = copy4(src, d1);
+    a.extend([(DLAST, sga), (CSR, START | ESG | MAJORELINK | 1 << 8)]);
+    tcd(&mut m, 1, &a);
+    assert_eq!(m.mem.peek(d1, 4).unwrap(), [1, 2, 3, 4]);
+    assert_eq!(
+        m.mem.peek(d2, 4).unwrap(),
+        [0; 4],
+        "the loaded TCD did not run"
+    );
+    assert_eq!(get(&mut m, 1, SADDR), src + 4);
+    assert_eq!(get(&mut m, 1, DADDR), d2);
+    assert_eq!(get(&mut m, 1, DLAST), 0);
+    assert_eq!(get(&mut m, 1, CSR), 0x0080, "DONE onto the loaded CSR");
+    assert_eq!(r(&mut m, ES, Size::Long), 0);
+    no_halt(&mut m);
+}
+
+#[test]
+fn scatter_gather_load_sets_done_measured() {
+    // measured on an MCF54415: after the load CSR reads 0x0080 although the loaded CSR is 0
+    for loaded_csr in [0, INTMAJOR] {
+        let (mut m, _, _) = board(1);
+        let (src, sga) = (0x4041_0000, 0x4040_0000);
+        m.mem.load(src, &[1, 2, 3, 4]).unwrap();
+        let mut loaded = copy4(src, 0x4042_0100);
+        loaded.extend([(DLAST, 0), (CSR, loaded_csr)]);
+        m.mem.load(sga, &tcd_image(&loaded)).unwrap();
+        let mut a = copy4(src, 0x4042_0000);
+        a.extend([(DLAST, sga), (CSR, START | ESG)]);
+        tcd(&mut m, 1, &a);
+        assert_eq!(get(&mut m, 1, CSR), loaded_csr | DONE, "{loaded_csr:#x}");
+        assert_eq!(get(&mut m, 1, DADDR), 0x4042_0100, "{loaded_csr:#x}");
+        no_halt(&mut m);
+    }
+}
+
+#[test]
+fn queued_linked_starts_run_highest_channel_first() {
+    // guess: the queued starts run in the order the reset channel priorities give (RM 19.4.16), highest channel
+    // first. Channel 10's load (with START) and its major link to channel 3 queue both; both write the same byte,
+    // so the last to run wins
+    let (mut m, _, _) = board(1);
+    let (src, sga, d) = (0x4041_0000, 0x4040_0000, 0x4042_0000);
+    m.mem
+        .load(src, &[0, 0, 0, 0, 0xAA, 0, 0, 0, 0xBB, 0, 0, 0])
+        .unwrap();
+    let mut loaded = copy4(src + 4, d);
+    loaded.extend([(DLAST, 0), (CSR, START)]);
+    m.mem.load(sga, &tcd_image(&loaded)).unwrap();
+    tcd(&mut m, 3, &copy4(src + 8, d));
+    let mut a = copy4(src, 0x4042_0100);
+    a.extend([(DLAST, sga), (CSR, START | ESG | MAJORELINK | 3 << 8)]);
+    tcd(&mut m, 10, &a);
+    assert_eq!(get(&mut m, 10, CSR), DONE, "the loaded TCD ran");
+    assert_eq!(get(&mut m, 3, CSR), DONE, "channel 3 ran");
+    assert_eq!(
+        m.mem.peek(d, 1).unwrap(),
+        [0xBB],
+        "channel 10 first, then 3"
+    );
+    no_halt(&mut m);
+}
+
+#[test]
+fn biter_1_with_int_half_raises_no_half_interrupt() {
+    // RM Table 19-31: the half-way interrupt is disabled for BITER below 2
+    let (mut m, _, _) = board(1);
+    m.mem.load(0x4041_0000, &[1, 2, 3, 4]).unwrap();
+    let mut a = copy4(0x4041_0000, 0x4042_0000);
+    a.push((CSR, START | INTHALF));
+    tcd(&mut m, 1, &a);
+    assert_eq!(get(&mut m, 1, CSR), INTHALF | DONE);
+    assert!(!source(&m, 0, 9));
+    no_halt(&mut m);
+}
+
+#[test]
+fn a_linked_channel_with_a_configuration_error_recovers_after_cerr() {
+    let (mut m, _, _) = board(1);
+    let src = 0x4041_0000;
+    m.mem.load(src, &(1..=16).collect::<Vec<u8>>()).unwrap();
+    let iter = 0x8000 | 4 << 9 | 3;
+    tcd(
+        &mut m,
+        10,
+        &[
+            (SADDR, src),
+            (ATTR, 0),
+            (SOFF, 1),
+            (NBYTES, 1),
+            (DADDR, 0x4042_0000),
+            (DOFF, 1),
+            (CITER, iter),
+            (BITER, iter),
+            (CSR, 0),
+        ],
+    );
+    tcd(&mut m, 4, &copy4(src + 9, 0x4042_0100)); // misaligned source
+    w(&mut m, SSRT, Size::Byte, 10);
+    assert_eq!(m.mem.peek(0x4042_0000, 1).unwrap(), [1], "channel 10 moved");
     assert_eq!(
         r(&mut m, ES, Size::Long),
-        0x8000_0000 | 7 << 8 | 0x04,
-        "VLD, ERRCHN, SGE"
+        0x8000_0000 | 4 << 8 | 0x80,
+        "SAE"
     );
-    assert_eq!(r(&mut m, ERRL, Size::Long), 1 << 7);
-    // guess: the minor loop has moved its data and SADDR, DADDR and CITER are written back; nothing else of the
-    // completion happens: no DONE, no interrupt, no load
-    assert_eq!(m.mem.peek(dst, 4).unwrap(), [1, 2, 3, 4]);
-    assert_eq!(
-        get(&mut m, 7, CSR),
-        ESG | INTMAJOR,
-        "START cleared, not DONE"
-    );
-    assert_eq!(get(&mut m, 7, SADDR), src + 4);
-    assert_eq!(get(&mut m, 7, DADDR), dst + 4);
-    assert_eq!(get(&mut m, 7, CITER), 1);
-    assert_eq!(get(&mut m, 7, DLAST), sga);
-    assert!(!source(&m, 0, 15));
-    w(&mut m, CERR, Size::Byte, 7);
-    assert_eq!(r(&mut m, ES, Size::Long), 7 << 8 | 0x04);
+    assert_eq!(get(&mut m, 4, CSR), 0, "START cleared, not DONE");
+    assert_eq!(m.mem.peek(0x4042_0100, 4).unwrap(), [0; 4]);
+    w(&mut m, CERR, Size::Byte, 4);
+    tcd(&mut m, 4, &[(SADDR, src + 8)]);
+    w(&mut m, SSRT, Size::Byte, 10); // a new start through the link
+    assert_eq!(m.mem.peek(0x4042_0100, 4).unwrap(), [9, 10, 11, 12]);
+    assert_eq!(get(&mut m, 4, CSR), DONE);
+    assert_eq!(r(&mut m, ES, Size::Long) & 0x8000_0000, 0);
     no_halt(&mut m);
+}
+
+#[test]
+fn mutual_minor_links_end_with_the_major_loop() {
+    // channels 8 and 9 link to each other after every minor loop but the last: 8, 9, 8, 9, 8, then the chain ends
+    let (mut m, _, _) = board(1);
+    let src = 0x4041_0000;
+    m.mem.load(src, &(1..=16).collect::<Vec<u8>>()).unwrap();
+    for (ch, other, at) in [(8, 9u32, 0), (9, 8, 8)] {
+        let iter = 0x8000 | other << 9 | 3;
+        tcd(
+            &mut m,
+            ch,
+            &[
+                (SADDR, src + at),
+                (ATTR, 0),
+                (SOFF, 1),
+                (NBYTES, 1),
+                (DADDR, 0x4042_0000 + 0x100 * ch),
+                (DOFF, 1),
+                (CITER, iter),
+                (BITER, iter),
+                (CSR, 0),
+            ],
+        );
+    }
+    w(&mut m, SSRT, Size::Byte, 8);
+    assert_eq!(m.mem.peek(0x4042_0800, 4).unwrap(), [1, 2, 3, 0]);
+    assert_eq!(m.mem.peek(0x4042_0900, 3).unwrap(), [9, 10, 0]);
+    assert_eq!(get(&mut m, 8, CSR), DONE);
+    assert_eq!(get(&mut m, 8, CITER), 0x8000 | 9 << 9 | 3, "reloaded");
+    assert_eq!(get(&mut m, 9, CITER), 0x8000 | 8 << 9 | 1);
+    assert_eq!(get(&mut m, 9, CSR), 0);
+    no_halt(&mut m);
+}
+
+#[test]
+fn an_endless_link_chain_from_a_request_halts() {
+    // the 1 << 20 backstop on the service path: a served channel links to one that links to itself forever
+    let (mut m, _, port) = board(20);
+    m.mem.load(0x4041_0000, &[1]).unwrap();
+    tcd(
+        &mut m,
+        20,
+        &[
+            (SADDR, PORT + 0x100),
+            (ATTR, 0),
+            (SOFF, 0),
+            (NBYTES, 1),
+            (DADDR, 0x4042_0000),
+            (DOFF, 0),
+            (CITER, 1),
+            (BITER, 1),
+            (CSR, MAJORELINK | 5 << 8),
+        ],
+    );
+    tcd(
+        &mut m,
+        5,
+        &[
+            (SADDR, 0x4041_0000),
+            (ATTR, 0),
+            (SOFF, 0),
+            (NBYTES, 1),
+            (DADDR, 0x4042_0100),
+            (DOFF, 0),
+            (CITER, 1),
+            (BITER, 1),
+            (CSR, MAJORELINK | 5 << 8),
+        ],
+    );
+    w(&mut m, SERQ, Size::Byte, 20);
+    grant(&mut m, port, 1);
+    let r = pending_halt(&mut m);
+    assert_eq!(r.kind, Stop::Unmodelled, "{r:?}");
+    assert!(
+        r.detail.contains("eDMA channel 5") && r.detail.contains("1048576 minor loops"),
+        "{r:?}"
+    );
+    assert_eq!(get(&mut m, 5, CSR) & START, 0, "START cleared");
+}
+
+#[test]
+fn a_refused_chain_clears_start_on_the_queued_channels() {
+    // channel 10's load (with START) and its major link to channel 3 queue both; the loaded TCD cannot be run
+    // (NBYTES 0): the start is refused, and neither channel is left with START
+    let (mut m, _, _) = board(1);
+    let (src, sga) = (0x4041_0000, 0x4040_0000);
+    m.mem.load(src, &[1, 2, 3, 4]).unwrap();
+    let mut loaded = copy4(src, 0x4042_0200);
+    loaded.extend([(NBYTES, 0), (DLAST, 0), (CSR, START)]);
+    m.mem.load(sga, &tcd_image(&loaded)).unwrap();
+    tcd(&mut m, 3, &copy4(src, 0x4042_0300));
+    let mut a = copy4(src, 0x4042_0100);
+    a.push((DLAST, sga));
+    tcd(&mut m, 10, &a);
+    let d = refused(
+        &mut m,
+        tcd_addr(10, CSR),
+        Size::Word,
+        Some(START | ESG | MAJORELINK | 3 << 8),
+    );
+    assert!(
+        d.contains("eDMA channel 10") && d.contains("NBYTES 0"),
+        "{d}"
+    );
+    assert_eq!(
+        m.mem.peek(0x4042_0100, 4).unwrap(),
+        [1, 2, 3, 4],
+        "the first ran"
+    );
+    assert_eq!(get(&mut m, 10, CSR), DONE, "the loaded CSR, START cleared");
+    assert_eq!(get(&mut m, 3, CSR), 0, "channel 3: START cleared, not run");
+    assert_eq!(m.mem.peek(0x4042_0300, 4).unwrap(), [0; 4]);
 }
 
 #[test]
@@ -1389,10 +1637,11 @@ fn major_loop_link_starts_the_linked_channel() {
 fn self_linked_channel_runs_all_minor_loops() {
     // The shape of a software channel 30: 16-byte reads inside a 4 MiB SMOD ring, 32-bit writes, CITER = BITER =
     // 0xBC11 (E_LINK to itself, count 17), DLAST_SGA the next TCD in RAM and CSR START | E_SG, written by the
-    // program. Each TCD of the chain runs its 17 minor loops within the CSR write; the last one waits.
+    // program. The source starts 256 bytes before the ring's end, so the reads wrap to its start. Each TCD of the
+    // chain runs its 17 minor loops within the CSR write; the last one waits.
     const TCD30: u32 = EDMA + 0x1000 + 30 * 32;
     let ring = 0x4040_0000; // 0-modulo 4 MiB
-    let src = ring + 0x3F_FD40;
+    let src = ring + 0x3F_FF00;
     let dst = 0x4090_0000;
     let (sg1, sg2) = (0x40A0_0000, 0x40A0_0020);
     let snippet = format!(
@@ -1419,7 +1668,9 @@ fn self_linked_channel_runs_all_minor_loops() {
     let (mut m, l) = common::prepare(&snippet, &["end"]);
     m.add_bus_master(EDMA, 0x2000, Box::new(Edma::new()));
     let data: Vec<u8> = (0..2 * 17 * 16u32).map(|i| (i * 7 + 3) as u8).collect();
-    m.mem.load(src, &data).unwrap();
+    m.mem.load(src, &data[..256]).unwrap();
+    m.mem.load(ring, &data[256..]).unwrap();
+    m.mem.load(ring + 0x40_0000, &[0xEE; 64]).unwrap(); // past the ring: never read
     let shape = |saddr: u32, daddr: u32, sga: u32| {
         tcd_image(&[
             (SADDR, saddr),
@@ -1436,7 +1687,7 @@ fn self_linked_channel_runs_all_minor_loops() {
         ])
     };
     m.mem
-        .load(sg1, &shape(src + 17 * 16, dst + 17 * 16, sg2))
+        .load(sg1, &shape(ring + 16, dst + 17 * 16, sg2))
         .unwrap();
     let last = copy4(0x4041_0000, 0x4042_0000);
     m.mem.load(sg2, &tcd_image(&last)).unwrap();
@@ -1455,7 +1706,11 @@ fn self_linked_channel_runs_all_minor_loops() {
     for (f, v) in &last {
         assert_eq!(get(&mut m, 30, *f), *v, "{f:?}: the last TCD, loaded");
     }
-    assert_eq!(get(&mut m, 30, CSR), 0);
+    assert_eq!(
+        get(&mut m, 30, CSR),
+        DONE,
+        "DONE set onto the loaded CSR (measured on an MCF54415)"
+    );
     assert_eq!(r(&mut m, ES, Size::Long), 0);
     no_halt(&mut m);
 }

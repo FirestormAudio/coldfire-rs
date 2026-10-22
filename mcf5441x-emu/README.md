@@ -196,9 +196,11 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   destination sizes, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR, D_REQ, scatter/gather and minor- and major-loop
   channel linking (linked starts run in the same call, bounded); CR is stored (EDBG, ERCA and ERGA change nothing).
   Misaligned addresses and reserved sizes (011 and 101 measured, 110 and 111 a guess) are configuration errors with ES
-  as measured on an MCF54415; a misaligned scatter/gather address is the SGE error (its effect on the TCD a guess). On
-  the built chip SERQ is taken only on the request lines a model drives (the table's last column) and the channels RM
-  Table 19-6 leaves to software (30, 31, 42, 43, 46, 47); START and SSRT work on every channel.
+  as measured on an MCF54415; a scatter/gather load comes after the major-loop link (overwriting a START it gave the
+  channel itself) and DONE is set onto the loaded CSR, and a misaligned scatter/gather address is the SGE error after
+  the completion (DLAST_SGA added to DADDR, no load), all measured on an MCF54415. On the built chip SERQ is taken
+  only on the request lines a model drives (the table's last column) and the channels RM Table 19-6 leaves to software
+  (30, 31, 42, 43, 46, 47); START and SSRT work on every channel.
 - **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character
   per character time (a status read 3 ticks after a write to an idle transmitter sees TXRDY again: measured on an
   MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing
