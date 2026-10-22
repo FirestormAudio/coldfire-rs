@@ -1,5 +1,6 @@
 //! The enhanced DMA controller, eDMA (RM ch. 19): 64 channels, the chip's first bus master.
 
+use crate::bus::DmaLines;
 use crate::device::{Device, DeviceCx};
 use crate::mem::Size;
 use crate::stop::Stop;
@@ -120,7 +121,7 @@ fn unit(bytes: u32) -> Size {
 /// ([`Machine::add_bus_master`](crate::Machine::add_bus_master)). Transfers are instant: a minor loop runs whole
 /// in the call that activates it and takes no ticks.
 ///
-/// A channel is activated by its peripheral request (DMA request line `n`, [`DmaLines`](crate::DmaLines)) while
+/// A channel is activated by its peripheral request (DMA request line `n`, [`DmaLines`]) while
 /// its ERQ bit is set, or by software through TCD CSR\[START\] or SSRT, or by a channel link. Each activation runs
 /// one minor loop (RM 19.6.4): NBYTES in transfers of the source size (ATTR SSIZE: 8-bit, 16-bit, 32-bit or
 /// 16-byte, RM Table 19-21) read at SADDR and of the destination size written at DADDR through the
@@ -781,7 +782,7 @@ impl Device for Edma {
     }
 
     fn service(&mut self, cx: &mut DeviceCx) {
-        if self.erq & cx.dma.asserted() == 0 {
+        if !self.serves(cx.dma) {
             return;
         }
         for ch in (0..64).rev() {
@@ -792,6 +793,11 @@ impl Device for Edma {
                 return;
             }
         }
+    }
+
+    /// Only an asserted request of an enabled channel is served.
+    fn serves(&self, dma: &DmaLines) -> bool {
+        self.erq & dma.asserted() != 0
     }
 
     fn poll_counted(&self) -> bool {

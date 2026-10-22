@@ -200,6 +200,16 @@ pub struct Memory {
     /// Device reads per (pc, addr) since the last device write. Only counted, never iterated.
     polls: HashMap<(u32, u32), u32>,
     poll_limit: u32,
+    /// The interrupt request lines at the last [`Memory::mark`].
+    marked_irq: IrqLines,
+}
+
+/// What [`Memory::mark`] notes, for [`Memory::unchanged_since`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Mark {
+    touched: u64,
+    dma: DmaLines,
+    masters_event: Option<u64>,
 }
 
 /// Log2 of the page size the block cache tracks writes in.
@@ -231,6 +241,7 @@ impl Default for Memory {
             trace: None,
             polls: HashMap::new(),
             poll_limit: DEFAULT_POLL_LIMIT,
+            marked_irq: IrqLines::default(),
         }
     }
 }
@@ -525,6 +536,7 @@ impl Space {
         dma: &mut DmaLines,
         stop: &mut Option<StopReason>,
     ) -> Option<((u32, bool), Option<Refusal>)> {
+        self.devices.touched = self.devices.touched.wrapping_add(1);
         if self.devices.gated(i) && self.devices.kind(i) != Kind::Out {
             let value = if write.is_some() {
                 0
@@ -676,10 +688,12 @@ impl Memory {
         self.space.find(addr, len).is_some()
     }
 
-    /// Look at events, limits and interrupts before the next instruction: the interrupt mask may have changed.
+    /// Look at interrupts before the next instruction: the interrupt mask may have changed. The horizon is brought
+    /// forward to the end of the instruction, not to 0, so the machine can tell that only SR was written since it
+    /// last set the horizon (see [`Machine`](crate::Machine)'s boundary).
     #[inline(always)]
     pub(crate) fn resample(&mut self) {
-        self.horizon = 0;
+        self.horizon = self.horizon.min(self.now + 1);
     }
 
     /// An instruction-stream word: RAM, or a read of the device whose window holds it that is neither traced nor
@@ -1067,6 +1081,16 @@ impl Memory {
         }
     }
 
+    /// Whether [`Memory::service_masters`] would call any bus master now: one that is not gated serves the DMA
+    /// request lines as they are ([`Device::serves`]).
+    pub(crate) fn masters_serve(&self) -> bool {
+        let devices = &self.space.devices;
+        devices
+            .masters()
+            .iter()
+            .any(|&i| !devices.gated(i) && devices.try_get(i).is_some_and(|d| d.serves(&self.dma)))
+    }
+
     /// Call [`Device::service`] on every bus master, in the order they were added, until a round leaves the DMA
     /// request lines as it found them. When [`SERVICE_ROUNDS`] rounds all change them, asks the run to stop.
     pub(crate) fn service_masters(&mut self) {
@@ -1078,7 +1102,13 @@ impl Memory {
             let before = self.dma;
             for k in 0..self.space.devices.masters().len() {
                 let i = self.space.devices.masters()[k];
-                if self.space.devices.gated(i) {
+                if self.space.devices.gated(i)
+                    || !self
+                        .space
+                        .devices
+                        .try_get(i)
+                        .is_some_and(|d| d.serves(&self.dma))
+                {
                     continue;
                 }
                 self.space.call_halting(
@@ -1105,6 +1135,28 @@ impl Memory {
                 ),
             });
         }
+    }
+
+    /// Note what a call into the bus masters could change without calling another device: the device accesses
+    /// made, the DMA and interrupt request lines, the masters' events.
+    pub(crate) fn mark(&mut self) -> Mark {
+        self.marked_irq.clone_from(&self.irq);
+        Mark {
+            touched: self.space.devices.touched,
+            dma: self.dma,
+            masters_event: self.space.devices.masters_event(),
+        }
+    }
+
+    /// Whether, since `mark`, no device access was made, no clock gate was set, the request lines and the bus
+    /// masters' events are as they were, no code was written and no halt asked for.
+    pub(crate) fn unchanged_since(&self, mark: Mark) -> bool {
+        self.space.devices.touched == mark.touched
+            && self.dma == mark.dma
+            && self.irq == self.marked_irq
+            && self.stop.is_none()
+            && self.space.written.is_empty()
+            && self.space.devices.masters_event() == mark.masters_event
     }
 
     /// The highest request over all controllers for the request lines `lines`.

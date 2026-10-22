@@ -591,3 +591,54 @@ fn nested_masters_reach_each_other_but_not_back() {
     m.access(B + 4, Size::Long, Some(0)).unwrap();
     assert_eq!(m.device::<Relay>(b).seen[1], Ok(0x5A));
 }
+
+/// A bus master that counts its services, serving the DMA request lines only when `serves` is set.
+struct Counter {
+    serves: bool,
+    services: u32,
+}
+
+impl Device for Counter {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
+    fn service(&mut self, _: &mut DeviceCx) {
+        assert!(self.serves, "serviced although it serves nothing");
+        self.services += 1;
+    }
+    fn serves(&self, _: &mcf5441x_emu::DmaLines) -> bool {
+        self.serves
+    }
+}
+
+/// Three writes to SR with request line [`LINE`] asserted and a [`Counter`] serving the lines when `serves`:
+/// its services in the run.
+fn services_across_sr_writes(serves: bool) -> u32 {
+    let src = "move.w #0x2700,%sr\nmove.w #0x2700,%sr\nmove.w #0x2700,%sr\nend: nop";
+    let (mut m, l) = prepare(src, &["end"]);
+    let id = m.add_bus_master(
+        MOVER,
+        0x100,
+        Box::new(Counter {
+            serves,
+            services: 0,
+        }),
+    );
+    m.with_device::<Counter, _>(id, |_, cx| cx.dma.set(LINE, true));
+    m.device_mut::<Counter>(id).services = 0;
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    m.device::<Counter>(id).services
+}
+
+#[test]
+fn a_master_is_serviced_after_every_write_to_sr_while_it_serves_the_lines() {
+    // The run's start, then the boundary after each write to SR.
+    assert_eq!(services_across_sr_writes(true), 4);
+}
+
+#[test]
+fn a_master_that_serves_none_of_the_lines_is_not_serviced() {
+    assert_eq!(services_across_sr_writes(false), 0);
+}

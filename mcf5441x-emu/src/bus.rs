@@ -11,7 +11,8 @@
 //! [`Machine::idle_until`](crate::Machine::idle_until), [`Machine::with_device`](crate::Machine::with_device)): it
 //! calls [`Device::service`](crate::Device::service) on every bus master, in the order they were added, and again
 //! while a round changed the request lines. A request is therefore served in the tick it is raised, before the next
-//! instruction.
+//! instruction. A master whose [`Device::serves`](crate::Device::serves) says the call would do nothing is
+//! skipped.
 
 use crate::device::{DeviceCx, Refusal, halt_on};
 use crate::irq::IrqLines;

@@ -9,6 +9,11 @@
 //! horizon. RAM-only code pays one comparison per instruction for all of it. Bus masters are serviced there too,
 //! after the device events (see [`crate::bus`]).
 //!
+//! A write to SR with no device called since the last service is cheaper: no event can be due and the request
+//! lines and controllers are as that service left them, so unless the new mask lets in the request it found held
+//! off, the bus masters that serve the lines are serviced (when there are any) and, if that changes nothing, the
+//! run goes on to the horizon already set.
+//!
 //! Instructions run from decoded blocks: straight runs decoded once, ending at a branch, a jump, a write to SR or a
 //! page boundary. Execution enters a block only at its start, so a run that stops in the middle of one (at the
 //! instruction limit, `until_pc` or the horizon) resumes in a block that starts there.
@@ -48,6 +53,11 @@ pub struct Machine {
     level7_edge: bool,
     /// Decoded blocks.
     blocks: Blocks,
+    /// The horizon the last service set (with the instruction limit applied); 0 when there is none to go back to.
+    planned: u64,
+    /// The request the last service found held off by SR\[I\], if any: until a device is called again it is the
+    /// only one a write to SR can let in.
+    held: Option<(usize, Irq)>,
 }
 
 impl Machine {
@@ -269,6 +279,7 @@ impl Machine {
                 // Blocks look only at the horizon, so it covers the instruction limit too.
                 let left = end.saturating_sub(self.instructions);
                 self.mem.horizon = self.mem.horizon.min(self.mem.now.saturating_add(left));
+                self.planned = self.mem.horizon;
             }
             let pc = self.cpu.pc;
             if limit.until_pc == Some(pc) {
@@ -306,7 +317,7 @@ impl Machine {
         loop {
             if self.mem.now >= self.mem.horizon {
                 match self.boundary() {
-                    Ok(false) => {}
+                    Ok(false) => self.planned = self.mem.horizon,
                     // An interrupt was taken: sample again before the handler's first instruction.
                     Ok(true) => continue,
                     Err(r) => return r,
@@ -344,6 +355,7 @@ impl Machine {
         self.mem.reset_polls();
         self.mem.refused = None;
         self.mem.horizon = 0;
+        self.planned = 0;
         self.mem.set_watch(limit.until_access);
         limit
             .max_instructions
@@ -360,10 +372,29 @@ impl Machine {
     /// At the horizon: drop the blocks over written code, then service the machine, then drop the blocks over
     /// code that bus masters wrote while serviced.
     fn boundary(&mut self) -> Result<bool, StopReason> {
+        let quiet = self.sr_only();
         self.drop_written();
-        let r = self.service();
+        let r = self.service(quiet);
         self.drop_written();
         r
+    }
+
+    /// Whether the horizon was reached only because an instruction wrote SR, and that write lets in no request held
+    /// off at the last service.
+    ///
+    /// Only [`Memory::resample`] brings the horizon forward without setting it to 0, and every call into a device
+    /// (an access, an acknowledge, a host-side call) and every write over decoded code sets it to 0; so a horizon
+    /// below the planned one, with the clock before that, means that no device was called since the last service.
+    /// Then no event is due (the planned horizon is at or before the earliest), and the interrupt and DMA request
+    /// lines, the controllers and the level-7 line the last service sampled are as it left them.
+    fn sr_only(&self) -> bool {
+        let (h, now) = (self.mem.horizon, self.mem.now);
+        if h == 0 || h >= self.planned || now >= self.planned || self.waiting {
+            return false;
+        }
+        let ipl = (self.cpu.sr() >> 8) as u8 & 7;
+        self.held
+            .is_none_or(|(_, irq)| irq.level != 7 && irq.level <= ipl)
     }
 
     /// Drop the blocks over written code.
@@ -550,10 +581,28 @@ impl Machine {
     /// halt a device asked for, stop at the time limit, and take the highest deliverable interrupt. While the core
     /// waits after STOP, the clock jumps from event to event until an interrupt is taken. `Ok(true)` when an
     /// interrupt was taken.
-    fn service(&mut self) -> Result<bool, StopReason> {
+    ///
+    /// `quiet` when only SR was written since the last service and the request it held off, if any, stays held
+    /// ([`Machine::sr_only`]): no event is due, so none is advanced. When the bus masters' servicing then calls no
+    /// device and leaves the request lines, the decoded code and the masters' events as they were, nothing the
+    /// rest of the service looks at has changed: the run goes on to the horizon the last service set.
+    fn service(&mut self, quiet: bool) -> Result<bool, StopReason> {
+        if quiet && !self.mem.masters_serve() {
+            self.mem.horizon = self.planned;
+            return Ok(false);
+        }
+        let mut mark = quiet.then(|| self.mem.mark());
         loop {
-            self.mem.advance_due();
+            if mark.is_none() {
+                self.mem.advance_due();
+            }
             self.mem.service_masters();
+            if let Some(m) = mark.take()
+                && self.mem.unchanged_since(m)
+            {
+                self.mem.horizon = self.planned;
+                return Ok(false);
+            }
             if let Some(r) = self.mem.stop.take() {
                 return Err(self.stop(r.kind, r.detail));
             }
@@ -650,7 +699,8 @@ impl Machine {
             self.level7_line = line;
             self.level7_edge = line;
         }
-        let (controller, irq) = self.mem.pending(self.level7_edge)?;
+        self.held = self.mem.pending(self.level7_edge);
+        let (controller, irq) = self.held?;
         let ipl = (self.cpu.sr() >> 8) as u8 & 7;
         (irq.level == 7 || irq.level > ipl).then_some((controller, irq))
     }

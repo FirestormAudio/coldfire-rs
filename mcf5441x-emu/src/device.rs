@@ -38,12 +38,18 @@ pub trait Device: Any {
     /// Bus masters only: serve the DMA requests in `cx.dma`. Called at every instruction boundary after the due
     /// events, and after every host-side call, on every bus master in the order they were added, and called again
     /// while a round of calls changed the request lines; more than 64 rounds that all change them stop the run
-    /// with [`Stop::Unmodelled`].
+    /// with [`Stop::Unmodelled`]. Not called while [`Device::serves`] is `false`.
     ///
     /// A master serves each asserted request until it drops or no further progress is possible (e.g. it runs
     /// minor loops while the line stays asserted): a request left asserted is not serviced again until the next
     /// boundary, which RAM-only code may never reach.
     fn service(&mut self, _cx: &mut DeviceCx) {}
+    /// Bus masters only: whether [`Device::service`] could do anything with the DMA request lines as they are in
+    /// `dma`. The machine skips the call when this is `false`; the default, `true`, has it made every time. A
+    /// master overrides it only with an exact answer: `false` must mean that the call would change nothing.
+    fn serves(&self, _dma: &DmaLines) -> bool {
+        true
+    }
     /// Whether the poll detector counts reads of this device's registers (see
     /// [`Machine::set_poll_limit`](crate::Machine::set_poll_limit)). A model whose registers change with time or
     /// with state the core cannot see returns `false`.

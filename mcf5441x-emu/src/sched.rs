@@ -62,6 +62,9 @@ pub(crate) struct Devices {
     gated: Vec<bool>,
     /// Per device: the gated state it was last told of ([`Device::gate`]).
     told: Vec<bool>,
+    /// Counts register accesses (the core's and bus masters') and clock gate settings, wrapping: unchanged, no
+    /// device was reached through its registers and no gate changed.
+    pub(crate) touched: u64,
 }
 
 impl Devices {
@@ -126,7 +129,7 @@ impl Devices {
     }
 
     /// Device `i`, unless it is a bus master being called.
-    fn try_get(&self, i: usize) -> Option<&dyn Device> {
+    pub(crate) fn try_get(&self, i: usize) -> Option<&dyn Device> {
         match &self.models[i] {
             Model::Plain(d) | Model::Master(d) => Some(&**d),
             Model::Controller(c) => Some(&**c),
@@ -191,6 +194,15 @@ impl Devices {
             .min()
     }
 
+    /// The earliest event any bus master that is not gated has scheduled.
+    pub(crate) fn masters_event(&self) -> Option<u64> {
+        self.masters
+            .iter()
+            .filter(|&&i| !self.gated[i])
+            .filter_map(|&i| self.try_get(i)?.next_event())
+            .min()
+    }
+
     /// Whether device `i`'s clock gate is closed.
     #[inline(always)]
     pub(crate) fn gated(&self, i: usize) -> bool {
@@ -206,6 +218,7 @@ impl Devices {
     // guess: a gated module's events are held and its interrupt and DMA request lines stay as it left them; an
     // interrupt controller's requests still reach the core while it is gated (none of this is measured).
     pub(crate) fn set_closed(&mut self, closed: u128, now: u64) {
+        self.touched = self.touched.wrapping_add(1);
         self.closed = closed;
         for i in 0..self.models.len() {
             self.gated[i] = self.gate[i].is_some_and(|g| closed >> g & 1 != 0);
