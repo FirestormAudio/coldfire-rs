@@ -49,6 +49,9 @@ const VLD: u32 = 1 << 31;
 const SAE: u32 = 0x80;
 const DAE: u32 = 0x20;
 const SGE: u32 = 0x04;
+/// What ES records for a reserved transfer size, besides VLD and ERRCHN: SAE, SOE, DAE and DOE together (measured
+/// on an MCF54415).
+const SIZE_ERROR: u32 = 0xF0;
 
 /// TCD field offsets (RM 19.4.17).
 const SADDR: usize = 0x00;
@@ -94,15 +97,13 @@ fn size_bytes(code: u32) -> Option<u32> {
         1 => Some(2),
         2 => Some(4),
         4 => Some(16),
-        // guess: 101 is a 32-byte transfer, the encoding later eDMA revisions give it; RM Table 19-21 lists it as
-        // reserved. Not measured.
-        5 => Some(32),
+        // 011, 101, 110 and 111 are reserved. 101 is not a 32-byte size on this chip (measured on an MCF54415).
         _ => None,
     }
 }
 
-/// The bus access one transfer of `bytes` is made of: a byte, a word, or longwords (16- and 32-byte transfers
-/// move as bursts of 4 or 8 longwords).
+/// The bus access one transfer of `bytes` is made of: a byte, a word, or longwords (a 16-byte transfer moves as a
+/// burst of 4 longwords).
 fn unit(bytes: u32) -> Size {
     match bytes {
         1 => Size::Byte,
@@ -118,10 +119,10 @@ fn unit(bytes: u32) -> Size {
 /// A channel is activated by its peripheral request (DMA request line `n`, [`DmaLines`](crate::DmaLines)) while
 /// its ERQ bit is set, or by software through TCD CSR\[START\] or SSRT, or by a channel link. Each activation runs
 /// one minor loop (RM 19.6.4): NBYTES in transfers of the source size (ATTR SSIZE: 8-bit, 16-bit, 32-bit or
-/// 16-byte, RM Table 19-21, and 32-byte) read at SADDR and of the destination size written at DADDR through the
+/// 16-byte, RM Table 19-21) read at SADDR and of the destination size written at DADDR through the
 /// bus, each followed by `SADDR += SOFF` or `DADDR += DOFF` within their SMOD/DMOD rings (RM 19.6.4.3). The two
 /// sizes may differ: reads fill a buffer of the larger size, which the writes then empty (RM Example 19-1). A
-/// 16- or 32-byte transfer is a burst of 4 or 8 longword accesses at consecutive addresses. Then CITER counts
+/// 16-byte transfer is a burst of 4 longword accesses at consecutive addresses. Then CITER counts
 /// down (9 bits wide with E_LINK, 15 without), an INT_HALF interrupt is raised when it reaches BITER / 2 (for
 /// BITER 2 and up) and when it reaches 0 the major loop completes:
 /// - CITER reloads from BITER, SLAST is added to SADDR, and DLAST to DADDR unless E_SG is set
@@ -150,7 +151,9 @@ fn unit(bytes: u32) -> Size {
 /// 19.4.2): nothing moves, CITER and the TCD are unchanged but for START, DONE is not set, the channel's ERR bit is
 /// set and ES records the channel with SAE or DAE. ES\[VLD\] is the OR of the ERR bits (RM Table 19-4), so CERR
 /// clears it and ES keeps the channel and SAE/DAE (measured on an MCF54415). A request left asserted after an error
-/// is not served again until the next boundary. A DLAST_SGA that is not a multiple of 32 when a major loop with
+/// is not served again until the next boundary. A reserved SSIZE or DSIZE encoding (011, 101, 110, 111; there
+/// is no 32-byte size) is a configuration error the same way, with SAE, SOE, DAE and DOE all set in ES (measured
+/// on an MCF54415 for 011 and 101 on both sides; guess: 110, 111 and a reserved size on one side alike). A DLAST_SGA that is not a multiple of 32 when a major loop with
 /// E_SG completes is the SGE configuration error: ES records the channel with SGE and the ERR bit is set (guess,
 /// not measured: the minor loop has moved its data, SADDR, DADDR and CITER are written back as at any completion
 /// but DLAST is not added, and nothing else of the completion happens: no DONE, interrupt, D_REQ, link or load).
@@ -176,7 +179,7 @@ fn unit(bytes: u32) -> Size {
 ///
 /// and, when a channel is activated (refused when the activation comes from a register write, a halt when it
 /// comes from a request served at the boundary):
-/// - a reserved transfer size, NBYTES not a multiple of both sizes, or NBYTES 0
+/// - NBYTES not a multiple of both sizes, or NBYTES 0
 /// - CITER E_LINK not equal to BITER E_LINK, CITER 0, SOFF or DOFF not a multiple of its size (the NCE, SOE and
 ///   DOE errors)
 /// - a bus error on a read or write (SBE, DBE), or on the scatter/gather load; the earlier units of that minor
@@ -302,17 +305,14 @@ impl Edma {
     fn unmodelled(&self, ch: usize) -> Option<String> {
         let attr = self.field(ch, ATTR, 2);
         let nbytes = self.field(ch, NBYTES, 4);
+        let (Some(ssize), Some(dsize)) = (size_bytes(attr >> 8 & 7), size_bytes(attr & 7)) else {
+            return None; // a configuration error, recorded by `activate` before this check
+        };
         if nbytes == 0 {
             return Some(format!(
                 "eDMA channel {ch} NBYTES 0 (a 4 GiB minor loop, RM 19.4.17) is not modelled"
             ));
         }
-        let (Some(ssize), Some(dsize)) = (size_bytes(attr >> 8 & 7), size_bytes(attr & 7)) else {
-            return Some(format!(
-                "eDMA channel {ch} transfer size (ATTR {attr:#06x}): a reserved encoding (a configuration error, \
-                 not modelled)"
-            ));
-        };
         if !nbytes.is_multiple_of(ssize.max(dsize)) {
             return Some(format!(
                 "eDMA channel {ch} transfer size (ATTR {attr:#06x}, NBYTES {nbytes}): NBYTES not a multiple of \
@@ -350,15 +350,19 @@ impl Edma {
         cx: &mut DeviceCx,
         starts: &mut u64,
     ) -> Result<Activation, String> {
+        let attr = self.field(ch, ATTR, 2);
+        let mut csr = self.csr(ch) & !START;
+        let (Some(ssize), Some(dsize)) = (size_bytes(attr >> 8 & 7), size_bytes(attr & 7)) else {
+            // Measured on an MCF54415 (011 and 101 on both sides): nothing moves, START clears, DONE is not set,
+            // SADDR and DADDR are unchanged, ES has SAE, SOE, DAE and DOE. guess: 110, 111 and a reserved size on
+            // one side only alike; an earlier DONE kept, as for a misaligned address.
+            self.error(ch, SIZE_ERROR);
+            self.set_csr(ch, csr);
+            return Ok(Activation::Error);
+        };
         if let Some(why) = self.unmodelled(ch) {
             return Err(why);
         }
-        let attr = self.field(ch, ATTR, 2);
-        let (ssize, dsize) = (
-            size_bytes(attr >> 8 & 7).unwrap_or(1),
-            size_bytes(attr & 7).unwrap_or(1),
-        );
-        let mut csr = self.csr(ch) & !START;
         let mut saddr = self.field(ch, SADDR, 4);
         let mut daddr = self.field(ch, DADDR, 4);
         if !saddr.is_multiple_of(ssize) || !daddr.is_multiple_of(dsize) {
@@ -382,7 +386,7 @@ impl Edma {
         let doff = i32::from(self.field(ch, DOFF, 2) as u16 as i16);
         let (sunit, dunit) = (unit(ssize), unit(dsize));
         let chunk = ssize.max(dsize);
-        let mut buf = [0u8; 32];
+        let mut buf = [0u8; 16];
         let mut bus = cx.bus().expect("the eDMA is a bus master");
         let mut device = false;
         for _ in 0..self.field(ch, NBYTES, 4) / chunk {

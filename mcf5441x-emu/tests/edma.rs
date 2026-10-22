@@ -338,8 +338,7 @@ fn major_loop_applies_slast_and_dlast() {
 
 #[test]
 fn unmodelled_features_halt() {
-    let cases: [(&[(Field, u32)], &str); 6] = [
-        (&[(ATTR, 0x0303)], "transfer size"),
+    let cases: [(&[(Field, u32)], &str); 5] = [
         (&[(ATTR, 0x0404)], "transfer size"), // NBYTES 1 with 16-byte transfers
         (&[(CITER, 0x8001)], "channel link"), // E_LINK in CITER, not in BITER
         (&[(CITER, 0)], "CITER 0"),
@@ -503,31 +502,85 @@ fn mixed_transfer_sizes_move() {
     }
 }
 
+/// Channel 1 with transfer sizes `attr`, one minor loop of `nbytes` from 0x4030_0000 to 0x4030_0100, started by
+/// software.
+fn start_sized(m: &mut Machine, attr: u32, nbytes: u32) {
+    m.mem
+        .load(0x4030_0000, &(1..=32).collect::<Vec<u8>>())
+        .unwrap();
+    m.mem.load(0x4030_0100, &[0; 32]).unwrap();
+    tcd(
+        m,
+        1,
+        &[
+            (SADDR, 0x4030_0000),
+            (ATTR, attr),
+            (SOFF, nbytes),
+            (NBYTES, nbytes),
+            (SLAST, 0),
+            (DADDR, 0x4030_0100),
+            (CITER, 1),
+            (DOFF, nbytes),
+            (DLAST, 0),
+            (BITER, 1),
+            (CSR, 0),
+        ],
+    );
+    w(m, tcd_addr(1, CSR), Size::Word, START);
+}
+
+/// The configuration error of a reserved transfer size on channel 1: nothing moved, START cleared, DONE not set,
+/// ES with VLD, ERRCHN 1 and SAE, SOE, DAE and DOE; then CERR.
+fn assert_size_error(m: &mut Machine, what: &str) {
+    assert_eq!(r(m, ES, Size::Long), 0x8000_01F0, "{what}");
+    assert_eq!(r(m, ERRL, Size::Long), 1 << 1, "{what}");
+    assert_eq!(get(m, 1, CSR), 0, "{what}");
+    assert_eq!(get(m, 1, SADDR), 0x4030_0000, "{what}");
+    assert_eq!(get(m, 1, DADDR), 0x4030_0100, "{what}");
+    assert_eq!(get(m, 1, CITER), 1, "{what}");
+    assert_eq!(m.mem.peek(0x4030_0100, 32).unwrap(), [0; 32], "{what}");
+    w(m, CERR, Size::Byte, 1);
+    assert_eq!(r(m, ES, Size::Long), 0x0000_01F0, "{what}");
+}
+
 #[test]
-fn reserved_transfer_sizes_halt() {
-    // RM Table 19-21: 011, 110 and 111 are reserved (a configuration error, not modelled)
-    for attr in [0x0303, 0x0002 | 0x0600, 0x0700, 0x0003] {
-        let (mut m, _, port) = board(54);
-        tcd(
-            &mut m,
-            54,
-            &[
-                (SADDR, 0x4010_0000),
-                (SOFF, 4),
-                (ATTR, attr),
-                (NBYTES, 8),
-                (DADDR, 0x4010_0100),
-                (DOFF, 4),
-                (CITER, 1),
-                (BITER, 1),
-            ],
-        );
-        w(&mut m, SERQ, Size::Byte, 54);
-        grant(&mut m, port, 1);
-        let r = pending_halt(&mut m);
-        assert_eq!(r.kind, Stop::Unmodelled, "{attr:#x}: {r:?}");
-        assert!(r.detail.contains("transfer size"), "{attr:#x}: {r:?}");
+fn reserved_size_101_is_a_configuration_error_measured() {
+    // measured on an MCF54415: ATTR 0x0505 (101, reserved in RM Table 19-21) with NBYTES 32 is a configuration
+    // error, not a 32-byte transfer: nothing moves, ES 0x800001F0, ERRL bit 1, CSR 0, SADDR/DADDR unchanged
+    let (mut m, _, _) = board(1);
+    start_sized(&mut m, 0x0505, 32);
+    assert_size_error(&mut m, "101");
+    no_halt(&mut m);
+}
+
+#[test]
+fn reserved_size_011_is_a_configuration_error_measured() {
+    // measured on an MCF54415: ATTR 0x0303 (011) gives exactly what 101 gives
+    let (mut m, _, _) = board(1);
+    start_sized(&mut m, 0x0303, 32);
+    assert_size_error(&mut m, "011");
+    no_halt(&mut m);
+}
+
+#[test]
+fn reserved_sizes_110_111_and_one_sided_are_configuration_errors() {
+    // guess: 110 and 111, and a reserved size on one side only, give what 011 and 101 give (not measured)
+    for attr in [0x0606, 0x0707, 0x0602, 0x0005] {
+        let (mut m, _, _) = board(1);
+        start_sized(&mut m, attr, 32);
+        assert_size_error(&mut m, &format!("{attr:#06x}"));
+        no_halt(&mut m);
     }
+    // served at a request: the error ends the serving, the request stays asserted, nothing halts
+    let (mut m, _, port) = board(1);
+    start_sized(&mut m, 0x0505, 32);
+    w(&mut m, CERR, Size::Byte, 1);
+    w(&mut m, SERQ, Size::Byte, 1);
+    grant(&mut m, port, 1);
+    assert_eq!(r(&mut m, ES, Size::Long), 0x8000_01F0);
+    assert_eq!(m.dma_lines().asserted(), 1 << 1);
+    grant(&mut m, port, 0);
+    no_halt(&mut m);
 }
 
 #[test]
@@ -1440,6 +1493,16 @@ fn an_endless_link_chain_is_refused() {
 
 #[test]
 fn sixteen_byte_transfers_with_smod_ring() {
+    // measured on an MCF54415: ATTR 0x0404 (100, 16-byte), NBYTES 16 moves 16 bytes, sets DONE, SADDR/DADDR +16
+    let (mut m, _, _) = board(1);
+    start_sized(&mut m, 0x0404, 16);
+    let src: Vec<u8> = (1..=16).collect();
+    assert_eq!(m.mem.peek(0x4030_0100, 16).unwrap(), src);
+    assert_eq!(get(&mut m, 1, CSR), DONE);
+    assert_eq!(get(&mut m, 1, SADDR), 0x4030_0010);
+    assert_eq!(get(&mut m, 1, DADDR), 0x4030_0110);
+    assert_eq!(r(&mut m, ES, Size::Long), 0);
+    // the same size with an SMOD ring and two transfers per minor loop
     let (mut m, _, port) = board(1);
     let ring = 0x4010_0000; // a 64-byte ring: SMOD 6
     let dst = 0x4020_0000;
@@ -1506,74 +1569,5 @@ fn sixteen_byte_transfers_with_smod_ring() {
         "DAE"
     );
     w(&mut m, CERR, Size::Byte, 12);
-    no_halt(&mut m);
-}
-
-#[test]
-fn thirty_two_byte_transfers() {
-    // guess: ATTR size 101 is a 32-byte transfer (as on later eDMA revisions; RM Table 19-21 lists it as reserved)
-    let (mut m, _, port) = board(1);
-    let (src, dst) = (0x4010_0000, 0x4020_0000);
-    let data: Vec<u8> = (0..64u32).map(|i| (i * 5 + 1) as u8).collect();
-    m.mem.load(src, &data).unwrap();
-    tcd(
-        &mut m,
-        40,
-        &[
-            (SADDR, src),
-            (ATTR, 0x0505),
-            (SOFF, 32),
-            (NBYTES, 64),
-            (SLAST, -64i32 as u32),
-            (DADDR, dst),
-            (DOFF, 32),
-            (CITER, 1),
-            (BITER, 1),
-            (DLAST, 0),
-            (CSR, START),
-        ],
-    );
-    assert_eq!(m.mem.peek(dst, 64).unwrap(), data);
-    assert_eq!(get(&mut m, 40, SADDR), src);
-    assert_eq!(get(&mut m, 40, DADDR), dst + 64);
-    assert_eq!(get(&mut m, 40, CSR), DONE);
-    // 32 bytes in, 32-bit out
-    tcd(
-        &mut m,
-        40,
-        &[
-            (ATTR, 0x0502),
-            (NBYTES, 32),
-            (DADDR, dst + 0x100),
-            (DOFF, 4),
-            (CSR, START),
-        ],
-    );
-    assert_eq!(m.mem.peek(dst + 0x100, 40).unwrap()[..32], data[..32]);
-    assert_eq!(get(&mut m, 40, DADDR), dst + 0x120);
-    // a 32-byte transfer to a device is a burst of eight longword accesses
-    with_port(&mut m, port, |p| p.budget = 100);
-    tcd(
-        &mut m,
-        40,
-        &[
-            (SADDR, src),
-            (ATTR, 0x0505),
-            (DADDR, PORT + 0x100),
-            (DOFF, 32),
-            (CSR, START),
-        ],
-    );
-    assert_eq!(m.device::<Port>(port).mem[0x100..0x120], data[..32]);
-    assert_eq!(m.device::<Port>(port).budget, 92, "eight accesses");
-    with_port(&mut m, port, |p| p.budget = 0);
-    // 0-modulo 32: an address on a 16-byte boundary is misaligned
-    tcd(&mut m, 40, &[(SADDR, src + 16), (DADDR, dst), (CSR, START)]);
-    assert_eq!(
-        r(&mut m, ES, Size::Long),
-        0x8000_0000 | 40 << 8 | 0x80,
-        "SAE"
-    );
-    w(&mut m, CERR, Size::Byte, 40);
     no_halt(&mut m);
 }
