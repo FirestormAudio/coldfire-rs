@@ -253,7 +253,7 @@ impl Dspi {
     }
 
     /// Every frame shifted out, without its CTAS: (tick, TXDATA within the frame size, PUSHR\[PCS\],
-    /// PUSHR\[CONT\]).
+    /// PUSHR\[CONT\]). This builds a new vector; [`frame_log`](Self::frame_log) is the cheap accessor.
     pub fn frames(&self) -> Vec<(u64, u32, u8, bool)> {
         self.frames.iter().map(Frame::tuple).collect()
     }

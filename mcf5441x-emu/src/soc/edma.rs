@@ -147,7 +147,9 @@ fn unit(bytes: u32) -> Size {
 /// request. A minor loop (with what its links started) whose accesses all hit RAM cannot lower the request: if the
 /// request is still asserted after one, the serving is refused (at SERQ) or halts the run with [`Stop::Unmodelled`]
 /// "channel N request never drops". As a backstop, a request still asserted after 2^20 minor loops is refused or
-/// halts the same way.
+/// halts the same way; the likely cause is a peripheral request that cannot drop: a DSPI TX-fill request on a
+/// running queue (DSPI frames take no time), or a UART or DSPI whose clock gate is closed (a gated module keeps its
+/// request lines as it left them and drops the writes that would lower them; guess: not measured).
 ///
 /// A source or destination address that is not a multiple of its transfer size is a configuration error (RM
 /// 19.4.2): nothing moves, CITER and the TCD are unchanged but for START, DONE is not set, the channel's ERR bit is
@@ -191,7 +193,8 @@ fn unit(bytes: u32) -> Size {
 ///   the TCD is left as before it
 /// - a bus error on the scatter/gather load: by then the minor loop has moved its data and the completion is done
 ///   (SADDR, DADDR and CITER written back, DONE set, the interrupt raised, D_REQ applied); the major-loop link's
-///   START is cleared again and no TCD is loaded
+///   START is cleared again and no TCD is loaded. That is the path of a channel served at its peripheral's
+///   request; a channel started by CSR or SSRT restores the bytes of the starting write instead
 ///
 /// With DONE set, a TCD write forces E_SG and MAJOR_E_LINK to 0 (RM Table 19-31). BWC is ignored: it only spaces
 /// the accesses out in time.
@@ -562,7 +565,9 @@ impl Edma {
         while self.erq & 1 << ch != 0 && asserted(cx) {
             if loops == MAX_LOOPS {
                 return Err(format!(
-                    "eDMA channel {ch} served {MAX_LOOPS} minor loops without the request dropping"
+                    "eDMA channel {ch} served {MAX_LOOPS} minor loops without the request dropping: a peripheral request \
+                     that cannot drop (a DSPI TX-fill request on a running queue: DSPI frames take no time; \
+                     a peripheral whose clock gate is closed)"
                 ));
             }
             let mut starts = 0;

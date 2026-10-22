@@ -741,13 +741,13 @@ fn dspi_rfdf_dma_drains_the_rx_fifo() {
 
 #[test]
 fn dspi1_codec_setup_from_ref_t_runs() {
-    // DSPI1 as a codec driver sets it up: CTAR2 0x7E000335 (16-bit), CTAR3 0x3E001064 (8-bit), RSER 0x03000000
-    // (the TFFF DMA request, line 15, RM Table 19-6), then the eDMA pushes the commands, CTAS 3, the last with EOQ,
-    // and the code polls SR[EOQF]. Every frame is recorded with its CTAS.
+    // the codec setup's registers, with the TX-fill request served by the eDMA: CTAR2 0x7E000335 (16-bit), CTAR3
+    // 0x3E001064 (8-bit), RSER 0x03000000 (the TFFF DMA request, line 15, RM Table 19-6), then the eDMA pushes the
+    // commands, CTAS 3, the last with EOQ, and the code polls SR[EOQF]. Every frame is recorded with its CTAS.
     const DSPI1: u32 = 0xFC03_C000;
     const CMDS: u32 = 0x4030_0000;
     let src = "move.l #0xFC03C000,%a0\n\
-               move.l #0x80010C00,(%a0)\n\
+               move.l #0x80030C00,(%a0)\n\
                move.l #0x7E000335,%d1\n\
                move.l %d1,0x14(%a0)\n\
                move.l #0x3E001064,%d1\n\

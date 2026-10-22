@@ -1316,20 +1316,29 @@ fn major_link_start_is_overwritten_by_the_scatter_gather_load_measured() {
 #[test]
 fn scatter_gather_load_sets_done_measured() {
     // measured on an MCF54415: after the load CSR reads 0x0080 although the loaded CSR is 0
-    for loaded_csr in [0, INTMAJOR] {
-        let (mut m, _, _) = board(1);
-        let (src, sga) = (0x4041_0000, 0x4040_0000);
-        m.mem.load(src, &[1, 2, 3, 4]).unwrap();
-        let mut loaded = copy4(src, 0x4042_0100);
-        loaded.extend([(DLAST, 0), (CSR, loaded_csr)]);
-        m.mem.load(sga, &tcd_image(&loaded)).unwrap();
-        let mut a = copy4(src, 0x4042_0000);
-        a.extend([(DLAST, sga), (CSR, START | ESG)]);
-        tcd(&mut m, 1, &a);
-        assert_eq!(get(&mut m, 1, CSR), loaded_csr | DONE, "{loaded_csr:#x}");
-        assert_eq!(get(&mut m, 1, DADDR), 0x4042_0100, "{loaded_csr:#x}");
-        no_halt(&mut m);
-    }
+    scatter_gather_load_sets_done(0);
+}
+
+#[test]
+fn scatter_gather_load_of_int_major_sets_done_guess() {
+    // guess: DONE is set onto a loaded CSR that has INT_MAJOR as it is onto one that is 0 (only the 0 case is
+    // measured)
+    scatter_gather_load_sets_done(INTMAJOR);
+}
+
+fn scatter_gather_load_sets_done(loaded_csr: u32) {
+    let (mut m, _, _) = board(1);
+    let (src, sga) = (0x4041_0000, 0x4040_0000);
+    m.mem.load(src, &[1, 2, 3, 4]).unwrap();
+    let mut loaded = copy4(src, 0x4042_0100);
+    loaded.extend([(DLAST, 0), (CSR, loaded_csr)]);
+    m.mem.load(sga, &tcd_image(&loaded)).unwrap();
+    let mut a = copy4(src, 0x4042_0000);
+    a.extend([(DLAST, sga), (CSR, START | ESG)]);
+    tcd(&mut m, 1, &a);
+    assert_eq!(get(&mut m, 1, CSR), loaded_csr | DONE, "{loaded_csr:#x}");
+    assert_eq!(get(&mut m, 1, DADDR), 0x4042_0100, "{loaded_csr:#x}");
+    no_halt(&mut m);
 }
 
 #[test]

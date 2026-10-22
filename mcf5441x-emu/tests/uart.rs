@@ -6,6 +6,7 @@ mod common;
 use mcf5441x_emu::soc::{Edma, Intc, Uart, UartConfig};
 use mcf5441x_emu::{Device, DeviceId, Fault, Machine, Size, Stop};
 
+// UART9: the same UART as the rest of this file; its transmit request is eDMA channel 37 (RM Table 19-6).
 const UART9: u32 = 0xEC07_4000;
 const INTC1: u32 = 0xFC04_C000;
 const EDMA: u32 = 0xFC04_4000;
@@ -682,6 +683,27 @@ fn tx_tcd(m: &mut Machine, start: u32, count: u32, csr: u32) {
     ] {
         w_sized(m, t + off, size, v);
     }
+}
+
+#[test]
+fn a_gated_uart_keeps_its_request_and_the_backstop_names_the_gate_guess() {
+    // guess: a clock-gated UART keeps its DMA request line as it left it and drops the UTB writes that would lower
+    // it (not measured), so a served channel never sees the request drop; the stop's detail names the gate
+    let (mut m, id) = board(true);
+    m.set_clock_gate(id, Some(0));
+    tx_tcd(&mut m, 0, 4, 0); // no D_REQ: the major loop restarts for ever
+    w(&mut m, UCR, 0x04); // transmitter enable: TXRDY requests
+    m.set_clock_gates(1);
+    assert_ne!(
+        m.dma_lines().asserted() & 1 << TX_CH,
+        0,
+        "the line stays up"
+    );
+    let refused = m.access(EDMA + 0x18, Size::Byte, Some(u32::from(TX_CH))); // SERQ
+    assert!(refused.is_err(), "{refused:?}");
+    let r = m.take_refusal().unwrap();
+    assert_eq!(r.kind, Stop::Unmodelled);
+    assert!(r.detail.contains("clock gate is closed"), "{}", r.detail);
 }
 
 #[test]
