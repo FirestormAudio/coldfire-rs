@@ -39,9 +39,13 @@ pub enum ConfigError {
 }
 
 /// A receive error.
+///
+/// An error drops nothing: the bytes received before and after it stay queued, and the next read returns them. To
+/// resync on the buffered receiver (start again at the next byte that arrives), call
+/// [`BufferedUartRx::discard`] (a [`BufferedUart`] is split for it).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// USR error bits (OE 0x10, PE 0x20, FE 0x40), cleared after reporting.
+    /// USR error bits (OE 0x10, PE 0x20, FE 0x40), cleared after reporting. A break is reported through FE.
     Status(u8),
 }
 
@@ -95,6 +99,8 @@ pub(crate) const fn drain_spins(tx_was_on: bool) -> u32 {
     if tx_was_on { TX_IDLE_SPINS } else { 0 }
 }
 
+/// USR's error bits: OE, PE and FE. RB (0x80) is left out: guess: a break is an all-zero character with a zero stop
+/// bit, so it sets FE too and is reported through it.
 const USR_ERRORS: u8 = 0x70;
 /// UMR1: RXRDY requests (RXIRQ 0), block error mode (ERR 1), no parity (PM 0b10), 8 bits (B/C 0b11).
 const UMR1: u8 = 0x33;
@@ -422,7 +428,8 @@ mod tests {
 
     #[test]
     fn line_setup_is_8n1_with_receive_errors_in_block_mode() {
-        // guess: block mode is from the RM (41.4.2.3); hardware ran character mode (0x13)
+        // guess: block mode is from the RM (41.4.2.3); hardware ran character mode (0x13). This checks the
+        // constant only, not the register line setup writes.
         assert_eq!(UMR1 & 0x20, 0x20, "ERR: errors stay in USR until RESET ERROR STATUS");
         assert_eq!(UMR1 & 0x1F, 0x13, "no parity, 8 bits");
         assert_eq!(UMR1 & 0xC0, 0, "no RTS control, RXRDY interrupt");
