@@ -57,10 +57,12 @@ the chip's peripherals ([Peripherals](#peripherals)) and the board's own:
   so reads, writes, instruction fetch, bus masters and the host all see the same bytes, and a write through either
   range drops code cached from the other.
 - [`Device`] is the trait a peripheral implements: `read` and `write` at an offset in its window, plus optional
-  `next_event` and `advance` for things it does by itself on the machine clock.
+  `next_event` and `advance` for things it does by itself on the machine clock. `next_event` is asked again only
+  after a call into that device, so it may depend only on the device's own state.
 - `add_device(base, size, device)` maps a device window; `add_timer(device)` adds one with no registers.
 - `add_interrupt_controller(base, size, controller)` maps an [`InterruptController`]. Devices drive request lines with
-  `cx.irq.set(controller, source, on)`; the controller turns them into a level and a vector.
+  `cx.irq.set(controller, source, on)`; the controller turns them into a level and a vector. A controller with a
+  `generation` counter has its answers reused while the counter and the request lines stay as they were.
 - A device ends a run with `DeviceCx::halt(kind, detail)`; the instruction making the access completes first. With
   `DeviceCx::refuse(kind, detail)` it refuses the access instead: the instruction does not complete, PC stays on it
   and the run stops with that kind and detail.

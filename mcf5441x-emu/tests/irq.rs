@@ -3,6 +3,9 @@
 
 mod common;
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use common::{BASE, STACK, prepare, set_vector, until};
 use mcf5441x_emu::{
     Device, DeviceCx, InterruptController, Irq, IrqLines, Limit, Machine, Size, Stop,
@@ -506,4 +509,84 @@ fn highest_level_wins_and_a_policy_can_stop_on_an_interrupt() {
     assert_eq!((r.kind, r.pc), (Stop::Exception(70), BASE + 4), "{r:?}");
     assert_eq!((m.cpu.d[5], m.cpu.d[6]), (5, 0));
     assert_eq!(m.cpu.sr(), 0x2000);
+}
+
+/// A controller with one source, 6 of controller 0, at level 3 and vector 70, masked while `masked` is set; the
+/// mask is shared with an [`Unmasker`]. With `generation`, it has a counter the unmasker moves on.
+struct SharedMask {
+    masked: Rc<Cell<bool>>,
+    generation: Option<Rc<Cell<u64>>>,
+}
+
+impl Device for SharedMask {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
+}
+
+impl InterruptController for SharedMask {
+    fn pending(&self, lines: &IrqLines, _: bool) -> Option<Irq> {
+        (lines.asserted(0) & 1 << 6 != 0 && !self.masked.get()).then_some(Irq {
+            level: 3,
+            vector: 70,
+        })
+    }
+    fn level7(&self, _: &IrqLines) -> bool {
+        false
+    }
+    fn generation(&self) -> Option<Rc<Cell<u64>>> {
+        self.generation.clone()
+    }
+}
+
+/// A plain device holding [`SharedMask`]'s mask: a write of 0 masks the source, any other value unmasks it, and
+/// moves the counter on.
+struct Unmasker {
+    masked: Rc<Cell<bool>>,
+    generation: Rc<Cell<u64>>,
+}
+
+impl Device for Unmasker {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, value: u32, _: &mut DeviceCx) {
+        self.masked.set(value == 0);
+        self.generation.set(self.generation.get() + 1);
+    }
+}
+
+/// A request a write to another device unmasks in a controller (sharing its state) is taken before the next
+/// instruction, with the asserted line and the controller's own registers unchanged; `counter` gives the
+/// controller its generation counter. Returns (stacked PC, handler runs, the label after the write).
+fn unmasked_by_another_device(counter: bool) -> (u32, u32, u32) {
+    let src = "move.w #0x2000,%sr\nnop\ntst.l (%a2)\nmoveq #1,%d1\nmove.l %d1,(%a2)\nnext: nop\nend: nop\n\
+               handler: move.l 4(%sp),%d6\naddq.l #1,%d4\nclr.l (%a2)\nrte";
+    let (mut m, l) = prepare(src, &["next", "end", "handler"]);
+    set_vector(&mut m, 70, l[2]);
+    let masked = Rc::new(Cell::new(true));
+    let generation = Rc::new(Cell::new(0));
+    m.add_interrupt_controller(
+        INTC,
+        0x4000,
+        Box::new(SharedMask {
+            masked: masked.clone(),
+            generation: counter.then(|| generation.clone()),
+        }),
+    );
+    m.add_device(TRIGGER, 0x100, Box::new(Unmasker { masked, generation }));
+    m.cpu.a[2] = TRIGGER;
+    m.mem.irq_lines_mut().set(0, 6, true);
+    let r = m.run(until(l[1]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    (m.cpu.d[6], m.cpu.d[4], l[0])
+}
+
+#[test]
+fn a_request_another_device_unmasks_is_taken_at_the_next_instruction() {
+    for counter in [false, true] {
+        let (stacked, runs, next) = unmasked_by_another_device(counter);
+        assert_eq!((stacked, runs), (next, 1), "with a counter: {counter}");
+    }
 }

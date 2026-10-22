@@ -58,7 +58,8 @@ pub struct UartConfig {
 pub trait SerialPeer: Any {
     /// A character left the UART's shift register: it began shifting out at `cx.now`.
     fn transmitted(&mut self, byte: u8, cx: &mut PeerCx);
-    /// The peer's own next event (absolute tick), if any.
+    /// The peer's own next event (absolute tick), if any. It is asked when the UART's
+    /// [`Device::next_event`] is, so it may depend only on the peer's own state, changed by the calls above.
     fn next_event(&self) -> Option<u64> {
         None
     }

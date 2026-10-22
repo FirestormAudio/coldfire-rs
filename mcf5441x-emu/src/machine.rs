@@ -694,12 +694,15 @@ impl Machine {
     /// rising edge. A request held off by SR\[I\] is looked at again after the next write to SR (MOVE to SR,
     /// STRLDSR, RTE and STOP end the run of uninterrupted execution).
     fn deliverable(&mut self) -> Option<(usize, Irq)> {
-        let line = self.mem.level7();
+        let (was, edge) = (self.level7_line, self.level7_edge);
+        let (line, held) = self
+            .mem
+            .sample(|line| if line != was { line } else { edge });
         if line != self.level7_line {
             self.level7_line = line;
             self.level7_edge = line;
         }
-        self.held = self.mem.pending(self.level7_edge);
+        self.held = held;
         let (controller, irq) = self.held?;
         let ipl = (self.cpu.sr() >> 8) as u8 & 7;
         (irq.level == 7 || irq.level > ipl).then_some((controller, irq))

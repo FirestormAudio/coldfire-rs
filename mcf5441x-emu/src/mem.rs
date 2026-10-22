@@ -202,6 +202,21 @@ pub struct Memory {
     poll_limit: u32,
     /// The interrupt request lines at the last [`Memory::mark`].
     marked_irq: IrqLines,
+    /// The controllers' last answers for the request lines, while neither changed.
+    sampled: Sampled,
+}
+
+/// What the interrupt controllers answered for the request lines `lines` at their generations `gens`
+/// ([`InterruptController::generation`]); none of it holds unless `valid`.
+#[derive(Debug, Default)]
+struct Sampled {
+    valid: bool,
+    lines: IrqLines,
+    epoch: u64,
+    gens: Vec<u64>,
+    level7: Option<bool>,
+    /// By `allow_level7`.
+    pending: [Option<Option<(usize, Irq)>>; 2],
 }
 
 /// What [`Memory::mark`] notes, for [`Memory::unchanged_since`].
@@ -242,6 +257,7 @@ impl Default for Memory {
             polls: HashMap::new(),
             poll_limit: DEFAULT_POLL_LIMIT,
             marked_irq: IrqLines::default(),
+            sampled: Sampled::default(),
         }
     }
 }
@@ -494,7 +510,7 @@ impl Space {
                     refused: None,
                     gates,
                 };
-                let r = f(self.devices.get_mut(i), &mut cx);
+                let r = f(self.devices.call_mut(i), &mut cx);
                 (r, cx.refused, cx.gates)
             }
             Kind::Master => {
@@ -519,6 +535,7 @@ impl Space {
         if set != gates {
             self.devices.set_closed(set, now);
         }
+        self.devices.refresh(i);
         Some((r, refused))
     }
 
@@ -966,6 +983,8 @@ impl Memory {
         f: impl FnOnce(&mut T, &mut DeviceCx) -> R,
     ) -> R {
         self.horizon = 0;
+        // The host may change anything about the device, a controller's generation counter among it.
+        self.space.devices.stale = true;
         self.space
             .call_halting(
                 id.0,
@@ -1066,7 +1085,11 @@ impl Memory {
 
     /// Advance the devices whose events are due, in the order they were added.
     pub(crate) fn advance_due(&mut self) {
+        self.space.devices.refresh_all();
         let now = self.now;
+        if self.space.devices.next_event().is_none_or(|t| t > now) {
+            return;
+        }
         for i in 0..self.space.devices.len() {
             if self.space.devices.due(i, now) {
                 self.space.call_halting(
@@ -1167,10 +1190,44 @@ impl Memory {
             .map(|(_, irq)| irq)
     }
 
-    /// The highest request over all controllers, ignoring level 7 unless `allow_level7`, and the index of the
-    /// controller making it.
-    pub(crate) fn pending(&self, allow_level7: bool) -> Option<(usize, Irq)> {
-        self.space.devices.pending(&self.irq, allow_level7)
+    /// Whether the level-7 line is up, and then the highest request over all controllers, ignoring level 7 unless
+    /// `allow` says so for that line, with the index of the controller making it. While the controllers'
+    /// generations ([`InterruptController::generation`]) and the request lines are as they were when the
+    /// controllers last answered, those answers are reused.
+    pub(crate) fn sample(
+        &mut self,
+        allow: impl FnOnce(bool) -> bool,
+    ) -> (bool, Option<(usize, Irq)>) {
+        let devices = &self.space.devices;
+        let s = Memory::sampled(&mut self.sampled, devices, &self.irq);
+        if !s.valid {
+            let line = devices.level7(&self.irq);
+            return (line, devices.pending(&self.irq, allow(line)));
+        }
+        let line = *s.level7.get_or_insert_with(|| devices.level7(&self.irq));
+        let allow = allow(line);
+        let pending =
+            *s.pending[allow as usize].get_or_insert_with(|| devices.pending(&self.irq, allow));
+        (line, pending)
+    }
+
+    /// `sampled`, cleared unless it is for `lines` and the controllers' generations as they are now.
+    #[inline]
+    fn sampled<'s>(
+        sampled: &'s mut Sampled,
+        devices: &Devices,
+        lines: &IrqLines,
+    ) -> &'s mut Sampled {
+        if !(sampled.valid
+            && sampled.lines == *lines
+            && devices.generations_are(sampled.epoch, &sampled.gens))
+        {
+            sampled.valid = devices.generations(&mut sampled.epoch, &mut sampled.gens);
+            sampled.lines.clone_from(lines);
+            sampled.level7 = None;
+            sampled.pending = [None; 2];
+        }
+        sampled
     }
 
     /// Tell controller `i` that the core took its request `irq` ([`InterruptController::acknowledge`]). A
@@ -1196,6 +1253,7 @@ impl Memory {
         if set != gates {
             self.space.devices.set_closed(set, self.now);
         }
+        self.space.devices.refresh(i);
     }
 
     /// The request lines as they could become while the core waits after STOP: the asserted lines plus every
@@ -1210,11 +1268,6 @@ impl Memory {
             lines.set(controller, source, true);
         }
         Some(lines)
-    }
-
-    /// Whether the level-7 line is up.
-    pub(crate) fn level7(&self) -> bool {
-        self.space.devices.level7(&self.irq)
     }
 
     /// Copy `bytes` into RAM; fails with `Unmapped` at `addr`, the start of the copy, unless a single RAM region

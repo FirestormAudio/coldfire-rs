@@ -6,6 +6,9 @@
 //! non-maskable and edge-triggered on one line shared by all controllers: it is taken once each time that line
 //! rises (RM 17.1.1, RM 3.2.9 SR\[I\]).
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use crate::device::{Device, DeviceCx};
 
 /// The request lines into each interrupt controller: up to 64 sources per controller.
@@ -70,4 +73,16 @@ pub trait InterruptController: Device {
     /// [`InterruptController::pending`] reported it). Requests are sampled again before the handler's first
     /// instruction, so a request this negates is not taken twice.
     fn acknowledge(&mut self, _irq: Irq, _cx: &mut DeviceCx) {}
+    /// A counter the controller moves on whenever what [`InterruptController::pending`] and
+    /// [`InterruptController::level7`] report for the same request lines could change, whatever changed it (a call
+    /// into this controller or into a device sharing its state); `None` (the default) when it cannot say. Asked
+    /// when the controller is added, and again after the host had any device mutably
+    /// ([`Machine::device_mut`](crate::Machine::device_mut), [`Machine::with_device`](crate::Machine::with_device));
+    /// controllers sharing their state may share one counter.
+    ///
+    /// While every controller has a counter, the machine asks `pending` and `level7` again only when a counter or
+    /// the request lines changed since it last asked them, and reuses their answers otherwise.
+    fn generation(&self) -> Option<Rc<Cell<u64>>> {
+        None
+    }
 }

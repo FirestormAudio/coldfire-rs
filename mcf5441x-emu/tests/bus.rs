@@ -664,19 +664,23 @@ impl Device for Asked {
     }
 }
 
-/// The times an [`Asked`] timer is asked for its event in a run of `body` (then `end`), with the FIFO mapped.
+/// Where an [`Asked`] device is mapped.
+const ASKED: u32 = 0xFC02_0000;
+
+/// The times an [`Asked`] device at [`ASKED`] is asked for its event in a run of `body` (then `end`), with the
+/// FIFO mapped.
 fn asks_in(body: &str) -> u32 {
     let (mut m, l) = prepare(&format!("{body}\nend: nop"), &["end"]);
     m.add_device(FIFO, 0x100, Box::new(Fifo::default()));
     let asks = Rc::new(Cell::new(0));
-    m.add_timer(Box::new(Asked { asks: asks.clone() }));
+    m.add_device(ASKED, 0x100, Box::new(Asked { asks: asks.clone() }));
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     asks.get()
 }
 
 #[test]
-fn writes_to_sr_that_let_nothing_in_do_not_ask_the_devices_for_events() {
+fn a_device_is_asked_for_its_event_again_only_after_a_call_into_it() {
     let none = asks_in("");
     let sr = "move.w #0x2700,%sr\n".repeat(10);
     assert_eq!(
@@ -684,11 +688,75 @@ fn writes_to_sr_that_let_nothing_in_do_not_ask_the_devices_for_events() {
         none,
         "no device is asked again after a write to SR"
     );
-    let reads = "tst.l 0xFC000008\n".repeat(10);
-    assert!(
-        asks_in(&reads) >= none + 10,
-        "but after every device access"
+    let others = "tst.l 0xFC000008\n".repeat(10);
+    assert_eq!(
+        asks_in(&others),
+        none,
+        "nor after an access to another device"
     );
+    let own = "tst.l 0xFC020000\n".repeat(10);
+    assert!(asks_in(&own) >= none + 10, "but after every access to it");
+}
+
+/// A timer whose event the host or a register write sets (a write of `n` sets it `n` ticks out), recording the
+/// ticks it is advanced at.
+#[derive(Default)]
+struct Later {
+    at: Option<u64>,
+    advanced: Vec<u64>,
+}
+
+impl Device for Later {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, value: u32, cx: &mut DeviceCx) {
+        self.at = Some(cx.now + u64::from(value));
+    }
+    fn next_event(&self) -> Option<u64> {
+        self.at
+    }
+    fn advance(&mut self, now: u64, _: &mut DeviceCx) {
+        self.advanced.push(now);
+        self.at = None;
+    }
+}
+
+/// A machine running `nop`s, with a [`Later`] at [`ASKED`].
+fn with_later(src: &str) -> (Machine, Vec<u32>, DeviceId) {
+    let (mut m, l) = prepare(&format!("{src}\n{}end: nop", "nop\n".repeat(20)), &["end"]);
+    let id = m.add_device(ASKED, 0x100, Box::new(Later::default()));
+    (m, l, id)
+}
+
+#[test]
+fn an_event_a_register_write_sets_is_advanced_at_its_tick() {
+    // The write is the instruction at tick 2: the event is 5 ticks out.
+    let (mut m, l, id) = with_later("nop\nmoveq #5,%d1\nmove.l %d1,0xFC020000");
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.device::<Later>(id).advanced, [7]);
+}
+
+#[test]
+fn an_event_the_host_sets_between_runs_is_advanced_at_its_tick() {
+    let (mut m, l, id) = with_later("");
+    let three = Limit {
+        max_instructions: Some(3),
+        ..Limit::default()
+    };
+    assert_eq!(m.run(three).kind, Stop::InstructionLimit);
+    m.device_mut::<Later>(id).at = Some(5);
+    let four = Limit {
+        max_instructions: Some(4),
+        ..Limit::default()
+    };
+    assert_eq!(m.run(four).kind, Stop::InstructionLimit);
+    assert_eq!(m.device::<Later>(id).advanced, [5]);
+    m.with_device::<Later, _>(id, |d, cx| d.at = Some(cx.now + 4));
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.device::<Later>(id).advanced, [5, 11]);
 }
 
 /// A controller with one source, 6 of controller 0, at level 5 and vector 70.

@@ -16,7 +16,7 @@
 //! Accesses outside the register map, accesses of the wrong size to the 16- and 32-bit registers, and writes to
 //! the IACK registers are refused with [`Stop::Unmodelled`], the detail naming the controller and the register.
 
-use std::cell::RefCell;
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::rc::Rc;
 
 use crate::device::{Device, DeviceCx};
@@ -67,6 +67,25 @@ struct Chip {
     clmask: u8,
     slmask: u8,
     intc: [Regs; 3],
+}
+
+/// The state of a chip's controllers and what moves on when it may change ([`InterruptController::generation`]).
+#[derive(Debug)]
+struct Shared {
+    chip: RefCell<Chip>,
+    generation: Rc<Cell<u64>>,
+}
+
+impl Shared {
+    fn chip(&self) -> Ref<'_, Chip> {
+        self.chip.borrow()
+    }
+
+    /// The chip's state, borrowed to change: the generation moves on.
+    fn changed(&self) -> RefMut<'_, Chip> {
+        self.generation.set(self.generation.get().wrapping_add(1));
+        self.chip.borrow_mut()
+    }
 }
 
 impl Chip {
@@ -212,14 +231,17 @@ enum Reg {
 #[derive(Debug)]
 pub struct Intc {
     index: usize,
-    chip: Rc<RefCell<Chip>>,
+    chip: Rc<Shared>,
 }
 
 impl Intc {
     /// The chip's three controllers, INTC0-2, sharing one ICONFIG, CLMASK and SLMASK, and the global IACK
     /// registers over them. This is the only way to build them: the level masks exist once for all three.
     pub fn chip() -> ([Intc; 3], GlobalIack) {
-        let chip = Rc::new(RefCell::new(Chip::new()));
+        let chip = Rc::new(Shared {
+            chip: RefCell::new(Chip::new()),
+            generation: Rc::default(),
+        });
         let intc = [0, 1, 2].map(|index| Intc {
             index,
             chip: chip.clone(),
@@ -299,7 +321,7 @@ impl Device for Intc {
             }
         };
         let i = self.index;
-        let mut chip = self.chip.borrow_mut();
+        let mut chip = self.chip.changed();
         match reg {
             Reg::Long(k) => {
                 let r = &chip.intc[i];
@@ -338,7 +360,7 @@ impl Device for Intc {
         let i = self.index;
         match reg {
             Reg::Long(k) => {
-                let mut chip = self.chip.borrow_mut();
+                let mut chip = self.chip.changed();
                 let r = &mut chip.intc[i];
                 let field = match k {
                     // IPR is read-only: writes are ignored (RM 17.2.1).
@@ -349,7 +371,7 @@ impl Device for Intc {
                 let shift = if k % 2 == 0 { 32 } else { 0 };
                 *field = *field & !(0xFFFF_FFFF << shift) | u64::from(value) << shift;
             }
-            Reg::Iconfig => self.chip.borrow_mut().iconfig = value as u16 & ICONFIG_BITS,
+            Reg::Iconfig => self.chip.changed().iconfig = value as u16 & ICONFIG_BITS,
             Reg::Bytes => {
                 let n = len(size);
                 let bytes: Vec<(u32, u8)> = (0..n)
@@ -366,7 +388,7 @@ impl Device for Intc {
                         );
                     }
                 }
-                let mut chip = self.chip.borrow_mut();
+                let mut chip = self.chip.changed();
                 // guess: SIMR and CIMR written together (RM 17.2.6: SIMR has priority) apply the clear first.
                 let cimr_first = bytes.iter().filter(|(o, _)| *o == 0x1D);
                 for &(o, b) in cimr_first.chain(bytes.iter().filter(|(o, _)| *o != 0x1D)) {
@@ -399,7 +421,7 @@ impl Device for Intc {
 
 impl InterruptController for Intc {
     fn pending(&self, lines: &IrqLines, allow_level7: bool) -> Option<Irq> {
-        let chip = self.chip.borrow();
+        let chip = self.chip.chip();
         let (level, s) = chip.best(self.index, lines.asserted(self.index), |l| {
             l != 7 || allow_level7
         })?;
@@ -410,14 +432,20 @@ impl InterruptController for Intc {
     }
 
     fn level7(&self, lines: &IrqLines) -> bool {
-        let chip = self.chip.borrow();
+        let chip = self.chip.chip();
         chip.best(self.index, lines.asserted(self.index), |l| l == 7)
             .is_some()
     }
 
     /// The core's IACK cycle: with EMASK, CLMASK is saved in SLMASK and loaded with the level taken (RM 17.3.1.3).
     fn acknowledge(&mut self, irq: Irq, _cx: &mut DeviceCx) {
-        self.chip.borrow_mut().acknowledge(irq.level);
+        self.chip.changed().acknowledge(irq.level);
+    }
+
+    /// Every change to the registers the three controllers share, through any of them or the global IACK
+    /// registers, moves it on.
+    fn generation(&self) -> Option<Rc<Cell<u64>>> {
+        Some(self.chip.generation.clone())
     }
 }
 
@@ -429,7 +457,7 @@ impl InterruptController for Intc {
 /// are refused.
 #[derive(Debug)]
 pub struct GlobalIack {
-    chip: Rc<RefCell<Chip>>,
+    chip: Rc<Shared>,
 }
 
 impl GlobalIack {
@@ -455,7 +483,7 @@ impl GlobalIack {
 impl Device for GlobalIack {
     fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32 {
         match GlobalIack::decode(offset, size) {
-            Ok(n) => self.chip.borrow_mut().iack(n, 0..3, cx.irq),
+            Ok(n) => self.chip.changed().iack(n, 0..3, cx.irq),
             Err(why) => {
                 cx.refuse(Stop::Unmodelled, format!("INTC global IACK {why}"));
                 0
