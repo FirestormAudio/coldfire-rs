@@ -308,7 +308,8 @@ impl Space {
 
     /// Call device `i` with a context at `now`: a bus master is taken out of its slot and gets the rest of the
     /// address space as its bus. Returns what `f` returned and the refusal the device made, if any; `None`,
-    /// without a call, when `i` is a bus master already being called.
+    /// without a call, when `i` is a bus master already being called. Clock gates the device set are applied
+    /// when it returns.
     pub(crate) fn call<R>(
         &mut self,
         i: usize,
@@ -318,8 +319,9 @@ impl Space {
         stop: &mut Option<StopReason>,
         f: impl FnOnce(&mut dyn Device, &mut DeviceCx) -> R,
     ) -> Option<(R, Option<Refusal>)> {
-        match self.devices.kind(i) {
-            Kind::Out => None,
+        let gates = self.devices.closed();
+        let (r, refused, set) = match self.devices.kind(i) {
+            Kind::Out => return None,
             Kind::Plain => {
                 let mut cx = DeviceCx {
                     now,
@@ -328,9 +330,10 @@ impl Space {
                     stop,
                     space: None,
                     refused: None,
+                    gates,
                 };
                 let r = f(self.devices.get_mut(i), &mut cx);
-                Some((r, cx.refused))
+                (r, cx.refused, cx.gates)
             }
             Kind::Master => {
                 let mut dev = self.devices.take(i);
@@ -341,13 +344,52 @@ impl Space {
                     stop,
                     space: Some(self),
                     refused: None,
+                    gates,
                 };
                 let r = f(&mut *dev, &mut cx);
-                let refused = cx.refused;
+                let (refused, set) = (cx.refused, cx.gates);
                 self.devices.restore(i, dev);
-                Some((r, refused))
+                // Gates closed through its bus while it was out of its slot.
+                self.devices.tell(i, now);
+                (r, refused, set)
             }
+        };
+        if set != gates {
+            self.devices.set_closed(set, now);
         }
+        Some((r, refused))
+    }
+
+    /// An access to device `i` at `off`, as [`Space::call`]: the value read (0 for a write) and whether the
+    /// device's reads are poll-counted. A gated device is not called: a read returns all ones (measured on an
+    /// MCF54415) and is poll-counted, and a write is dropped.
+    // guess: a write to a module whose clock is gated is dropped (not measured).
+    pub(crate) fn access(
+        &mut self,
+        i: usize,
+        off: u32,
+        size: Size,
+        write: Option<u32>,
+        now: u64,
+        irq: &mut IrqLines,
+        dma: &mut DmaLines,
+        stop: &mut Option<StopReason>,
+    ) -> Option<((u32, bool), Option<Refusal>)> {
+        if self.devices.gated(i) && self.devices.kind(i) != Kind::Out {
+            let value = if write.is_some() {
+                0
+            } else {
+                truncate(u32::MAX, size)
+            };
+            return Some(((value, true), None));
+        }
+        self.call(i, now, irq, dma, stop, |d, cx| match write {
+            Some(value) => {
+                d.write(off, size, truncate(value, size), cx);
+                (0, d.poll_counted())
+            }
+            None => (truncate(d.read(off, size, cx), size), d.poll_counted()),
+        })
     }
 
     /// Call device `i` outside an access: a refusal acts as a halt. `None` as for [`Space::call`].
@@ -544,19 +586,15 @@ impl Memory {
         {
             self.record(addr, size, true, truncate(value, size));
         }
-        let r = self.space.call(
+        let r = self.space.access(
             i,
+            off,
+            size,
+            write,
             self.now,
             &mut self.irq,
             &mut self.dma,
             &mut self.stop,
-            |d, cx| match write {
-                Some(value) => {
-                    d.write(off, size, truncate(value, size), cx);
-                    (0, d.poll_counted())
-                }
-                None => (truncate(d.read(off, size, cx), size), d.poll_counted()),
-            },
         );
         let ((value, counted), refused) = r.ok_or(unmapped)?;
         self.horizon = 0;
@@ -699,6 +737,37 @@ impl Memory {
             .expect("no device is being called")
     }
 
+    /// The clock gates: bit n is set while gate n is closed. All are open (0) until set.
+    pub fn clock_gates(&self) -> u128 {
+        self.space.devices.closed()
+    }
+
+    /// Set the clock gates at the current tick (bit n set: gate n closed); the devices whose gated state changes
+    /// are told ([`Device::gate`]).
+    pub fn set_clock_gates(&mut self, closed: u128) {
+        self.horizon = 0;
+        self.space.devices.set_closed(closed, self.now);
+    }
+
+    /// Tie device `id` to clock gate `gate` (0-127), or to none (the default: never gated). While its gate is
+    /// closed the device is *gated*: an access to it reads all ones or is dropped without calling it, and its
+    /// events are held (see [`Device::gate`]). Calls from the host ([`Machine::with_device`](crate::Machine::with_device),
+    /// [`Memory::device_mut`]) still reach it. Panics when `gate` is above 127.
+    pub fn set_clock_gate(&mut self, id: DeviceId, gate: Option<u8>) {
+        self.horizon = 0;
+        self.space.devices.set_gate(id.0, gate, self.now);
+    }
+
+    /// Whether device `id`'s clock gate is closed.
+    pub fn gated(&self, id: DeviceId) -> bool {
+        self.space.devices.gated(id.0)
+    }
+
+    /// The device whose window holds `addr`, if any.
+    pub fn device_at(&self, addr: u32) -> Option<DeviceId> {
+        self.space.devices.find(addr, 1).map(|(i, _)| DeviceId(i))
+    }
+
     /// The interrupt request lines.
     pub fn irq_lines(&self) -> &IrqLines {
         &self.irq
@@ -775,6 +844,9 @@ impl Memory {
             let before = self.dma;
             for k in 0..self.space.devices.masters().len() {
                 let i = self.space.devices.masters()[k];
+                if self.space.devices.gated(i) {
+                    continue;
+                }
                 self.space.call_halting(
                     i,
                     now,
@@ -819,6 +891,7 @@ impl Memory {
     /// refusal acts as a halt.
     pub(crate) fn acknowledge(&mut self, i: usize, irq: Irq) {
         self.horizon = 0;
+        let gates = self.space.devices.closed();
         let mut cx = DeviceCx {
             now: self.now,
             irq: &mut self.irq,
@@ -826,13 +899,17 @@ impl Memory {
             stop: &mut self.stop,
             space: None,
             refused: None,
+            gates,
         };
         self.space
             .devices
             .controller_mut(i)
             .acknowledge(irq, &mut cx);
-        let refused = cx.refused;
+        let (refused, set) = (cx.refused, cx.gates);
         halt_on(&mut self.stop, refused);
+        if set != gates {
+            self.space.devices.set_closed(set, self.now);
+        }
     }
 
     /// The request lines as they could become while the core waits after STOP: the asserted lines plus every

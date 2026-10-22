@@ -15,7 +15,7 @@
 
 use crate::device::{DeviceCx, Refusal, halt_on};
 use crate::irq::IrqLines;
-use crate::mem::{Fault, Size, Space, truncate};
+use crate::mem::{Fault, Size, Space};
 use crate::stop::StopReason;
 
 /// The DMA request lines: 64, one per channel of the eDMA.
@@ -98,14 +98,12 @@ impl<'b> Bus<'b> {
             .devices
             .find(addr, size.bytes())
             .ok_or(unmapped)?;
-        let (v, refused) = self
+        let ((v, _), refused) = self
             .space
-            .call(i, self.now, self.irq, self.dma, self.stop, |d, cx| {
-                d.read(off, size, cx)
-            })
+            .access(i, off, size, None, self.now, self.irq, self.dma, self.stop)
             .ok_or(unmapped)?;
         self.refused(refused)?;
-        Ok(truncate(v, size))
+        Ok(v)
     }
 
     /// Write the low `size` bytes of `value` at `addr`, big-endian.
@@ -119,12 +117,18 @@ impl<'b> Bus<'b> {
             .devices
             .find(addr, size.bytes())
             .ok_or(unmapped)?;
-        let value = truncate(value, size);
-        let ((), refused) = self
+        let (_, refused) = self
             .space
-            .call(i, self.now, self.irq, self.dma, self.stop, |d, cx| {
-                d.write(off, size, value, cx)
-            })
+            .access(
+                i,
+                off,
+                size,
+                Some(value),
+                self.now,
+                self.irq,
+                self.dma,
+                self.stop,
+            )
             .ok_or(unmapped)?;
         self.refused(refused)
     }

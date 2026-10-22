@@ -36,6 +36,9 @@ const WRITABLE: u16 = 0x0F7B;
 /// (measured on an MCF54415).
 ///
 /// The timer drives source `source` of interrupt controller `controller` with PIF and PIE.
+///
+/// While its clock gate is closed ([`Device::gate`]) the counter stops and no expiry happens; opening the gate
+/// continues the count where it stopped. guess: not measured (a module without its clock is taken not to count).
 #[derive(Debug)]
 pub struct Pit {
     controller: usize,
@@ -51,6 +54,8 @@ pub struct Pit {
     /// The counter while disabled.
     held: u16,
     expiries: u64,
+    /// The tick its clock gate closed, while it is closed.
+    gated_at: Option<u64>,
 }
 
 impl Pit {
@@ -66,6 +71,7 @@ impl Pit {
             next: None,
             held: 0xFFFF,
             expiries: 0,
+            gated_at: None,
         }
     }
 
@@ -214,6 +220,17 @@ impl Device for Pit {
 
     fn poll_counted(&self) -> bool {
         false
+    }
+
+    // guess: a gated timer stops counting and resumes where it stopped (not measured).
+    fn gate(&mut self, closed: bool, now: u64) {
+        if closed {
+            self.gated_at = Some(now);
+        } else if let Some(at) = self.gated_at.take() {
+            let d = now - at;
+            self.start += d;
+            self.next = self.next.map(|t| t + d);
+        }
     }
 
     fn wake_sources(&self, out: &mut Vec<(usize, u8)>) -> bool {

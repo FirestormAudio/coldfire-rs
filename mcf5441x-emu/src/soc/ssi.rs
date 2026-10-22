@@ -159,6 +159,8 @@ pub struct Ssi {
     record: bool,
     counters: SsiCounters,
     source: Option<Box<dyn FnMut(u64) -> Vec<i32>>>,
+    /// The tick its clock gate closed, while it is closed.
+    gated_at: Option<u64>,
 }
 
 impl fmt::Debug for Ssi {
@@ -205,6 +207,7 @@ impl Ssi {
             record: true,
             counters: SsiCounters::default(),
             source: None,
+            gated_at: None,
         }
     }
 
@@ -550,6 +553,17 @@ impl Device for Ssi {
 
     fn poll_counted(&self) -> bool {
         false
+    }
+
+    // guess: a gated SSI sends no frames and resumes where it stopped when the gate opens (not measured).
+    fn gate(&mut self, closed: bool, now: u64) {
+        if closed {
+            self.gated_at = Some(now);
+        } else if let Some(at) = self.gated_at.take() {
+            let d = now - at;
+            self.next = self.next.map(|t| t + d);
+            self.tfrc_at = self.tfrc_at.map(|t| t + d);
+        }
     }
 
     /// No sources: the SSI's own interrupt request is not modelled, and the eDMA lists the routes of the requests

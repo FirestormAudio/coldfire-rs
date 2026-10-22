@@ -199,6 +199,8 @@ pub struct Esdhc {
     clock_written: bool,
     writes: Vec<(u32, u32)>,
     record: bool,
+    /// The tick its clock gate closed, while it is closed.
+    gated_at: Option<u64>,
 }
 
 impl Esdhc {
@@ -228,6 +230,7 @@ impl Esdhc {
             clock_written: false,
             writes: Vec::new(),
             record: true,
+            gated_at: None,
         }
     }
 
@@ -597,6 +600,23 @@ impl Device for Esdhc {
 
     fn poll_counted(&self) -> bool {
         false
+    }
+
+    // guess: a gated eSDHC holds its data phase, its drain timeout and the card's busy time, and resumes them
+    // where they stopped when the gate opens (not measured).
+    fn gate(&mut self, closed: bool, now: u64) {
+        if closed {
+            self.gated_at = Some(now);
+        } else if let Some(at) = self.gated_at.take() {
+            let d = now - at;
+            if let Some(p) = &mut self.pending {
+                p.at += d;
+            }
+            self.drain_by = self.drain_by.map(|t| t + d);
+            if self.busy_until > at {
+                self.busy_until += d;
+            }
+        }
     }
 
     /// The eSDHC interrupt, while a data phase is pending or its buffer waits to be drained.

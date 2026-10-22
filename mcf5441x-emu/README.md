@@ -83,15 +83,15 @@ Table 19-6), and returns their ids in a [`Chip`](soc::Chip). What the chip does 
 [`ChipOptions`](soc::ChipOptions): the parts behind the chip (the SPI NOR flash and the DSPI and chip select it is on,
 the eMMC, the NAND array), the PLL_CR and PLL_DR values the reset configuration left, and the time scale of every
 clock in machine ticks (each UART's character time, each SSI's frame period, ticks per microsecond for USB, the
-eSDHC's data latency and CMD6 busy time). Nothing in the models assumes a clock frequency. `ChipOptions::default()`
-is the chip with nothing on it (no parts, the PLL values of the default reset configuration, UARTs with no character
-time (0 ticks: sending and receiving are instant), one tick per frame and microsecond); the `with_nor`, `with_card`,
-`with_nand`, `with_pll`, `with_uart_ticks`, `with_ssi_ticks`, `with_usb_ticks_per_us` and `with_sd_timing` builders
-change one part of it. `Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
+eSDHC's data latency and CMD6 busy time), and the clock gates at the start. Nothing in the models assumes a clock
+frequency. `ChipOptions::default()` is the chip with nothing on it (no parts, the PLL values of the default reset
+configuration, UARTs with no character time (0 ticks: sending and receiving are instant), one tick per frame and
+microsecond, every clock gate open); the `with_nor`, `with_card`, `with_nand`, `with_pll`, `with_uart_ticks`,
+`with_ssi_ticks`, `with_usb_ticks_per_us`, `with_sd_timing` and `with_gates` builders change one part of it. `Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
 
 ```
 use mcf5441x_emu::Machine;
-use mcf5441x_emu::soc::{ChipOptions, Mcf5441x, Uart};
+use mcf5441x_emu::soc::{ChipOptions, Gates, Mcf5441x, Uart};
 
 let mut m = Machine::new();
 m.mem.map_ram(0x4000_0000, 0x0100_0000); // DDR: its size is the board's
@@ -107,6 +107,7 @@ let chip = Mcf5441x::build(
         usb_ticks_per_us: 100,
         sd_data_latency: 1000,
         sd_cmd6_busy: 2000,
+        gates: Gates::Open,
     },
 );
 // UART0: receiver enable, a character on the line at tick 0, in URB one character time later.
@@ -147,6 +148,29 @@ and RGPIO (0x8C00_0000) is an [`Unmodelled`](soc::Unmodelled) block: an access s
 `Stop::Unmodelled` and the module's name and offset as the detail, with PC on the instruction. The SRAM (where the
 board's RAMBAR puts it, RM ch. 7) and the DDR (its size is the board's) are not mapped by `build`; the reserved slots
 fault as unmapped.
+
+### Clock gates
+
+The SCM's peripheral power management registers (RM 9.2.2-9.2.4) are modelled inside the SCM stub: PPMSR0/1 and
+PPMCR0/1 set and clear one CDn bit, or all of them with SAMCD and CAMCD, and PPMHR0/1 and PPMLR0/1 hold the gates
+(bit set: the module's clock is off). Every module in a peripheral slot with a CDn bit (RM Tables 9-5 to 9-8) is tied
+to its gate; the SCM, the crossbar switch, the global IACK slot and RGPIO have none, and neither has RAM. While a
+module's gate is closed:
+
+- a read of it returns all ones at every size (measured on an MCF54415), for the core and for bus masters alike;
+- a write to it is dropped (guess: not measured);
+- its events are held: it is not advanced or serviced, and it lists no wake sources; the PIT, the SSI and the eSDHC
+  stop their clocks and continue where they stopped when the gate opens, while the other models with events (the
+  UARTs, USB) catch up when it opens (guess: not measured);
+- its interrupt and DMA request lines stay as it left them (guess: not measured), and an interrupt controller's
+  requests still reach the core.
+
+[`Gates`](soc::Gates) chooses the gates at the start: `Open` (the default: every module clocked, as before gates were
+modelled), `Reset` (the values measured after a soft reset on an MCF54415: PPMHR0 `0x7F9EFBFF`, PPMLR0
+`0xFFDEF300`, PPMHR1 `0xFFFFFFCF`, PPMLR1 `0x3F00C0F4`; RM Table 9-1 gives PPMHR0 `0x7E1EFBFF`, without CD56 and
+CD55) or `Set` with given values. A power-on reset was not measured. `Chip::gates` reads them back. The gate check
+sits on the device path only: RAM accesses never see it. The machine's own API (`Machine::set_clock_gate`,
+`set_clock_gates`, `clock_gates`, and `Device::gate` for a model that keeps time) serves any board's models.
 
 ### What each block models
 
@@ -230,8 +254,8 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 
 ### Known differences
 
-- Clock gating: on the chip a module whose clock is gated off reads all ones. `build` maps every module ungated, and
-  the SCM and CCM stubs that hold the power-management registers gate nothing.
+- Clock gates: `build` starts with every gate open unless the options say otherwise; the chip resets with most of
+  them closed. Reserved bits of PPM{H,L}Rn are stored like the others (guess: not measured).
 - Time: one instruction is one tick, so code runs at one instruction per tick of whatever clock the board's options
   scale to; transfers, frames and register accesses take no bus time.
 - Interrupts the models do not raise are never asserted. Setting the enables of the SSI's, the DSPI's and the NFC's

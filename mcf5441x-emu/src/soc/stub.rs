@@ -1,6 +1,7 @@
 //! Blocks that accept writes and read back canned values, and blocks nobody models.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use crate::device::{Device, DeviceCx};
 use crate::mem::Size;
@@ -25,6 +26,9 @@ type WriteHook = Box<dyn FnMut(u32, Size, u32, &mut DeviceCx)>;
 /// byte-lane slicing: a value is keyed by the offset it was given at. Writes are logged (unless
 /// [`StubBlock::record`] turned the log off), passed to the hook, and stored in `ReadBack` mode. Reads are counted
 /// by the poll detector.
+///
+/// A range of offsets can be given to a register model of its own ([`StubBlock::with_registers`]): accesses there
+/// are served by the model, and writes there are still logged and passed to the hook.
 pub struct StubBlock {
     name: &'static str,
     mode: StubMode,
@@ -33,6 +37,7 @@ pub struct StubBlock {
     log: Vec<(u64, u32, Size, u32)>,
     record: bool,
     hook: Option<WriteHook>,
+    registers: Option<(Range<u32>, Box<dyn Device>)>,
 }
 
 impl StubBlock {
@@ -46,7 +51,16 @@ impl StubBlock {
             log: Vec::new(),
             record: true,
             hook: None,
+            registers: None,
         }
+    }
+
+    /// Serve the accesses at offsets `range` with `model` (at the same offsets) instead of the canned and stored
+    /// values. Writes there are logged and passed to the hook as any other. `range` should be aligned to 4 bytes,
+    /// so that no aligned access runs across its ends.
+    pub fn with_registers(mut self, range: Range<u32>, model: Box<dyn Device>) -> StubBlock {
+        self.registers = Some((range, model));
+        self
     }
 
     /// The name given to [`StubBlock::new`].
@@ -98,7 +112,12 @@ fn truncate(value: u32, size: Size) -> u32 {
 }
 
 impl Device for StubBlock {
-    fn read(&mut self, offset: u32, size: Size, _cx: &mut DeviceCx) -> u32 {
+    fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32 {
+        if let Some((range, model)) = &mut self.registers
+            && range.contains(&offset)
+        {
+            return truncate(model.read(offset, size, cx), size);
+        }
         let v = match self.mode {
             StubMode::ReadBack => self
                 .stored
@@ -114,8 +133,12 @@ impl Device for StubBlock {
         if self.record {
             self.log.push((cx.now, offset, size, value));
         }
-        if self.mode == StubMode::ReadBack {
-            self.stored.insert(offset, value);
+        match &mut self.registers {
+            Some((range, model)) if range.contains(&offset) => model.write(offset, size, value, cx),
+            _ if self.mode == StubMode::ReadBack => {
+                self.stored.insert(offset, value);
+            }
+            _ => {}
         }
         if let Some(hook) = &mut self.hook {
             hook(offset, size, value, cx);

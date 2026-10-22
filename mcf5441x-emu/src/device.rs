@@ -58,6 +58,14 @@ pub trait Device: Any {
     fn wake_sources(&self, _out: &mut Vec<(usize, u8)>) -> bool {
         false
     }
+    /// Called at tick `now` when this device's clock gate closes (`closed`) or opens again (see
+    /// [`Machine::set_clock_gate`](crate::Machine::set_clock_gate)). While the gate is closed the device is not
+    /// called for accesses (a read returns all ones and a write is dropped), its events are held (it is neither
+    /// advanced nor serviced and [`Device::next_event`] is not asked) and it lists no wake sources; the request
+    /// lines it drives stay as it left them. A model whose state follows the clock moves it here by the time the
+    /// gate was closed, so that it resumes where it stopped; one that does not (the default) is advanced when the
+    /// gate opens with `now` past its held event, as for an event set in the past.
+    fn gate(&mut self, _closed: bool, _now: u64) {}
 }
 
 /// What a device can reach during an access or an [`Device::advance`].
@@ -73,12 +81,26 @@ pub struct DeviceCx<'a> {
     pub(crate) space: Option<&'a mut Space>,
     /// The refusal of the access in flight, if the device made one.
     pub(crate) refused: Option<Refusal>,
+    /// The clock gates, as [`DeviceCx::clock_gates`] reads them and [`DeviceCx::set_clock_gates`] leaves them.
+    pub(crate) gates: u128,
 }
 
 /// A refused access: the kind of stop and its detail.
 pub(crate) type Refusal = (Stop, String);
 
 impl DeviceCx<'_> {
+    /// The clock gates (see [`Machine::set_clock_gates`](crate::Machine::set_clock_gates)): bit n is set while
+    /// gate n is closed.
+    pub fn clock_gates(&self) -> u128 {
+        self.gates
+    }
+
+    /// Set the clock gates, for the device that holds the gate registers. The devices whose gated state changes
+    /// see it when this call into the device returns, at the same tick.
+    pub fn set_clock_gates(&mut self, closed: u128) {
+        self.gates = closed;
+    }
+
     /// The address space, for a bus master; `None` for any other device. The bus borrows this context: the
     /// lines a device reached through it drives are seen in `irq` and `dma` once it is dropped.
     pub fn bus(&mut self) -> Option<Bus<'_>> {

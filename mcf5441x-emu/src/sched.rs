@@ -6,6 +6,11 @@
 //!
 //! A bus master is taken out of its slot while it is called (it gets the rest of the address space through a
 //! [`Bus`](crate::bus::Bus)) and put back afterwards; while it is out, its window reads as unmapped.
+//!
+//! The table also holds the clock gates: 128 gate bits, set when the gate is closed, and the gate each device is
+//! tied to, if any. A device whose gate is closed is *gated*: its accesses do not reach it, its events are held
+//! (it is neither advanced nor, for a bus master, serviced) and it lists no wake sources. Its request lines stay
+//! as it left them. The gated state is kept as one flag per device, so a device access pays one check.
 
 use crate::device::{Device, DeviceId};
 use crate::irq::{InterruptController, Irq, IrqLines};
@@ -49,6 +54,14 @@ pub(crate) struct Devices {
     controllers: Vec<usize>,
     /// Indices of the bus masters in `models`.
     masters: Vec<usize>,
+    /// The clock gates: bit n is set while gate n is closed.
+    closed: u128,
+    /// Per device: the gate it is tied to, if any.
+    gate: Vec<Option<u8>>,
+    /// Per device: its gate is closed.
+    gated: Vec<bool>,
+    /// Per device: the gated state it was last told of ([`Device::gate`]).
+    told: Vec<bool>,
 }
 
 impl Devices {
@@ -79,6 +92,9 @@ impl Devices {
             _ => {}
         }
         self.models.push(model);
+        self.gate.push(None);
+        self.gated.push(false);
+        self.told.push(false);
         DeviceId(index)
     }
 
@@ -158,18 +174,64 @@ impl Devices {
         &self.masters
     }
 
-    /// Whether device `i` has an event due at `now`.
+    /// Whether device `i` has an event due at `now`; a gated device has none.
     pub(crate) fn due(&self, i: usize, now: u64) -> bool {
-        self.try_get(i)
-            .and_then(|d| d.next_event())
-            .is_some_and(|t| t <= now)
+        !self.gated[i]
+            && self
+                .try_get(i)
+                .and_then(|d| d.next_event())
+                .is_some_and(|t| t <= now)
     }
 
-    /// The earliest event any device has scheduled.
+    /// The earliest event any device that is not gated has scheduled.
     pub(crate) fn next_event(&self) -> Option<u64> {
         (0..self.models.len())
+            .filter(|&i| !self.gated[i])
             .filter_map(|i| self.try_get(i)?.next_event())
             .min()
+    }
+
+    /// Whether device `i`'s clock gate is closed.
+    #[inline(always)]
+    pub(crate) fn gated(&self, i: usize) -> bool {
+        self.gated[i]
+    }
+
+    /// The clock gates: bit n is set while gate n is closed.
+    pub(crate) fn closed(&self) -> u128 {
+        self.closed
+    }
+
+    /// Set the clock gates at tick `now`, telling every device in its slot whose gated state changed.
+    // guess: a gated module's events are held and its interrupt and DMA request lines stay as it left them; an
+    // interrupt controller's requests still reach the core while it is gated (none of this is measured).
+    pub(crate) fn set_closed(&mut self, closed: u128, now: u64) {
+        self.closed = closed;
+        for i in 0..self.models.len() {
+            self.gated[i] = self.gate[i].is_some_and(|g| closed >> g & 1 != 0);
+            self.tell(i, now);
+        }
+    }
+
+    /// Tie device `i` to gate `gate` (0-127), or to none, at tick `now`. Panics when `gate` is above 127.
+    pub(crate) fn set_gate(&mut self, i: usize, gate: Option<u8>, now: u64) {
+        assert!(
+            gate.is_none_or(|g| g < 128),
+            "no clock gate {gate:?}: 0-127"
+        );
+        self.gate[i] = gate;
+        self.gated[i] = gate.is_some_and(|g| self.closed >> g & 1 != 0);
+        self.tell(i, now);
+    }
+
+    /// Tell device `i` its gated state ([`Device::gate`]) if it changed since it was last told and the device is
+    /// in its slot (a bus master being called is told when it is put back).
+    pub(crate) fn tell(&mut self, i: usize, now: u64) {
+        let gated = self.gated[i];
+        if self.told[i] != gated && !matches!(self.models[i], Model::Out) {
+            self.told[i] = gated;
+            self.get_mut(i).gate(gated, now);
+        }
     }
 
     /// The interrupt controllers with their indices, in the order they were added.
@@ -205,12 +267,15 @@ impl Devices {
         self.controllers().any(|(_, c)| c.level7(lines))
     }
 
-    /// Push to `out` the interrupt sources every device lists ([`Device::wake_sources`]), in the order the
-    /// devices were added, whether it has a pending event or not (a bus master lists the routes of the requests it
-    /// would serve); `false` when a device with a pending event cannot say.
+    /// Push to `out` the interrupt sources every device that is not gated lists ([`Device::wake_sources`]), in the
+    /// order the devices were added, whether it has a pending event or not (a bus master lists the routes of the
+    /// requests it would serve); `false` when a device with a pending event cannot say.
     pub(crate) fn wake_sources(&self, out: &mut Vec<(usize, u8)>) -> bool {
         let mut known = true;
-        for d in (0..self.models.len()).filter_map(|i| self.try_get(i)) {
+        for d in (0..self.models.len())
+            .filter(|&i| !self.gated[i])
+            .filter_map(|i| self.try_get(i))
+        {
             let mark = out.len();
             if !d.wake_sources(out) {
                 out.truncate(mark);

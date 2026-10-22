@@ -5,9 +5,10 @@ use crate::device::DeviceId;
 use crate::machine::Machine;
 use crate::parts::{Emmc, SpiNor};
 
+use super::scm::{self, POWER_MANAGEMENT};
 use super::{
-    Ddrmc, Dspi, Edma, Esdhc, EsdhcConfig, Intc, NandArray, Nfc, Pit, Pll, Ssi, SsiConfig,
-    StubBlock, StubMode, Uart, UartConfig, Unmodelled, UsbConfig, UsbOtg,
+    Ddrmc, Dspi, Edma, Esdhc, EsdhcConfig, Intc, NandArray, Nfc, Pit, Pll, PowerManagement, Ssi,
+    SsiConfig, StubBlock, StubMode, Uart, UartConfig, Unmodelled, UsbConfig, UsbOtg,
 };
 
 /// Each peripheral slot is 16 KB (RM 1.8.1).
@@ -98,6 +99,105 @@ const UNMODELLED: [(&str, u32); 26] = [
 /// Rapid GPIO: 0x8C00_0000-0x8FFF_FFFF (RM Table 1-2, RM ch. 16).
 const RGPIO: (u32, u32) = (0x8C00_0000, 0x0400_0000);
 
+/// The module of each clock gate: (module, base, gate), gate `64 s + n` for CDn of PPM{H,L}R`s`. CDn is the
+/// module's slot number n (RM 9.2.4): slot n of 0xFC00_0000 for PPM{H,L}R0, of 0xEC00_0000 for PPM{H,L}R1. The
+/// SCM, the crossbar switch and the global IACK slot have no gate; neither has RGPIO, outside the slots.
+#[rustfmt::skip]
+const CLOCK_GATES: [(&str, u32, u8); 58] = [
+    ("FlexBus", 0xFC00_8000, 2),               // RM Table 9-6, CD2
+    ("FlexCAN 0", 0xFC02_0000, 8),             // RM Table 9-6, CD8
+    ("FlexCAN 1", 0xFC02_4000, 9),             // RM Table 9-6, CD9
+    ("I2C 1", 0xFC03_8000, 14),                // RM Table 9-6, CD14
+    ("DSPI1", 0xFC03_C000, 15),                // RM Table 9-6, CD15
+    ("eDMA", 0xFC04_4000, 17),                 // RM Table 9-6, CD17
+    ("INTC0", 0xFC04_8000, 18),                // RM Table 9-6, CD18
+    ("INTC1", 0xFC04_C000, 19),                // RM Table 9-6, CD19
+    ("INTC2", 0xFC05_0000, 20),                // RM Table 9-6, CD20
+    ("I2C 0", 0xFC05_8000, 22),                // RM Table 9-6, CD22
+    ("DSPI0", 0xFC05_C000, 23),                // RM Table 9-6, CD23
+    ("UART0", 0xFC06_0000, 24),                // RM Table 9-6, CD24
+    ("UART1", 0xFC06_4000, 25),                // RM Table 9-6, CD25
+    ("UART2", 0xFC06_8000, 26),                // RM Table 9-6, CD26
+    ("UART3", 0xFC06_C000, 27),                // RM Table 9-6, CD27
+    ("DMA timer 0", 0xFC07_0000, 28),          // RM Table 9-6, CD28
+    ("DMA timer 1", 0xFC07_4000, 29),          // RM Table 9-6, CD29
+    ("DMA timer 2", 0xFC07_8000, 30),          // RM Table 9-6, CD30
+    ("DMA timer 3", 0xFC07_C000, 31),          // RM Table 9-6, CD31
+    ("PIT0", 0xFC08_0000, 32),                 // RM Table 9-5, CD32
+    ("PIT1", 0xFC08_4000, 33),                 // RM Table 9-5, CD33
+    ("PIT2", 0xFC08_8000, 34),                 // RM Table 9-5, CD34
+    ("PIT3", 0xFC08_C000, 35),                 // RM Table 9-5, CD35
+    ("Edge port 0", 0xFC09_0000, 36),          // RM Table 9-5, CD36
+    ("ADC", 0xFC09_4000, 37),                  // RM Table 9-5, CD37
+    ("DAC 0", 0xFC09_8000, 38),                // RM Table 9-5, CD38
+    ("DAC 1", 0xFC09_C000, 39),                // RM Table 9-5, CD39
+    ("Robust real-time clock", 0xFC0A_8000, 42), // RM Table 9-5, CD42
+    ("SIM", 0xFC0A_C000, 43),                  // RM Table 9-5, CD43
+    ("USB OTG", 0xFC0B_0000, 44),              // RM Table 9-5, CD44
+    ("USB host", 0xFC0B_4000, 45),             // RM Table 9-5, CD45
+    ("DDR controller", 0xFC0B_8000, 46),       // RM Table 9-5, CD46
+    ("SSI0", 0xFC0B_C000, 47),                 // RM Table 9-5, CD47
+    ("PLL", 0xFC0C_0000, 48),                  // RM Table 9-5, CD48
+    ("RNG", 0xFC0C_4000, 49),                  // RM Table 9-5, CD49
+    ("SSI1", 0xFC0C_8000, 50),                 // RM Table 9-5, CD50
+    ("eSDHC", 0xFC0C_C000, 51),                // RM Table 9-5, CD51
+    ("MAC-NET0", 0xFC0D_4000, 53),             // RM Table 9-5, CD53
+    ("MAC-NET1", 0xFC0D_8000, 54),             // RM Table 9-5, CD54
+    ("L2 Ethernet switch 0", 0xFC0D_C000, 55), // RM Table 9-5, CD55
+    ("L2 Ethernet switch 1", 0xFC0E_0000, 56), // RM Table 9-5, CD56
+    ("NFC", 0xFC0F_C000, 63),                  // RM Table 9-5, CD63
+    ("1-Wire", 0xEC00_8000, 64 + 2),           // RM Table 9-8, CD2
+    ("I2C 2", 0xEC01_0000, 64 + 4),            // RM Table 9-8, CD4
+    ("I2C 3", 0xEC01_4000, 64 + 5),            // RM Table 9-8, CD5
+    ("I2C 4", 0xEC01_8000, 64 + 6),            // RM Table 9-8, CD6
+    ("I2C 5", 0xEC01_C000, 64 + 7),            // RM Table 9-8, CD7
+    ("DSPI2", 0xEC03_8000, 64 + 14),           // RM Table 9-8, CD14
+    ("DSPI3", 0xEC03_C000, 64 + 15),           // RM Table 9-8, CD15
+    ("UART4", 0xEC06_0000, 64 + 24),           // RM Table 9-8, CD24
+    ("UART5", 0xEC06_4000, 64 + 25),           // RM Table 9-8, CD25
+    ("UART6", 0xEC06_8000, 64 + 26),           // RM Table 9-8, CD26
+    ("UART7", 0xEC06_C000, 64 + 27),           // RM Table 9-8, CD27
+    ("UART8", 0xEC07_0000, 64 + 28),           // RM Table 9-8, CD28
+    ("UART9", 0xEC07_4000, 64 + 29),           // RM Table 9-8, CD29
+    ("mcPWM", 0xEC08_8000, 64 + 34),           // RM Table 9-7, CD34
+    ("CCM", 0xEC09_0000, 64 + 36),             // RM Table 9-7, CD36
+    ("GPIO", 0xEC09_4000, 64 + 37),            // RM Table 9-7, CD37
+];
+
+/// The clock gates after a soft reset, measured on an MCF54415: PPMHR0, PPMLR0, PPMHR1, PPMLR1. RM Table 9-1
+/// gives PPMHR0 0x7E1E_FBFF: the chip also has CD56 and CD55 set. A power-on reset was not measured.
+pub const RESET_GATES: [u32; 4] = [0x7F9E_FBFF, 0xFFDE_F300, 0xFFFF_FFCF, 0x3F00_C0F4];
+
+/// The clock gates [`Mcf5441x::build`] starts with (RM 9.2.4): a gated module reads all ones at every size
+/// (measured on an MCF54415), a write to it is dropped and it neither counts nor raises anything (guess: not
+/// measured; see [`Device::gate`](crate::Device::gate)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Gates {
+    /// Every module clocked (PPM{H,L}R all 0), as the models were before clock gates were modelled: the default.
+    #[default]
+    Open,
+    /// The gates after a soft reset ([`RESET_GATES`], measured on an MCF54415).
+    Reset,
+    /// These register values.
+    Set {
+        hr0: u32,
+        lr0: u32,
+        hr1: u32,
+        lr1: u32,
+    },
+}
+
+impl Gates {
+    /// PPMHR0, PPMLR0, PPMHR1, PPMLR1.
+    pub fn registers(self) -> [u32; 4] {
+        match self {
+            Gates::Open => [0; 4],
+            Gates::Reset => RESET_GATES,
+            Gates::Set { hr0, lr0, hr1, lr1 } => [hr0, lr0, hr1, lr1],
+        }
+    }
+}
+
 /// PLL_CR as the default reset configuration leaves it (RM Figure 8-3): LOLEN set, REFDIV 0, FBKDIV 9.
 const PLL_CR_RESET: u32 = 1 << 12 | 9;
 /// PLL_DR as the default and parallel reset configurations leave it (RM Figure 8-4): OUTDIV5 0x1F, OUTDIV4 7,
@@ -126,13 +226,16 @@ pub struct ChipOptions {
     pub sd_data_latency: u64,
     /// How long the card holds DAT0 busy after a CMD6 ([`EsdhcConfig::cmd6_busy`]).
     pub sd_cmd6_busy: u64,
+    /// The clock gates at the start ([`Gates`]).
+    pub gates: Gates,
 }
 
 impl Default for ChipOptions {
     /// The chip with nothing on it: no NOR, card or NAND; PLL_CR 0x1009 and PLL_DR 0x03E7_2461, the values the
     /// default reset configuration (RCON) leaves (RM Figures 8-3 and 8-4); UARTs with no character time (0 ticks
     /// per byte); SSIs with a frame every tick; USB with 1 tick per microsecond; the eSDHC with a data latency of
-    /// 1 tick and a CMD6 busy of 1 tick.
+    /// 1 tick and a CMD6 busy of 1 tick; every clock gate open ([`Gates::Open`], not the chip's reset state, which
+    /// [`Gates::Reset`] gives).
     fn default() -> ChipOptions {
         ChipOptions {
             nor: None,
@@ -144,6 +247,7 @@ impl Default for ChipOptions {
             usb_ticks_per_us: 1,
             sd_data_latency: 1,
             sd_cmd6_busy: 1,
+            gates: Gates::Open,
         }
     }
 }
@@ -195,6 +299,12 @@ impl ChipOptions {
     pub fn with_sd_timing(mut self, data_latency: u64, cmd6_busy: u64) -> ChipOptions {
         self.sd_data_latency = data_latency;
         self.sd_cmd6_busy = cmd6_busy;
+        self
+    }
+
+    /// Start with the clock gates `gates`.
+    pub fn with_gates(mut self, gates: Gates) -> ChipOptions {
+        self.gates = gates;
         self
     }
 }
@@ -251,6 +361,11 @@ impl Chip {
         )
     }
 
+    /// The clock gates as PPMHR0, PPMLR0, PPMHR1 and PPMLR1 read (bit set: the module's clock is off).
+    pub fn gates(&self, m: &Machine) -> [u32; 4] {
+        scm::registers(m.clock_gates())
+    }
+
     /// The eSDHC's card, if [`ChipOptions::card`] gave one.
     pub fn card<'m>(&self, m: &'m Machine) -> Option<&'m Emmc> {
         m.device::<Esdhc>(self.esdhc).card()
@@ -283,7 +398,14 @@ impl Chip {
 ///
 /// The stub blocks (read back what is written): XBS 0xFC00_4000, FlexBus 0xFC00_8000, SCM 0xFC04_0000, CCM
 /// 0xEC09_0000 (with the reset controller and power management), GPIO 0xEC09_4000 (pin multiplexing and
-/// control). Every other module of RM Table 1-3 and Table 1-4 is an [`Unmodelled`] block over its 16 KB slot,
+/// control). The SCM's peripheral power management registers (+0x2C-+0x3F) are a [`PowerManagement`] model
+/// inside its stub ([`StubBlock::with_registers`]); writes to them are still in the stub's log.
+///
+/// Clock gates (RM 9.2.4): every module in a peripheral slot with a CDn bit (RM Tables 9-5 to 9-8) is tied to its
+/// gate, `64 s + n` for CDn of PPM{H,L}R`s` ([`Machine::set_clock_gate`]); the SCM, the crossbar switch, the
+/// global IACK slot and RGPIO have none. While a module's gate is closed, it reads all ones at every size (measured
+/// on an MCF54415), and a write to it is dropped and its events are held, its lines kept as they were (guess: not
+/// measured). [`ChipOptions::gates`] sets the gates at the start: by default all open, not the reset state. Every other module of RM Table 1-3 and Table 1-4 is an [`Unmodelled`] block over its 16 KB slot,
 /// named as the table names it, and so is RGPIO at 0x8C00_0000-0x8FFF_FFFF: an access stops the run with
 /// [`Stop::Unmodelled`](crate::Stop::Unmodelled) and the detail `"<module> +<offset>"`.
 ///
@@ -403,7 +525,11 @@ impl Mcf5441x {
         let stubs = STUBS
             .iter()
             .map(|&(name, base)| {
-                let block = StubBlock::new(name, StubMode::ReadBack);
+                let mut block = StubBlock::new(name, StubMode::ReadBack);
+                if name == "SCM" {
+                    let pm = Box::new(PowerManagement::new());
+                    block = block.with_registers(POWER_MANAGEMENT, pm);
+                }
                 (name, m.add_device(base, SLOT, Box::new(block)))
             })
             .collect();
@@ -411,6 +537,15 @@ impl Mcf5441x {
             m.add_device(base, SLOT, Box::new(Unmodelled::new(name)));
         }
         m.add_device(RGPIO.0, RGPIO.1, Box::new(Unmodelled::new("RGPIO")));
+
+        for (name, base, gate) in CLOCK_GATES {
+            // CDn is the slot number.
+            debug_assert_eq!(base >> 14 & 0x3F, u32::from(gate % 64), "{name}");
+            debug_assert_eq!(base < 0xFC00_0000, gate >= 64, "{name}");
+            let id = m.mem.device_at(base).expect("every gated module is mapped");
+            m.set_clock_gate(id, Some(gate));
+        }
+        m.set_clock_gates(scm::gates(options.gates.registers()));
 
         Chip {
             intc,

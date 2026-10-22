@@ -91,6 +91,21 @@ impl Machine {
         self.mem.add_timer(dev)
     }
 
+    /// Tie device `id` to clock gate `gate` (0-127), or to none (see [`Memory::set_clock_gate`]).
+    pub fn set_clock_gate(&mut self, id: DeviceId, gate: Option<u8>) {
+        self.mem.set_clock_gate(id, gate);
+    }
+
+    /// The clock gates: bit n is set while gate n is closed.
+    pub fn clock_gates(&self) -> u128 {
+        self.mem.clock_gates()
+    }
+
+    /// Set the clock gates at the current tick (see [`Memory::set_clock_gates`]).
+    pub fn set_clock_gates(&mut self, closed: u128) {
+        self.mem.set_clock_gates(closed);
+    }
+
     /// Device `id`. Panics when it is not a `T`.
     pub fn device<T: Device>(&self, id: DeviceId) -> &T {
         self.mem.device(id)

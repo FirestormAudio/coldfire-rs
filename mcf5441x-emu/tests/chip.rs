@@ -7,8 +7,8 @@ mod common;
 
 use mcf5441x_emu::parts::{Emmc, EmmcConfig, SpiNor};
 use mcf5441x_emu::soc::{
-    Chip, ChipOptions, Ddrmc, Dspi, Edma, Esdhc, Intc, Mcf5441x, NandArray, Nfc, Pit, Pll, Ssi,
-    StubBlock, Uart, UsbOtg,
+    Chip, ChipOptions, Ddrmc, Dspi, Edma, Esdhc, Gates, Intc, Mcf5441x, NandArray, Nfc, Pit, Pll,
+    Ssi, StubBlock, Uart, UsbOtg,
 };
 use mcf5441x_emu::{Device, Fault, Limit, Machine, Size, Stop};
 
@@ -136,6 +136,7 @@ fn options() -> ChipOptions {
         usb_ticks_per_us: US,
         sd_data_latency: SD_LATENCY,
         sd_cmd6_busy: SD_BUSY,
+        gates: Gates::Open,
     }
 }
 
