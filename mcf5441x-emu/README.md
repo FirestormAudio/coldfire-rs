@@ -390,6 +390,99 @@ assert!(chip.nor(&m).is_some()); // the flash stays on DSPI0 PCS1
 # use mcf5441x_emu::Machine;
 ```
 
+## Running programs: `mcf5441x-run`
+
+`mcf5441x-run` runs a bare ColdFire ELF on the emulated chip. The program's console and exit status go through
+semihosting, with libgloss's m68k protocol, the one QEMU serves. A test harness that runs programs under
+`qemu-system-m68k` can run them here instead.
+
+```text
+cargo install --path mcf5441x-emu     # from a checkout
+mcf5441x-run [--max-ms N] [--max-instructions N] [--clock-hz N] [--epoch S] program.elf
+```
+
+The machine:
+- the whole chip ([`Mcf5441x::build`](soc::Mcf5441x::build), every clock gate open);
+- RAM at 0x40000000 (128 MiB, where the DDR is) and at 0x80000000 (64 KiB, the SRAM);
+- the ELF loaded; supervisor mode with interrupts masked (SR 0x2700) and PC at its entry;
+- SP at its `__stack` or `_stack` symbol, or at the top of the DDR, 0x48000000, without one.
+
+The run stops after 60 s of emulated time unless `--max-ms` sets another limit. `--max-instructions` adds an
+instruction limit.
+
+| Outcome | Exit status | stderr |
+|---|---|---|
+| the program calls `exit(n)` | `n & 0xFF` | |
+| the time or instruction limit | 124 | which limit, and the PC |
+| the emulator stops: an illegal instruction, a fault, an unmodelled access, a plain `HALT`, a refused call or a bad pointer | 125 | the reason, the PC and the tick |
+| bad arguments, or an ELF that can't be read or loaded | 2 | why |
+
+stdout and stderr are flushed before every exit.
+
+**The calls served:**
+- `exit`;
+- `write` to fds 1 and 2;
+- `read` from fd 0, which returns 0 at the end of input;
+- `isatty`: 1 for fds 0–2, and 0 with EBADF for any other fd;
+- `gettimeofday`;
+- `init_sim`, which changes nothing.
+
+A write to another fd, or a read from one, returns -1 with EBADF. A host I/O error gives -1 with EINVAL. On success
+errno is 0.
+
+**Refused:** every file and system call (open, close, lseek, rename, unlink, stat, fstat, system) and any unknown call
+number. A refused call ends the run, with status 125.
+
+**Pointers:** a parameter block or buffer must lie in mapped RAM. If it doesn't, the run ends with 125, and the host
+is not touched.
+
+**Determinism:** nothing reads the host's clock. `gettimeofday` returns `--epoch` (default 0) plus the emulated
+ticks divided by `--clock-hz`. The default clock is 125 MHz, the chip's top bus clock. A tick is one instruction, so
+the same program on the same input gives the same output, the same time and the same status on every run.
+
+**Swapping it into a lit harness:**
+
+```text
+qemu-system-m68k -M mcf5208evb -cpu any -nographic -monitor none -serial none \
+    -semihosting-config enable=on,target=native,chardev=s0 -chardev stdio,id=s0,mux=off -kernel %t.elf
+```
+
+becomes:
+
+```text
+mcf5441x-run %t.elf
+```
+
+The runner takes none of QEMU's options.
+
+**Differences from QEMU 11.1** (`tests/qemu_semihost.rs` checks the same programs under both):
+- QEMU writes fds 1 and 2 to one console; the runner keeps stdout and stderr apart.
+- QEMU's console never reports the end of input (a read there blocks); the runner returns 0.
+- QEMU's console keeps only the first 1 KiB of piped input.
+- QEMU's `init_sim` moves SP and D1 to its RAM size, 0x08000000, which isn't RAM on the mcf5208evb.
+- On success QEMU writes errno 9999 (GDB's EUNKNOWN); the runner writes 0.
+
+### Semihosting from the library
+
+[`semihost::Semihost`] serves the same calls to any [`Machine`]. [`Semihost::run`](semihost::Semihost::run) runs the
+machine, serves each trap, and returns an [`Outcome`](semihost::Outcome) when the program exits or the machine stops
+for anything else. The streams are boxed `Read`/`Write` values, so a test can capture them.
+
+```
+use mcf5441x_emu::semihost::{Outcome, Semihost};
+use mcf5441x_emu::{Limit, Machine};
+
+let mut m = Machine::new();
+m.mem.map_ram(0x4010_0000, 0x1000);
+// moveq #0,%d0 ; moveq #7,%d1 ; then the trap: nop (4-aligned), halt, the sentinel
+let code = [0x70, 0x00, 0x72, 0x07, 0x4E, 0x71, 0x4A, 0xC8, 0x4E, 0x7B, 0xF0, 0x00];
+m.mem.load(0x4010_0000, &code).unwrap();
+m.cpu.pc = 0x4010_0000;
+
+let mut host = Semihost::new(Box::new(std::io::empty()), Box::new(Vec::new()), Box::new(Vec::new()));
+assert_eq!(host.run(&mut m, Limit::default()), Outcome::Exit(7));
+```
+
 ## License
 
 MIT OR Apache-2.0.
