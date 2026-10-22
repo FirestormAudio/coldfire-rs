@@ -7,10 +7,12 @@ a small device interface and decides what a stop means.
 
 ## What is exact
 
-- The integer instruction set of ISA_A, ISA_B and ISA_C, with condition codes, the hardware divider (DIVU/DIVS/REMU/REMS)
-  and the EMAC (CFPRM ch. 6, RM ch. 5): four accumulators, MACSR, the mask register, fractional and saturating modes.
-- Values measured on an MCF54415 are reproduced: MVS and MVZ (the byte forms take an address register source too; CMP.B with one is
-  illegal), REMU, FF1, BITREV, BYTEREV, MOV3Q, SATS and MAC; BRA.L on ISA_C; the fault status of address-error frames (0100 for an odd JMP, BRA, BSR, JSR or RTS target or an odd PC
+- The integer instruction set of ISA_A, ISA_B and ISA_C, with condition codes, the hardware divider
+  (DIVU/DIVS/REMU/REMS) and the EMAC (CFPRM ch. 6, RM ch. 5): four accumulators, MACSR, the mask register, fractional
+  and saturating modes.
+- Values measured on an MCF54415 are reproduced: MVS and MVZ (the byte forms take an address register source too;
+  CMP.B with one is illegal), REMU, FF1, BITREV, BYTEREV, MOV3Q, SATS and MAC; BRA.L on ISA_C; the fault status of
+  address-error frames (0100 for an odd JMP, BRA, BSR, JSR or RTS target or an odd PC
   in the frame an RTE would load, 1100 for a bad index extension word) and what each leaves on the stack (JSR pushes
   its return address first, BSR pushes nothing, RTS and RTE pop nothing); a MOVEC to 0xC04, which changes nothing;
   a WDEBUG write of 0x00020000 to CSR, which runs on; the ACCext01 and ACCext23 layouts; and the EMAC's overflow
@@ -207,13 +209,13 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   (30, 31, 42, 43, 46, 47); START and SSRT work on every channel.
 - **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character
   per character time (a status read 3 ticks after a write to an idle transmitter sees TXRDY again: measured on an
-  MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing
-  errors; the receive DMA request (RXRDY) and the transmit DMA request (UISR TXRDY, RM 41.5.1.2: no UIMR mask, no
-  enable of its own), which drops inside the UTB write that fills the holding register, so a served channel puts one
-  character into UTB per TXRDY (guess: the chip's request timing is not measured). A [`SerialPeer`](soc::SerialPeer) attached with `Uart::attach` stands for whatever
-  is on the far end of the lines: it is called with each character as it leaves the shift register and at its own
-  events, and sends characters back (or ends the run) through a [`PeerCx`](soc::PeerCx); `Uart::peer` and `peer_mut`
-  give it back by type.
+  MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing errors;
+  the receive DMA request (RXRDY) and the transmit DMA request (UISR TXRDY, RM 41.5.1.2: no UIMR mask, no enable of
+  its own), which drops inside the UTB write that fills the holding register, so a served channel puts one character
+  into UTB per TXRDY (guess: the chip's request timing is not measured). A [`SerialPeer`](soc::SerialPeer) attached
+  with `Uart::attach` stands for whatever is on the far end of the lines: it is called with each character as it
+  leaves the shift register and at its own events, and sends characters back (or ends the run) through a
+  [`PeerCx`](soc::PeerCx); `Uart::peer` and `peer_mut` give it back by type.
 - **SSI0-1** (RM ch. 35): I2S master or network mode with transmit and receive FIFO 0, one frame per frame period,
   the watermark DMA requests; 24-bit words send bits 23:0 of a FIFO word (measured on an MCF54415); an underrun sends
   silence and empties the FIFO (where the RM re-transmits the previous data). The host supplies the received samples
@@ -223,12 +225,12 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   frames take no time and are logged with their CTAS. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select.
 - **eSDHC** (RM ch. 25): commands, responses and block reads through DATPORT, drained by eDMA channel 59, with an
   [`Emmc`](parts::Emmc) (read-only) behind it; the reset values and the RSTA/RSTD behaviour measured on an MCF54415.
-- **USB OTG** (RM ch. 24): device mode with dQHs and dTDs in memory, endpoints 0-3, and host primitives (setup, IN
-  and OUT packets, bus resets, scripts on the machine's clock). A high-speed IN of more than 64 bytes from the DDR
-  window (0x4000_0000-0x7FFF_FFFF) never completes (measured on an MCF54415); from SRAM it does. The two
-  general-purpose timers (GPTIMER0/1LD and CTL) count down in microseconds, set USBSTS[TI0/TI1] at zero and
-  interrupt with USBINTR[TIE0/TIE1] (an LD write does not load the count, RST does, and RUN from a count of 0
-  expires at once and reloads: measured on an MCF54415); they are event driven and stop with the clock gate (guess: not measured).
+- **USB OTG** (RM ch. 24): device mode with dQHs and dTDs in memory, endpoints 0-3, and host primitives (setup, IN and
+  OUT packets, bus resets, scripts on the machine's clock). A high-speed IN of more than 64 bytes from the DDR window
+  (0x4000_0000-0x7FFF_FFFF) never completes (measured on an MCF54415); from SRAM it does. The two general-purpose
+  timers (GPTIMER0/1LD and CTL) count down in microseconds, set USBSTS[TI0/TI1] at zero and interrupt with
+  USBINTR[TIE0/TIE1] (an LD write does not load the count, RST does, and RUN from a count of 0 expires at once and
+  reloads: measured on an MCF54415); they are event driven and stop with the clock gate (guess: not measured).
 - **DDR controller** (RM ch. 21): the registers, with the reset values and the INTSTATUS after START measured on an
   MCF54415; the DDR itself is RAM. `Ddrmc::set_init_completes(false)` models a DRAM that never finishes initializing.
 - **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, locked unless the host says otherwise
@@ -293,9 +295,9 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
   interrupts and of the eDMA error interrupt is refused (see each model); the DDR controller's INTMASK and the PLL's
   LOCIRQ and LOLIRQ are stored, but neither model ever raises its interrupt, and neither is wired to an interrupt
   controller; a PLL loss of lock that would request the interrupt (or a reset) stops the run instead.
-- DMA requests nothing drives: the request lines of a block that is not modelled, or whose model does not request
-  DMA (the DMA timers', the I2C modules', the external DREQ pins), are never asserted. On the built chip, SERQ on such a channel is refused,
-  naming the channel; a software start (START, SSRT) works on any channel.
+- DMA requests nothing drives: the request lines of a block that is not modelled, or whose model does not request DMA
+  (the DMA timers', the I2C modules', the external DREQ pins), are never asserted. On the built chip, SERQ on such a
+  channel is refused, naming the channel; a software start (START, SSRT) works on any channel.
 - Bus masters' accesses are not split: a misaligned access from the eDMA or USB reaches a device whole. The chip's
   models refuse one that crosses a register.
 
@@ -303,15 +305,16 @@ Open guesses (each a `guess:` comment in the code and its test): the clock gates
 timers, the SSI, the eSDHC and the USB timers continue where they stopped; the UARTs and the USB host script catch up
 on opening), the lines a gated module keeps, the reserved bits of PPMHR/PPMLR and the edge port latching no edge while
 gated; the edge port's pins starting high; the eDMA's 110 and 111 sizes as errors, the order of INT_MAJOR, D_REQ and
-the major link before the SGE error, and the order of queued linked starts (highest channel first); the PIT's expiry one count after PCNTR reads 0 and the prescaler's partial count on a PRE
-change; the UART hand-over to the shift register taking the shortest of the measured 2 to 9 instructions, and its
-transmit DMA request dropping inside the UTB write; the DSPI's FIFO counters with 16 entries and the deselect of a
-part reached by an idle-low select; the eSDHC's RSTA reset of the registers not measured and a data timeout one tick
-after the data phase; USB detach 100 µs after RS clears; the SSI's underrun sending silence and emptying the FIFO,
-where RM Table 35-8 re-transmits the previous data; the word and longword accesses over the INTC's 8-bit SIMR, CIMR,
-CLMASK and SLMASK; the DDR controller's PADCR bit 9; the NFC's address increment after a single-page read and its ECC
-status byte, which follows the RM and is not measured (in ECC bypass mode, a guess); the PLL relocking at once (LOCKS
-stays clear after a lost lock); the NOR flash's WEL and WIP timing around a failed program.
+the major link before the SGE error, and the order of queued linked starts (highest channel first); the PIT's expiry
+one count after PCNTR reads 0 and the prescaler's partial count on a PRE change; the UART hand-over to the shift
+register taking the shortest of the measured 2 to 9 instructions, and its transmit DMA request dropping inside the UTB
+write; the DSPI's FIFO counters with 16 entries and the deselect of a part reached by an idle-low select; the eSDHC's
+RSTA reset of the registers not measured and a data timeout one tick after the data phase; USB detach 100 µs after RS
+clears; the SSI's underrun sending silence and emptying the FIFO, where RM Table 35-8 re-transmits the previous data;
+the word and longword accesses over the INTC's 8-bit SIMR, CIMR, CLMASK and SLMASK; the DDR controller's PADCR bit 9;
+the NFC's address increment after a single-page read and its ECC status byte, which follows the RM and is not measured
+(in ECC bypass mode, a guess); the PLL relocking at once (LOCKS stays clear after a lost lock); the NOR flash's WEL
+and WIP timing around a failed program.
 
 ## Running a program
 

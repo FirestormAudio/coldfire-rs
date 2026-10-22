@@ -705,6 +705,48 @@ fn dspi_tfff_dma_fills_the_tx_fifo() {
 }
 
 #[test]
+fn a_gated_dspi_keeps_its_tfff_request_and_the_backstop_names_the_gate_guess() {
+    // guess: a clock-gated DSPI keeps its DMA request line as it left it and drops the PUSHR writes that would
+    // fill the FIFO (not measured), so a served channel never sees the request drop; the stop's detail names the gate
+    let mut b = dma_board(&[]);
+    b.w(RSER, TFFF_DMA);
+    b.tcd(TX_CH, RAM, 0, DSPI + PUSHR, 0, 4);
+    let csr = EDMA + 0x1000 + 32 * u32::from(TX_CH) + 0x1E;
+    b.m.access(csr, Size::Word, Some(0)).unwrap(); // no D_REQ: the major loop restarts for ever
+    b.m.set_clock_gate(b.dspi, Some(0));
+    b.m.set_clock_gates(1);
+    assert!(b.line(TX_CH), "the line stays up");
+    let refused = b.m.access(EDMA + 0x18, Size::Byte, Some(u32::from(TX_CH))); // SERQ
+    assert!(refused.is_err(), "{refused:?}");
+    let r = b.m.take_refusal().unwrap();
+    assert_eq!(r.kind, Stop::Unmodelled);
+    assert!(r.detail.contains("clock gate is closed"), "{}", r.detail);
+    assert!(b.dspi().frame_log().is_empty(), "no frame was pushed");
+}
+
+#[test]
+fn a_gated_edma_serves_nothing_until_its_gate_opens_guess() {
+    // guess: a clock-gated eDMA, a bus master, serves no request (not measured); the request waits and is served
+    // once the gate opens
+    let mut b = dma_board(&[]);
+    const SRC: u32 = 0x4020_0000;
+    const DST: u32 = 0x4021_0000;
+    b.m.mem.load(SRC, &0xCAFE_F00Du32.to_be_bytes()).unwrap();
+    b.tcd(TX_CH, SRC, 0, DST, 0, 1);
+    b.serq(TX_CH); // enabled, no request yet
+    let edma = b.m.mem.device_at(EDMA).expect("the eDMA");
+    b.m.set_clock_gate(edma, Some(0));
+    b.m.set_clock_gates(1);
+    b.w(RSER, TFFF_DMA); // the request rises
+    assert!(b.line(TX_CH), "requesting");
+    let dst = |b: &mut Board| b.m.access(DST, Size::Long, None).unwrap();
+    assert_eq!(dst(&mut b), 0, "nothing moved while the gate is closed");
+    b.m.set_clock_gates(0);
+    b.w(RSER, TFFF_DMA); // any access lets the masters run
+    assert_eq!(dst(&mut b), 0xCAFE_F00D, "served once the gate opened");
+}
+
+#[test]
 fn dspi_rfdf_dma_drains_the_rx_fifo() {
     // RM 40.4.6.5: RFDF_RE with RFDF_DIRS makes RFDF (the RX FIFO is not empty) a DMA request (line 12 for DSPI0,
     // RM Table 19-6). The eDMA pops POPR into memory; the pop that empties the FIFO drops the request.
@@ -740,7 +782,7 @@ fn dspi_rfdf_dma_drains_the_rx_fifo() {
 }
 
 #[test]
-fn dspi1_codec_setup_from_ref_t_runs() {
+fn dspi1_codec_setup_runs() {
     // the codec setup's registers, with the TX-fill request served by the eDMA: CTAR2 0x7E000335 (16-bit), CTAR3
     // 0x3E001064 (8-bit), RSER 0x03000000 (the TFFF DMA request, line 15, RM Table 19-6), then the eDMA pushes the
     // commands, CTAS 3, the last with EOQ, and the code polls SR[EOQF]. Every frame is recorded with its CTAS.
