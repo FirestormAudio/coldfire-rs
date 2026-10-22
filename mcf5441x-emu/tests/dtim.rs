@@ -93,7 +93,8 @@ fn dtim_counts_the_bus_clock() {
     assert_eq!(dtcn(&mut m, 0), 0);
     idle(&mut m, 100 + 12_345);
     assert_eq!(dtcn(&mut m, 0), 12_345);
-    // reading does not disturb the count (RM 39.2.6), and a write clears it
+    // reading does not disturb the count (RM 39.2.6), and a write clears it (RM Table 39-7; guess: a byte write
+    // clears all 32 bits)
     assert_eq!(dtcn(&mut m, 0), 12_345);
     w(&mut m, DTIM[0] + DTCN + 3, Size::Byte, 0x55);
     assert_eq!(dtcn(&mut m, 0), 0);
@@ -311,4 +312,75 @@ fn dtim_clock_change_while_running_stops_the_count_guess() {
     assert_eq!(r(&mut m, DTIM[0] + DTMR, Size::Word), RST);
     idle(&mut m, 100);
     assert_eq!(dtcn(&mut m, 0), 20);
+}
+
+#[test]
+fn dtim_dtcr_ignores_writes_guess() {
+    // RM Figure 39-6 shows DTCR read-only (Table 39-1 says R/W). guess: a write is ignored.
+    let (mut m, _) = chip(ChipOptions::default());
+    w(&mut m, DTIM[1] + DTCR, Size::Long, 0x1234_5678);
+    assert_eq!(r(&mut m, DTIM[1] + DTCR, Size::Long), 0);
+}
+
+#[test]
+fn dtim_prescaler_change_drops_the_partial_count_guess() {
+    // guess: changing PS starts the prescaler again. PS = 4 from tick 0: DTCN 1 at tick 5; at tick 7 (2 of 5
+    // into the next count) PS = 9: the next count comes 10 ticks later, at 17, not at 15.
+    let (mut m, _) = chip(ChipOptions::default());
+    w(&mut m, DTIM[0] + DTMR, Size::Word, 4 << 8 | RST | BUS);
+    idle(&mut m, 7);
+    assert_eq!(dtcn(&mut m, 0), 1);
+    w(&mut m, DTIM[0] + DTMR, Size::Word, 9 << 8 | RST | BUS);
+    idle(&mut m, 16);
+    assert_eq!(dtcn(&mut m, 0), 1);
+    idle(&mut m, 17);
+    assert_eq!(dtcn(&mut m, 0), 2);
+}
+
+#[test]
+fn dtim_divide_by_16_runs_from_tick_0_guess() {
+    // guess: the bus clock / 16 runs freely from tick 0 (RM Table 39-2: it is not synchronized with the timer), so
+    // a timer started at tick 5 counts its first at tick 16, not at 21
+    let (mut m, _) = chip(ChipOptions::default());
+    idle(&mut m, 5);
+    w(&mut m, DTIM[2] + DTMR, Size::Word, RST | BUS_16);
+    idle(&mut m, 15);
+    assert_eq!(dtcn(&mut m, 2), 0);
+    idle(&mut m, 16);
+    assert_eq!(dtcn(&mut m, 2), 1);
+    idle(&mut m, 32);
+    assert_eq!(dtcn(&mut m, 2), 2);
+}
+
+#[test]
+fn stop_is_woken_by_the_reference_interrupt() {
+    // DTIM3 at DTMR 0x1D (bus clock / 16, FRR, ORRI, RST) with DTRR 9: REF after 160 ticks, INTC0 source 35 at
+    // level 3 wakes STOP #0x2000; the handler clears REF.
+    let src = "
+        lea 0x40102000, %a1
+        lea 0xFC07C000, %a2
+        clr.l (%a1)
+        moveq #9, %d0
+        move.l %d0, (4, %a2)
+        move.w #0x1D, %d0
+        move.w %d0, (%a2)
+        stop #0x2000
+        bra.s done
+    handler:
+        addq.l #1, (%a1)
+        move.b #2, (3, %a2)
+        rte
+    done:
+        nop
+    ";
+    let (mut m, l) = prepare(src, &["handler", "done"]);
+    Mcf5441x::build(&mut m, ChipOptions::default());
+    set_vector(&mut m, 64 + 35, l[0]);
+    w(&mut m, INTC0 + 0x40 + 35, Size::Byte, 3);
+    w(&mut m, INTC0 + 0x1D, Size::Byte, 35);
+    m.set_time_limit(Some(1_000_000));
+    let stop = m.run(until(l[1]));
+    assert_eq!(stop.kind, Stop::UntilPc, "{stop:?}");
+    assert_eq!(m.mem.read(COUNT, Size::Long).unwrap(), 1);
+    assert!(m.now() >= 160 && m.now() < 200, "{}", m.now());
 }

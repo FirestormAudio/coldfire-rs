@@ -188,8 +188,9 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   the output modes, DMA requests (DMAEN), the 1588 timebase and programmable delay stop the run with `Stop::Unmodelled`.
 - **Edge port 0** (RM ch. 18): per-pin level or edge detection, EPIER and EPFR on INTC0 sources 1-7; the host drives
   pins IRQ1-IRQ7 with `Eport::set_pin` inside `Machine::with_device`, and a change asserts or drops the interrupt at
-  once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2
-  lists): the program cannot read the pin levels.
+  once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2 lists):
+  the program cannot read the pin levels. A set EPF bit requests in any mode (RM Table 18-4). While its clock gate is
+  closed no edge is latched and level-sensitive pins still request (guess, after RM 18.2's stop mode).
 - **eDMA** (RM ch. 19): 64 channels served at their peripheral's request or by START/SSRT, 8- and 32-bit
   transfers, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR and D_REQ; misaligned addresses are configuration
   errors with ES as measured on an MCF54415. On the built chip SERQ is taken only on the request lines a model

@@ -155,3 +155,62 @@ fn eport_has_no_ddr_dr_or_pdr_measured() {
     let d = m.take_refusal().expect("a refusal").detail;
     assert!(d.contains("longword"), "{d}");
 }
+
+/// PPMSR0 and PPMCR0 (RM 9.2.2, 9.2.3); the edge port is CD36 (RM Table 9-5).
+const PPMSR0: u32 = 0xFC04_002C;
+const PPMCR0: u32 = 0xFC04_002D;
+const EPORT_CD: u32 = 36;
+
+#[test]
+fn eport_stale_flag_requests_in_level_mode() {
+    // RM Table 18-4: a set EPFR bit requests, with no mode qualifier, so a flag left from an edge mode still
+    // requests after the pin is switched to level mode with the pin high
+    let (mut m, chip) = chip();
+    w(&mut m, EPPAR, Size::Word, BOTH << 4);
+    pin(&mut m, &chip, 2, false);
+    pin(&mut m, &chip, 2, true);
+    w(&mut m, EPPAR, Size::Word, LEVEL);
+    w(&mut m, EPIER, Size::Byte, 1 << 2);
+    assert_eq!(r(&mut m, EPFR, Size::Byte), 1 << 2);
+    assert!(line(&m, 2));
+    w(&mut m, EPFR, Size::Byte, 1 << 2);
+    assert!(!line(&m, 2));
+}
+
+#[test]
+fn gated_eport_latches_no_edges_guess() {
+    // guess: with CD36 closed no edge is detected (RM 18.2: without clocks only level detection works), and
+    // opening the gate makes no edge of a pin that changed while it was closed
+    let (mut m, chip) = chip();
+    w(&mut m, EPPAR, Size::Word, BOTH << 4);
+    w(&mut m, EPIER, Size::Byte, 1 << 2);
+    w(&mut m, PPMSR0, Size::Byte, EPORT_CD);
+    pin(&mut m, &chip, 2, false);
+    assert!(!line(&m, 2), "no edge latched while gated");
+    assert_eq!(r(&mut m, EPFR, Size::Byte), 0xFF, "gated: reads all ones");
+    w(&mut m, PPMCR0, Size::Byte, EPORT_CD);
+    assert_eq!(r(&mut m, EPFR, Size::Byte), 0);
+    assert!(!line(&m, 2));
+    // edges are detected again once the gate is open
+    pin(&mut m, &chip, 2, true);
+    assert_eq!(r(&mut m, EPFR, Size::Byte), 1 << 2);
+    assert!(line(&m, 2));
+}
+
+#[test]
+fn gated_eport_level_pins_still_request_guess() {
+    // guess: a level-sensitive pin keeps requesting while the gate is closed (RM 18.2 says the level-detect logic
+    // works in stop mode without clocks; that a closed gate is the same is this model's reading)
+    let (mut m, chip) = chip();
+    w(&mut m, EPPAR, Size::Word, LEVEL);
+    w(&mut m, EPIER, Size::Byte, 1 << 7);
+    w(&mut m, PPMSR0, Size::Byte, EPORT_CD);
+    pin(&mut m, &chip, 7, false);
+    assert!(line(&m, 7));
+    pin(&mut m, &chip, 7, true);
+    assert!(!line(&m, 7));
+    pin(&mut m, &chip, 7, false);
+    w(&mut m, PPMCR0, Size::Byte, EPORT_CD);
+    assert!(line(&m, 7), "still low after the gate opens");
+    assert_eq!(r(&mut m, EPFR, Size::Byte), 0);
+}
