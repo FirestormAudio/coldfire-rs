@@ -20,9 +20,10 @@ pub mod vector {
 
 // Measured on an MCF54415: a jump to an odd address writes FS 0100 "error on instruction fetch" (RM Table 3-7) with
 // the jump as the stacked PC; a word-sized index, a scale factor of 8 or a full-format extension word (RM 3.3.4.2)
-// writes FS 1100 "error on operand read" with the faulting instruction as the stacked PC. An odd JSR or RTS target
-// writes FS 0100 too, measured. guess: an odd BSR target (by analogy with JSR) and an odd PC loaded by RTE (by
-// analogy with RTS) were not measured; they take 0100.
+// writes FS 1100 "error on operand read" with the faulting instruction as the stacked PC. An odd BRA, BSR, JSR or
+// RTS target and an odd PC in the frame an RTE would load write FS 0100 too, measured, each with the branch, call or
+// return as the stacked PC (the RTE faults itself, with its frame left on the stack, as RTS leaves its return
+// address).
 /// The fault status of an address error from an odd instruction address: 0100.
 pub const ADDRESS_ERROR_FETCH_FS: u32 = 0b0100;
 /// The fault status of an address error from an index extension word RM 3.3.4.2 rejects: 1100.

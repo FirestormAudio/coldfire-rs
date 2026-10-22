@@ -191,7 +191,7 @@ fn run(opword: u16, pass: Pass, cached: bool) -> Outcome {
 /// pass, and when it does not complete it must leave the core as it was:
 /// - LEA and JMP compute an address without accessing it (JMP's target faults at the next fetch, after it
 ///   completed);
-/// - WDEBUG and the CAU's loads and stores (cp0ld, cp0st) stop with `Unmodelled` before any access;
+/// - the CAU's loads and stores (cp0ld, cp0st) stop with `Unmodelled` before any access;
 /// - the FPU forms (FPU general, FSAVE, FRESTORE) take the line-F exception: the chip has no FPU.
 ///
 /// PEA and JSR access no operand either, but their push faults (A7 is unmapped in that pass), so they are held to
@@ -199,7 +199,6 @@ fn run(opword: u16, pass: Pass, cached: bool) -> Outcome {
 const NO_ACCESS: &[Op] = &[
     Op::Lea,
     Op::Jmp,
-    Op::Wdebug,
     Op::Cp0ld,
     Op::Cp0st,
     Op::FpuOp,

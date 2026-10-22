@@ -70,9 +70,12 @@ pub fn move_from_usp(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow,
     Ok(Flow::Next)
 }
 
+// Measured on an MCF54415: MOVEC to 0xC04 (RAMBAR0 in CFPRM ch. 8; RM Table 3-1 lists no register there) takes no
+// exception and has no visible effect: 0xC04 reads 0 over the debug port before and after, and RAMBAR (0xC05) is
+// unchanged.
 /// MOVEC.L Ry,Rc: extension bit 15 and bits 14-12 give Ry (D0-D7, A0-A7), bits 11-0 the control register
-/// (RM Table 3-1, the registers marked "Written with MOVEC"). The manual leaves a write to any other Rc undefined
-/// (CFPRM ch. 8), so the run stops on it as unmodelled.
+/// (RM Table 3-1, the registers marked "Written with MOVEC"); a write to 0xC04 is accepted and changes nothing. The
+/// manual leaves a write to any other Rc undefined (CFPRM ch. 8), so the run stops on it as unmodelled.
 pub fn movec(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     supervisor!(cpu);
     let ext = d.operands[3];
@@ -85,6 +88,7 @@ pub fn movec(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> 
         0x009 => cpu.rgpiobar = v,
         rc @ 0x00C..=0x00F => cpu.acr[rc as usize - 8] = v,
         0x801 => cpu.vbr = v & VBR_MASK,
+        0xC04 => {}
         0xC05 => cpu.rambar = v,
         _ => return Ok(Flow::Stop(Stop::Unmodelled)),
     }
@@ -119,8 +123,13 @@ pub fn illegal(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> 
     Ok(Flow::Exception(vector::ILLEGAL))
 }
 
-/// RTE: check the frame's format (4-7, else a format error with the frame left alone, RM 3.3.4.10), load SR
-/// and PC from it, and pop 8 bytes plus the format's alignment adjustment.
+// Measured on an MCF54415: an odd PC in the frame makes the RTE itself take the address error (FS 0100, the RTE
+// as the stacked PC); its frame is not popped and the new frame is written below it, as for an odd RTS.
+// guess (a bad format and an odd PC together): not measured; the format is checked first (RM 3.3.4.10), so the
+// format error wins.
+/// RTE: check the frame's format (4-7, else a format error with the frame left alone, RM 3.3.4.10) and its PC (odd:
+/// an address error with the frame left alone), load SR and PC from it, and pop 8 bytes plus the format's
+/// alignment adjustment.
 pub fn rte(cpu: &mut Cpu, mem: &mut Memory, _: &Decoded) -> Result<Flow, Fault> {
     supervisor!(cpu);
     let sp = cpu.a[7];
@@ -130,6 +139,9 @@ pub fn rte(cpu: &mut Cpu, mem: &mut Memory, _: &Decoded) -> Result<Flow, Fault> 
         return Ok(Flow::Exception(vector::FORMAT_ERROR));
     }
     let pc = mem.read(sp.wrapping_add(4), Size::Long)?;
+    if pc & 1 != 0 {
+        return Ok(Flow::Exception(vector::ADDRESS_ERROR));
+    }
     cpu.a[7] = sp.wrapping_add(8 + (format - 4));
     cpu.set_sr(fv as u16);
     cpu.pc = pc;
@@ -169,10 +181,82 @@ pub fn wddata(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Faul
     Ok(Flow::Next)
 }
 
-/// WDEBUG.L `<ea>`y: writes a debug-module register, which this core does not model.
-pub fn wdebug(cpu: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> {
+/// The first word of a WDEBUG operand that writes debug-module register DRc: `0x2C80 | DRc` (the WDMREG command,
+/// RM 43.4.1.5.16 and Figure 43-52; CFPRM ch. 8 WDEBUG).
+const WDMREG: u16 = 0x2C80;
+
+// Measured on an MCF54415: a write of 0x00020000 (PCD) to CSR takes no exception and the program runs on.
+// guess: the other bits here are taken from RM Table 43-7 (read-only from the debug port, or not writable by the
+// processor), not measured. Every other bit (BKD, MAP, TRC, EMU, DDC, UHE, BTB, NPL, IPI, SSM, OTE, FDBG, DBGH and
+// the reserved 19, 7 and 2) changes what the core does, or is undefined when set, so a write that sets one stops.
+/// The CSR bits (RM Table 43-7) a program cannot observe without a debug port: BSTAT, FOF, TRG, HALT, BKPT and HRL
+/// (31-20) are status the debug port reads, PCD (17) only quiets the PSTCLK and PSTDDATA pins, and IPW (16) can be
+/// changed only from the debug port.
+const CSR_UNOBSERVABLE: u32 = 0xFFF0_0000 | 1 << 17 | 1 << 16;
+
+/// The name of debug-module register `drc` (RM Table 43-5).
+fn debug_register(drc: u16) -> &'static str {
+    match drc {
+        0x00 => "CSR",
+        0x01 => "XCSR",
+        0x02 => "CSR2",
+        0x05 => "BAAR",
+        0x06 => "AATR",
+        0x07 => "TDR",
+        0x08 => "PBR0",
+        0x09 => "PBMR",
+        0x0A => "PBAC",
+        0x0C => "ABHR",
+        0x0D => "ABLR",
+        0x0E => "DBR",
+        0x0F => "DBMR",
+        0x14 => "PBASID",
+        0x16 => "AATR1",
+        0x17 => "XTDR",
+        0x18 => "PBR1",
+        0x1A => "PBR2",
+        0x1B => "PBR3",
+        0x1C => "ABHR1",
+        0x1D => "ABLR1",
+        0x1E => "DBR1",
+        0x1F => "DBMR1",
+        _ => "reserved",
+    }
+}
+
+// guess (a misaligned operand): CFPRM ch. 8 calls the operation undefined; the run stops on it, before any access.
+/// WDEBUG.L `<ea>`y: reads the debug command from the two longwords at the effective address (CFPRM ch. 8: the
+/// command word `0x2C80 | DRc`, then the 32-bit data) and writes debug-module register DRc. With no debug port the
+/// debug module is not modelled: a write to CSR that sets only bits a program cannot observe
+/// (`CSR_UNOBSERVABLE`; the observable ones are all clear out of reset and stay so) changes nothing; any other
+/// write stops the run with `Unmodelled` and a detail naming the register and the value.
+pub fn wdebug(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     supervisor!(cpu);
-    Ok(Flow::Stop(Stop::Unmodelled))
+    let addr = ea::address(cpu, &d.ea).unwrap_or(0);
+    if addr & 3 != 0 {
+        mem.refused = Some(format!(
+            "WDEBUG: operand at {addr:#010x} is not longword aligned"
+        ));
+        return Err(Fault::Device(Stop::Unmodelled));
+    }
+    let first = mem.read(addr, Size::Long)?;
+    let second = mem.read(addr.wrapping_add(4), Size::Long)?;
+    let command = (first >> 16) as u16;
+    let data = first << 16 | second >> 16;
+    let detail = if command & !0x1F != WDMREG {
+        format!("WDEBUG: command word {command:#06x} is not a register write")
+    } else {
+        let drc = command & 0x1F;
+        if drc == 0 && data & !CSR_UNOBSERVABLE == 0 {
+            return Ok(Flow::Next);
+        }
+        format!(
+            "WDEBUG: write of {data:#010x} to debug register {drc:#04x} ({})",
+            debug_register(drc)
+        )
+    };
+    mem.refused = Some(detail);
+    Err(Fault::Device(Stop::Unmodelled))
 }
 
 /// CPUSHL and INTOUCH: the caches are not modelled, so pushing a line or prefetching one changes nothing a

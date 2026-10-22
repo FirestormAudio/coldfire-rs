@@ -1,8 +1,8 @@
 //! Program flow (CFPRM ch. 4): BRA, BSR, Bcc, JMP, JSR, RTS, LEA, PEA, LINK, UNLK, MOVEM and NOP.
 //!
 //! A jump, branch or return to an odd address takes an address error (vector 3) with PC on the jump (RM 3.3.4.2,
-//! Table 3-5 "Fault"); RTS leaves its return address on the stack, and JSR and BSR have already pushed theirs
-//! (the push stands when the exception is taken, not when the run stops on it).
+//! Table 3-5 "Fault"); RTS leaves its return address on the stack, JSR has already pushed its own (the push stands
+//! when the exception is taken, not when the run stops on it), and BSR has pushed nothing.
 
 use crate::cpu::ea;
 use crate::cpu::exception::vector::ADDRESS_ERROR;
@@ -41,7 +41,6 @@ fn jump(cpu: &mut Cpu, target: u32) -> Flow {
 }
 
 // Measured on an MCF54415 for JSR: the push stands and the frame is written below it.
-// guess (BSR): not measured; BSR, the other call, is taken to push first in the same way.
 /// Push the return address, then continue at `target`; an odd target takes the address error with the push
 /// standing if the exception is taken.
 #[inline(always)]
@@ -65,9 +64,15 @@ pub fn bra(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     Ok(jump(cpu, target))
 }
 
-/// BSR: push the address of the next instruction, then branch.
+// Measured on an MCF54415: an odd BSR target takes the address error (FS 0100, the BSR as the stacked PC) with
+// nothing pushed, the frame directly below the original A7; unlike JSR, which pushes first.
+/// BSR: push the address of the next instruction, then branch. An odd target takes the address error before the
+/// push.
 pub fn bsr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let (ret, target) = (next_pc(cpu, d), branch_target(cpu, d));
+    if target & 1 != 0 {
+        return Ok(Flow::Exception(ADDRESS_ERROR));
+    }
     call(cpu, mem, ret, target)
 }
 

@@ -252,6 +252,7 @@ fn privilege_violation_in_user_mode() {
         // guess: CFPRM ch. 8 gives STRLDSR's user-mode operation as "Else TRAP" without a vector; this core takes
         // the privilege violation every other supervisor instruction takes.
         ".short 0x40e7,0x46fc,0x2700",
+        // Measured on an MCF54415: WDEBUG in user mode is a privilege violation with the WDEBUG as the stacked PC.
         "wdebug.l (%a0)",
     ];
     for insn in rows {
@@ -356,11 +357,54 @@ fn movec_writes_the_control_registers() {
         (0x44, 0x44, 0x55)
     );
 
-    // A control register this chip does not have (RAMBAR0, 0xC04): the manual leaves the result undefined.
-    let (mut m, l) = prepare(".short 0x4e7b,0x0c04\nend:", &["end"]);
+    // A control register this chip does not have (ROMBAR0, 0xC00 in CFPRM ch. 8): the manual leaves the result
+    // undefined.
+    let (mut m, l) = prepare(".short 0x4e7b,0x0c00\nend:", &["end"]);
     let r = m.run(until(l[0]));
     assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
     assert!(r.detail.contains("movec"), "{r:?}");
+}
+
+/// Measured on an MCF54415: MOVEC to 0xC04 (RAMBAR0 in CFPRM ch. 8, absent from RM Table 3-1) with RAMBAR's value
+/// plus WP takes no exception and changes nothing visible; RAMBAR (0xC05) keeps its value.
+#[test]
+fn movec_to_0xc04_is_accepted_and_has_no_effect() {
+    let (mut m, l) = prepare(
+        "move.l #0x80000335,%d1\n.short 0x4e7b,0x1c04\nmoveq #1,%d0\nend:",
+        &["end"],
+    );
+    m.cpu.rambar = 0x8000_0235;
+    let before = m.cpu.clone();
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.d[0], 1, "the next instruction ran");
+    assert_eq!(m.cpu.rambar, 0x8000_0235, "RAMBAR unchanged");
+    assert_eq!(
+        (
+            m.cpu.cacr,
+            m.cpu.asid,
+            m.cpu.acr,
+            m.cpu.mmubar,
+            m.cpu.rgpiobar,
+            m.cpu.vbr
+        ),
+        (
+            before.cacr,
+            before.asid,
+            before.acr,
+            before.mmubar,
+            before.rgpiobar,
+            before.vbr
+        ),
+        "no other control register changed"
+    );
+    assert_eq!(m.cpu.sr(), 0x2700);
+
+    // As every MOVEC, it is a privilege violation in user mode.
+    let (mut m, l) = prepare(".short 0x4e7b,0x1c04\nend:", &["end"]);
+    m.cpu.set_sr(0x0000);
+    let r = m.run(until(l[0]));
+    assert_eq!((r.kind, r.pc), (Stop::Exception(8), BASE), "{r:?}");
 }
 
 #[test]
@@ -480,8 +524,9 @@ fn odd_pc_is_an_address_error() {
     assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE), "{r:?}");
     assert_eq!(m.cpu.a[7], STACK);
 
-    // guess: a PC that is already odd (here set from outside; RTE can restore one) faults at the fetch, and the
-    // stacked PC is the odd address itself.
+    // guess: a PC that is already odd faults at the fetch, and the stacked PC is the odd address itself. A program
+    // cannot reach one (jumps, branches, returns and RTE fault on an odd target, measured on an MCF54415), so it is
+    // set from outside here.
     let (mut m, l) = prepare("nop\nend:", &["end"]);
     m.cpu.pc = BASE + 1;
     let r = m.run(until(l[0]));
@@ -611,41 +656,92 @@ fn address_error_frames_for_rts_and_jsr() {
     assert_eq!(long(&mut m, STACK - 8), BASE);
     assert_eq!(long(&mut m, STACK - 4), BASE + 2);
 
-    // BSR to an odd target.
-    // guess: not measured for BSR; by analogy with the measured JSR the return address is pushed first, the frame
-    // sits below it and FS is 0100. The branch is hand-encoded (BSR.W, displacement 0x201).
+    // BSR to an odd target, measured on an MCF54415: FS 0100, the BSR as the stacked PC and nothing pushed: the
+    // frame sits directly below the original A7, unlike JSR. The branch is hand-encoded (BSR.W, displacement
+    // 0x201).
     let (mut m, l) = prepare(".short 0x6100,0x0201\nend: nop\nhandler: nop", &["handler"]);
     set_vector(&mut m, 3, l[0]);
     m.policy.stop_on[3] = false;
+    m.mem.write(STACK - 4, Size::Long, 0x5A5A_5A5A).unwrap();
     let r = m.run(until(l[0]));
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
-    assert_eq!(m.cpu.a[7], STACK - 12);
-    assert_eq!(
-        long(&mut m, STACK - 12),
-        fv(4, 3, 0x2700) | FS_FETCH,
-        "guess: FS 0100, as for the measured JSR"
-    );
-    assert_eq!(long(&mut m, STACK - 8), BASE);
-    assert_eq!(
-        long(&mut m, STACK - 4),
-        BASE + 4,
-        "guess: pushed before the error"
-    );
-
-    // guess: a PC that is already odd (RTE can load one) is not measured; by analogy with the measured RTS it
-    // faults with FS 0100, and the stacked PC is the odd address (see `odd_pc_is_an_address_error`).
-    let (mut m, l) = prepare("nop\nend: nop\nhandler: nop", &["handler"]);
-    set_vector(&mut m, 3, l[0]);
-    m.policy.stop_on[3] = false;
-    m.cpu.pc = BASE + 1;
-    let r = m.run(until(l[0]));
-    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK - 8, "nothing pushed");
     assert_eq!(
         long(&mut m, STACK - 8),
         fv(4, 3, 0x2700) | FS_FETCH,
-        "guess: FS 0100, as for the measured RTS"
+        "FS 0100, measured"
     );
-    assert_eq!(long(&mut m, STACK - 4), BASE + 1);
+    assert_eq!(long(&mut m, STACK - 4), BASE, "stacked PC: the BSR");
+
+    // When the run stops on it instead, the registers are as before the BSR.
+    let (mut m, l) = prepare(".short 0x6100,0x0201\nend:", &["end"]);
+    let r = m.run(until(l[0]));
+    assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE), "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK);
+}
+
+/// Measured on an MCF54415: a BRA to an odd target gives the frame word 0x440C2700 (FS 0100) with the BRA as the
+/// stacked PC, the frame directly below the original A7.
+#[test]
+fn odd_bra_is_an_instruction_fetch_error() {
+    // BRA.W with displacement 0x201, hand-encoded.
+    let (mut m, l) = prepare(".short 0x6000,0x0201\nend: nop\nhandler: nop", &["handler"]);
+    set_vector(&mut m, 3, l[0]);
+    m.policy.stop_on[3] = false;
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK - 8);
+    assert_eq!(long(&mut m, STACK - 8), 0x440C_2700);
+    assert_eq!(long(&mut m, STACK - 4), BASE, "stacked PC: the BRA");
+}
+
+/// Measured on an MCF54415: an RTE whose frame holds an odd PC faults itself: frame word 0x440C2700 (FS 0100), the
+/// RTE as the stacked PC; its own frame stays on the stack (not popped) and the new frame is written below it, as
+/// for an odd RTS.
+#[test]
+fn odd_rte_leaves_its_frame_and_faults() {
+    let (mut m, l) = prepare(
+        "rte_insn: rte\nend: nop\nhandler: nop",
+        &["rte_insn", "handler"],
+    );
+    set_vector(&mut m, 3, l[1]);
+    m.policy.stop_on[3] = false;
+    m.mem
+        .write(STACK - 8, Size::Long, fv(4, 0, 0x2700))
+        .unwrap();
+    m.mem.write(STACK - 4, Size::Long, BASE + 0x301).unwrap();
+    m.cpu.a[7] = STACK - 8;
+    let r = m.run(until(l[1]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.a[7], STACK - 16, "A7 in the handler");
+    assert_eq!(long(&mut m, STACK - 16), 0x440C_2700);
+    assert_eq!(long(&mut m, STACK - 12), l[0], "stacked PC: the RTE");
+    assert_eq!(
+        (long(&mut m, STACK - 8), long(&mut m, STACK - 4)),
+        (fv(4, 0, 0x2700), BASE + 0x301),
+        "the RTE's frame, not popped"
+    );
+    assert_eq!(m.cpu.sr(), 0x2700);
+
+    // When the run stops on it instead, the registers are as before the RTE.
+    let (mut m, _) = prepare("rte\nend:", &[]);
+    m.mem
+        .write(STACK - 8, Size::Long, fv(4, 0, 0x2000))
+        .unwrap();
+    m.mem.write(STACK - 4, Size::Long, BASE + 0x301).unwrap();
+    m.cpu.a[7] = STACK - 8;
+    let r = m.run(Limit::default());
+    assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE), "{r:?}");
+    assert_eq!((m.cpu.a[7], m.cpu.sr()), (STACK - 8, 0x2700));
+
+    // guess: a bad format with an odd PC was not measured; the format is checked first (RM 3.3.4.10), so it is a
+    // format error.
+    let (mut m, _) = prepare("rte\nend:", &[]);
+    m.mem.write(STACK - 8, Size::Long, 0x0000_2700).unwrap();
+    m.mem.write(STACK - 4, Size::Long, BASE + 0x301).unwrap();
+    m.cpu.a[7] = STACK - 8;
+    let r = m.run(Limit::default());
+    assert_eq!((r.kind, r.pc), (Stop::Exception(14), BASE), "{r:?}");
 }
 
 /// RM 3.3.4.14: a fault while processing an exception halts the core.
@@ -716,6 +812,103 @@ fn fpu_opcode_takes_line_f() {
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(long(&mut m, STACK - 8), fv(4, 11, 0x2700));
     assert_eq!(long(&mut m, STACK - 4), BASE);
+}
+
+/// Run `wdebug.l (%a0)` in supervisor mode with the debug command (command word, then 32-bit data) at `MEM`.
+fn wdebug(command: u16, data: u32) -> (Machine, StopReason) {
+    let (mut m, l) = prepare("wdebug.l (%a0)\nmoveq #1,%d0\nend:", &["end"]);
+    m.mem.write(MEM, Size::Word, command as u32).unwrap();
+    m.mem.write(MEM + 2, Size::Long, data).unwrap();
+    m.mem.write(MEM + 6, Size::Word, 0).unwrap();
+    m.cpu.a[0] = MEM;
+    let r = m.run(until(l[0]));
+    (m, r)
+}
+
+/// Measured on an MCF54415: WDEBUG with the command word 0x2C80 (write CSR, RM 43.4.1.5.16) and the data
+/// 0x00020000 (PCD, RM Table 43-7) takes no exception and the program runs on.
+#[test]
+fn wdebug_csr_write_of_pcd_runs_on() {
+    let (m, r) = wdebug(0x2C80, 0x0002_0000);
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.d[0], 1, "the next instruction ran");
+    assert_eq!(m.cpu.sr(), 0x2700);
+    assert_eq!(m.instructions(), 2);
+
+    // The (d16,Ay) form reads its operand at the displaced address.
+    let (mut m, l) = prepare("wdebug.l 8(%a0)\nmoveq #1,%d0\nend:", &["end"]);
+    m.mem.write(MEM + 8, Size::Long, 0x2C80_0002).unwrap();
+    m.mem.write(MEM + 12, Size::Long, 0).unwrap();
+    m.cpu.a[0] = MEM;
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.d[0], 1);
+}
+
+/// guess: RM Table 43-7 makes BSTAT, FOF, TRG, HALT, BKPT and HRL (bits 31-20) status read only from the debug
+/// port, and IPW (bit 16) writable only from it, so a CSR write of them (with PCD) changes nothing a program can
+/// see and runs on. Not measured beyond PCD.
+#[test]
+fn wdebug_csr_write_of_status_bits_runs_on() {
+    for data in [0xFFF0_0000, 0x0001_0000, 0xFFF3_0000, 0] {
+        let (m, r) = wdebug(0x2C80, data);
+        assert_eq!(r.kind, Stop::UntilPc, "{data:#x}: {r:?}");
+        assert_eq!(m.cpu.d[0], 1, "{data:#x}");
+    }
+}
+
+/// A CSR write that sets a bit changing what the core does (RM Table 43-7: TRC, EMU, SSM, ...) stops the run on the
+/// WDEBUG, as does a write to any other debug register or a command word that is not a register write.
+#[test]
+fn wdebug_observable_writes_stop_unmodelled() {
+    let csr = [
+        (0x0000_4000, "TRC"),
+        (0x0000_2000, "EMU"),
+        (0x0000_0010, "SSM"),
+        (0x0004_0000, "BKD"),
+        (0x0002_0400, "PCD with UHE"),
+        (0x0000_0001, "DBGH"),
+        // guess: a reserved bit RM Table 43-7 says must be cleared is undefined when set, so it stops.
+        (0x0008_0000, "reserved bit 19"),
+    ];
+    for (data, what) in csr {
+        let (m, r) = wdebug(0x2C80, data);
+        assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{what}: {r:?}");
+        assert!(
+            r.detail.contains("CSR") && r.detail.contains(&format!("{data:#010x}")),
+            "{what}: {r:?}"
+        );
+        assert_eq!((m.cpu.d[0], m.cpu.pc), (0, BASE), "{what}");
+        assert_eq!(m.instructions(), 0, "{what}");
+    }
+
+    // Another debug register (TDR, DRc 0x07), even with data 0.
+    let (_, r) = wdebug(0x2C87, 0);
+    assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
+    assert!(
+        r.detail.contains("TDR") && r.detail.contains("0x07"),
+        "{r:?}"
+    );
+
+    // A 5-bit DRc (PBR1, 0x18; RM Table 43-5).
+    let (_, r) = wdebug(0x2C98, 0x4010_2000);
+    assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
+    assert!(
+        r.detail.contains("PBR1") && r.detail.contains("0x40102000"),
+        "{r:?}"
+    );
+
+    // A first word that is not the register-write command.
+    let (_, r) = wdebug(0x2D00, 0x0002_0000);
+    assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
+    assert!(r.detail.contains("0x2d00"), "{r:?}");
+
+    // guess: CFPRM ch. 8 calls a misaligned operand undefined; the run stops on it.
+    let (mut m, l) = prepare("wdebug.l (%a0)\nend:", &["end"]);
+    m.cpu.a[0] = MEM + 2;
+    let r = m.run(until(l[0]));
+    assert_eq!((r.kind, r.pc), (Stop::Unmodelled, BASE), "{r:?}");
+    assert!(r.detail.contains("aligned"), "{r:?}");
 }
 
 #[test]
