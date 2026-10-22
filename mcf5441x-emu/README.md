@@ -191,11 +191,14 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2 lists):
   the program cannot read the pin levels. A set EPF bit requests in any mode (RM Table 18-4). While its clock gate is
   closed no edge is latched and level-sensitive pins still request (guess, after RM 18.2's stop mode).
-- **eDMA** (RM ch. 19): 64 channels served at their peripheral's request or by START/SSRT, 8- and 32-bit
-  transfers, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR and D_REQ; misaligned addresses are configuration
-  errors with ES as measured on an MCF54415. On the built chip SERQ is taken only on the request lines a model
-  drives (the table's last column) and the channels RM Table 19-6 leaves to software (30, 31, 42, 43, 46, 47);
-  START and SSRT work on every channel.
+- **eDMA** (RM ch. 19): 64 channels served at their peripheral's request, by START/SSRT or by a channel link;
+  8-bit, 16-bit, 32-bit, 16-byte and 32-byte transfers (32-byte: ATTR size 101, a guess), mixed source and
+  destination sizes, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR, D_REQ, scatter/gather and minor- and
+  major-loop channel linking (linked starts run in the same call, bounded); CR is stored (EDBG, ERCA and ERGA change
+  nothing). Misaligned addresses are configuration errors with ES as measured on an MCF54415; a misaligned
+  scatter/gather address is the SGE error (its effect on the TCD a guess). On the built chip SERQ is taken only on
+  the request lines a model drives (the table's last column) and the channels RM Table 19-6 leaves to software (30,
+  31, 42, 43, 46, 47); START and SSRT work on every channel.
 - **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character
   per character time (a status read 3 ticks after a write to an idle transmitter sees TXRDY again: measured on an
   MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing
@@ -227,14 +230,15 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
 ### What refuses
 
 A feature a model leaves out is a tripwire, not a silent difference: the access that reaches it is refused (the
-instruction does not complete, PC stays on it) and the run stops with `Stop::Unmodelled`, the detail naming the
-block and the feature. Among them: eDMA scatter/gather, channel linking, other transfer sizes, error interrupts
-and SERQ on a channel nothing drives; UART FIFO-full receive requests, multidrop and loopback modes; SSI configurations outside I2S master or
-network mode with FIFO 0, and its own interrupts; DSPI slave mode, CTAR2-7, interrupt and DMA requests, a push to a
-full FIFO; eSDHC write commands, its internal DMA and a clock divider change with the clock on; USB host mode, little-
-endian buffers and full-speed bulk packets over 64 bytes; NFC commands other than page reads, and its interrupt; access
-sizes a register does not take. A tripwire reached by a device on its own (an eDMA request that never drops, a USB DMA
-access that fails) halts the run with the same kind after the instruction. Each model's documentation lists its own.
+instruction does not complete, PC stays on it) and the run stops with `Stop::Unmodelled`, the detail naming the block
+and the feature. Among them: eDMA CR HALT, CLM, EMLM, HOE, CX/ECX and group priorities, reserved transfer sizes, error
+interrupts and SERQ on a channel nothing drives; UART FIFO-full receive requests, multidrop and loopback modes; SSI
+configurations outside I2S master or network mode with FIFO 0, and its own interrupts; DSPI slave mode, CTAR2-7,
+interrupt and DMA requests, a push to a full FIFO; eSDHC write commands, its internal DMA and a clock divider change
+with the clock on; USB host mode, little-endian buffers and full-speed bulk packets over 64 bytes; NFC commands other
+than page reads, and its interrupt; access sizes a register does not take. A tripwire reached by a device on its own
+(an eDMA request that never drops, a USB DMA access that fails) halts the run with the same kind after the
+instruction. Each model's documentation lists its own.
 
 ### Bus masters and DMA
 

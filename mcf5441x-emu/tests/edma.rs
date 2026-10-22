@@ -338,9 +338,10 @@ fn major_loop_applies_slast_and_dlast() {
 
 #[test]
 fn unmodelled_features_halt() {
-    let cases: [(&[(Field, u32)], &str); 5] = [
-        (&[(ATTR, 0x0101)], "transfer size"),
-        (&[(CITER, 0x8001)], "channel link"),
+    let cases: [(&[(Field, u32)], &str); 6] = [
+        (&[(ATTR, 0x0303)], "transfer size"),
+        (&[(ATTR, 0x0404)], "transfer size"), // NBYTES 1 with 16-byte transfers
+        (&[(CITER, 0x8001)], "channel link"), // E_LINK in CITER, not in BITER
         (&[(CITER, 0)], "CITER 0"),
         (&[(NBYTES, 0)], "NBYTES 0"),
         // RM 19.4.2's SOE/DOE are not modelled
@@ -359,12 +360,6 @@ fn unmodelled_features_halt() {
         );
         assert_eq!(get(&mut m, 36, DADDR), 0x4010_1000, "{what}: nothing moved");
     }
-    // ESG is refused when written (the TCD keeps its old CSR)
-    let (mut m, _, _) = board(36);
-    rx_channel(&mut m, 0x4010_1000);
-    let d = refused(&mut m, tcd_addr(36, CSR), Size::Word, Some(ESG));
-    assert!(d.contains("CSR"), "{d}");
-    assert_eq!(get(&mut m, 36, CSR), INTMAJOR);
 }
 
 #[test]
@@ -384,8 +379,8 @@ fn unmodelled_registers_halt() {
     w(&mut m, EDMA + 0x1B, Size::Byte, 3); // CEEI
     // NOP (bit 7) makes the command do nothing (RM 19.4.5)
     w(&mut m, SEEI, Size::Byte, 0x83);
-    // the control register, non-byte commands and the rest of the window
-    refused(&mut m, EDMA, Size::Long, None);
+    // the control register at other sizes, non-byte commands and the rest of the window
+    refused(&mut m, EDMA, Size::Word, None);
     refused(&mut m, SERQ, Size::Long, Some(0x0101_0101));
     refused(&mut m, EDMA + 0x100, Size::Byte, None);
     refused(&mut m, EDMA + 0x1800, Size::Long, None);
@@ -393,13 +388,11 @@ fn unmodelled_registers_halt() {
 }
 
 #[test]
-fn unmodelled_csr_bits_halt_when_written() {
-    // START (bit 0) is modelled: see software_start_runs_one_minor_loop
+fn csr_esg_and_major_link_are_stored_unless_done() {
     for bit in [ESG, MAJORELINK] {
         let (mut m, _, _) = board(36);
-        let d = refused(&mut m, tcd_addr(36, CSR), Size::Word, Some(INTMAJOR | bit));
-        assert!(d.contains("eDMA") && d.contains("CSR"), "{bit:#x}: {d}");
-        assert_eq!(get(&mut m, 36, CSR), 0, "{bit:#x}: not stored");
+        w(&mut m, tcd_addr(36, CSR), Size::Word, INTMAJOR | bit);
+        assert_eq!(get(&mut m, 36, CSR), INTMAJOR | bit, "{bit:#x}: stored");
     }
     // with DONE set, a write forces E_SG and MAJOR_E_LINK to zero (RM 19.4.17, Table 19-31)
     let (mut m, _, port) = board(36);
@@ -463,9 +456,57 @@ fn minor_loops_of_32bit_words_with_half_and_major_interrupts() {
 }
 
 #[test]
-fn mixed_transfer_sizes_halt() {
-    for attr in [0x0200, 0x0002, 0x0101] {
-        // 32 -> 8, 8 -> 32, 16-bit
+fn mixed_transfer_sizes_move() {
+    // reads fill a buffer of the larger size, which the writes empty (RM Example 19-1: 8-bit in, 32-bit out)
+    let src = 0x4010_0000;
+    let data: Vec<u8> = (0x10..0x30).collect();
+    for (attr, soff, doff) in [
+        (0x0002, 1, 4),
+        (0x0200, 4, 1),
+        (0x0101, 2, 2),
+        (0x0001, 1, 2),
+        (0x0402, 16, 4),
+        (0x0204, 4, 16),
+    ] {
+        let (mut m, _, _) = board(54);
+        let dst = 0x4010_0100;
+        m.mem.load(src, &data).unwrap();
+        tcd(
+            &mut m,
+            54,
+            &[
+                (SADDR, src),
+                (SOFF, soff),
+                (ATTR, attr),
+                (NBYTES, 16),
+                (DADDR, dst),
+                (DOFF, doff),
+                (CITER, 2),
+                (BITER, 2),
+                (CSR, START),
+            ],
+        );
+        assert_eq!(
+            m.mem.peek(dst, 32).unwrap()[..16],
+            data[..16],
+            "{attr:#06x}"
+        );
+        assert_eq!(
+            m.mem.peek(dst + 16, 16).unwrap(),
+            [0; 16],
+            "{attr:#06x}: one minor loop"
+        );
+        assert_eq!(get(&mut m, 54, SADDR), src + 16, "{attr:#06x}");
+        assert_eq!(get(&mut m, 54, DADDR), dst + 16, "{attr:#06x}");
+        assert_eq!(get(&mut m, 54, CITER), 1, "{attr:#06x}");
+        no_halt(&mut m);
+    }
+}
+
+#[test]
+fn reserved_transfer_sizes_halt() {
+    // RM Table 19-21: 011, 110 and 111 are reserved (a configuration error, not modelled)
+    for attr in [0x0303, 0x0002 | 0x0600, 0x0700, 0x0003] {
         let (mut m, _, port) = board(54);
         tcd(
             &mut m,
@@ -1032,5 +1073,507 @@ fn a_host_access_refused_by_a_bus_error_leaves_no_halt_pending() {
         "{d}"
     );
     w(&mut m, CERQ, Size::Byte, 5);
+    no_halt(&mut m);
+}
+
+/// A 32-byte TCD as it sits in memory for scatter/gather (RM 19.4.17, big-endian).
+fn tcd_image(fields: &[(Field, u32)]) -> [u8; 32] {
+    let mut t = [0; 32];
+    for &(f, v) in fields {
+        let (o, n) = (f.0 as usize, f.1.bytes() as usize);
+        t[o..o + n].copy_from_slice(&v.to_be_bytes()[4 - n..]);
+    }
+    t
+}
+
+/// The fields of a 4-byte copy from `src` to `dst`: one 32-bit transfer, CITER = BITER = 1.
+fn copy4(src: u32, dst: u32) -> Vec<(Field, u32)> {
+    vec![
+        (SADDR, src),
+        (ATTR, 0x0202),
+        (SOFF, 4),
+        (NBYTES, 4),
+        (SLAST, 0),
+        (DADDR, dst),
+        (DOFF, 4),
+        (CITER, 1),
+        (BITER, 1),
+    ]
+}
+
+#[test]
+fn cr_is_stored_and_reads_back() {
+    let (mut m, _, _) = board(1);
+    assert_eq!(
+        r(&mut m, EDMA, Size::Long),
+        0x0000_E400,
+        "reset: GRP3PRI 3, GRP2PRI 2, GRP1PRI 1, GRP0PRI 0 (RM Figure 19-3)"
+    );
+    let cr = r(&mut m, EDMA, Size::Long) | 6; // EDBG | ERCA
+    w(&mut m, EDMA, Size::Long, cr);
+    assert_eq!(r(&mut m, EDMA, Size::Long), 0x0000_E406);
+    w(&mut m, EDMA, Size::Long, 0x0000_E40E); // and ERGA
+    assert_eq!(r(&mut m, EDMA, Size::Long), 0x0000_E40E);
+    // reserved bits (31-18, 0) are dropped (RM 19.4)
+    w(&mut m, EDMA, Size::Long, 0x8004_E407);
+    assert_eq!(r(&mut m, EDMA, Size::Long), 0x0000_E406);
+    // guess: EDBG, ERCA and ERGA change nothing, since transfers take no time
+    start_channel(&mut m, 0x4030_0000, 0x4030_0100);
+    assert_eq!(
+        m.mem.peek(0x4030_0100, 4).unwrap(),
+        [0x11, 0x22, 0x33, 0x44]
+    );
+    assert_eq!(get(&mut m, 1, CSR), DONE);
+    no_halt(&mut m);
+}
+
+#[test]
+fn cr_halt_and_clm_stop_unmodelled() {
+    let (mut m, _, _) = board(1);
+    for (bit, name) in [
+        (0x20, "HALT"),
+        (0x40, "CLM"),
+        (0x80, "EMLM"),
+        (0x10, "HOE"),
+        (1 << 16, "ECX"),
+        (1 << 17, "CX"),
+    ] {
+        let d = refused(&mut m, EDMA, Size::Long, Some(0xE400 | bit));
+        assert!(d.contains("eDMA CR") && d.contains(name), "{name}: {d}");
+        assert_eq!(r(&mut m, EDMA, Size::Long), 0xE400, "{name}: not stored");
+    }
+    // group priorities other than the reset ones
+    let d = refused(&mut m, EDMA, Size::Long, Some(0x1B00));
+    assert!(d.contains("GRPnPRI"), "{d}");
+    assert_eq!(r(&mut m, EDMA, Size::Long), 0xE400);
+    no_halt(&mut m);
+}
+
+#[test]
+fn scatter_gather_loads_the_next_tcd_and_runs_it() {
+    let (mut m, _, _) = board(7);
+    let src = 0x4041_0000;
+    let (sg1, sg2) = (0x4040_0000, 0x4040_0020);
+    let (d1, d2, d3) = (0x4042_0000, 0x4042_0100, 0x4042_0200);
+    m.mem.load(src, &(1..=12).collect::<Vec<u8>>()).unwrap();
+    // B runs as it is loaded (START | E_SG) and loads C, which waits (no START)
+    let mut b = copy4(src + 4, d2);
+    b.extend([(DLAST, sg2), (CSR, START | ESG)]);
+    let mut c = copy4(src + 8, d3);
+    c.extend([(DLAST, 0), (CSR, INTMAJOR)]);
+    m.mem.load(sg1, &tcd_image(&b)).unwrap();
+    m.mem.load(sg2, &tcd_image(&c)).unwrap();
+    let mut a = copy4(src, d1);
+    a.extend([(DLAST, sg1), (CSR, START | ESG | INTMAJOR)]);
+    tcd(&mut m, 7, &a);
+    assert_eq!(m.mem.peek(d1, 4).unwrap(), [1, 2, 3, 4]);
+    assert_eq!(m.mem.peek(d2, 4).unwrap(), [5, 6, 7, 8]);
+    assert_eq!(
+        m.mem.peek(d3, 4).unwrap(),
+        [0; 4],
+        "C is loaded, not started"
+    );
+    assert!(
+        source(&m, 0, 15),
+        "A's INT_MAJOR: channel 7 -> INTC0 source 15"
+    );
+    // the channel's TCD is C as it sits in memory; guess: DONE as the loaded CSR has it (clear)
+    for (f, v) in &c {
+        assert_eq!(get(&mut m, 7, *f), *v, "{f:?}");
+    }
+    w(&mut m, CINT, Size::Byte, 7);
+    w(&mut m, SSRT, Size::Byte, 7);
+    assert_eq!(m.mem.peek(d3, 4).unwrap(), [9, 10, 11, 12]);
+    assert_eq!(get(&mut m, 7, CSR), INTMAJOR | DONE);
+    assert_eq!(get(&mut m, 7, DADDR), d3 + 4, "DLAST 0 added: no E_SG");
+    assert!(source(&m, 0, 15));
+    assert_eq!(r(&mut m, ES, Size::Long), 0);
+    no_halt(&mut m);
+}
+
+#[test]
+fn scatter_gather_misaligned_is_sge() {
+    // RM 19.4.2: DLAST_SGA not on a 32-byte boundary is the SGE configuration error, found as the major loop
+    // completes
+    let (mut m, _, _) = board(7);
+    let (src, dst, sga) = (0x4041_0000, 0x4042_0000, 0x4040_0010);
+    m.mem.load(src, &[1, 2, 3, 4]).unwrap();
+    let mut a = copy4(src, dst);
+    a.extend([(DLAST, sga), (CSR, START | ESG | INTMAJOR)]);
+    tcd(&mut m, 7, &a);
+    assert_eq!(
+        r(&mut m, ES, Size::Long),
+        0x8000_0000 | 7 << 8 | 0x04,
+        "VLD, ERRCHN, SGE"
+    );
+    assert_eq!(r(&mut m, ERRL, Size::Long), 1 << 7);
+    // guess: the minor loop has moved its data and SADDR, DADDR and CITER are written back; nothing else of the
+    // completion happens: no DONE, no interrupt, no load
+    assert_eq!(m.mem.peek(dst, 4).unwrap(), [1, 2, 3, 4]);
+    assert_eq!(
+        get(&mut m, 7, CSR),
+        ESG | INTMAJOR,
+        "START cleared, not DONE"
+    );
+    assert_eq!(get(&mut m, 7, SADDR), src + 4);
+    assert_eq!(get(&mut m, 7, DADDR), dst + 4);
+    assert_eq!(get(&mut m, 7, CITER), 1);
+    assert_eq!(get(&mut m, 7, DLAST), sga);
+    assert!(!source(&m, 0, 15));
+    w(&mut m, CERR, Size::Byte, 7);
+    assert_eq!(r(&mut m, ES, Size::Long), 7 << 8 | 0x04);
+    no_halt(&mut m);
+}
+
+#[test]
+fn minor_loop_link_starts_the_linked_channel() {
+    // RM 19.6.6: a link after every minor loop but the last
+    let (mut m, _, _) = board(1);
+    let src = 0x4041_0000;
+    m.mem.load(src, &(1..=16).collect::<Vec<u8>>()).unwrap();
+    let iter = 0x8000 | 4 << 9 | 3; // E_LINK, LINKCH 4, count 3
+    tcd(
+        &mut m,
+        10,
+        &[
+            (SADDR, src),
+            (ATTR, 0),
+            (SOFF, 1),
+            (NBYTES, 1),
+            (DADDR, 0x4042_0000),
+            (DOFF, 1),
+            (CITER, iter),
+            (BITER, iter),
+            (CSR, 0),
+        ],
+    );
+    tcd(
+        &mut m,
+        4,
+        &[
+            (SADDR, src + 8),
+            (ATTR, 0),
+            (SOFF, 1),
+            (NBYTES, 1),
+            (DADDR, 0x4042_0100),
+            (DOFF, 1),
+            (CITER, 10),
+            (BITER, 10),
+            (CSR, 0),
+        ],
+    );
+    w(&mut m, SSRT, Size::Byte, 10);
+    assert_eq!(get(&mut m, 10, CITER), 0x8000 | 4 << 9 | 2, "LINKCH kept");
+    assert_eq!(get(&mut m, 4, CITER), 9, "the linked channel ran");
+    assert_eq!(get(&mut m, 4, CSR), 0, "its START cleared");
+    w(&mut m, SSRT, Size::Byte, 10);
+    assert_eq!(get(&mut m, 4, CITER), 8);
+    w(&mut m, SSRT, Size::Byte, 10); // the last minor loop: no link
+    assert_eq!(get(&mut m, 10, CITER), iter, "reloaded from BITER");
+    assert_eq!(get(&mut m, 10, CSR), DONE);
+    assert_eq!(get(&mut m, 4, CITER), 8);
+    assert_eq!(m.mem.peek(0x4042_0000, 4).unwrap(), [1, 2, 3, 0]);
+    assert_eq!(m.mem.peek(0x4042_0100, 3).unwrap(), [9, 10, 0]);
+    no_halt(&mut m);
+}
+
+#[test]
+fn major_loop_link_starts_the_linked_channel() {
+    // a peripheral-paced channel: its link runs within the same service
+    let (mut m, _, port) = board(20);
+    with_port(&mut m, port, |p| p.mem[0x100..0x102].copy_from_slice(b"ab"));
+    let src = 0x4041_0000;
+    m.mem.load(src, b"xyz").unwrap();
+    tcd(
+        &mut m,
+        20,
+        &[
+            (SADDR, PORT + 0x100),
+            (ATTR, 0),
+            (SOFF, 1),
+            (NBYTES, 1),
+            (SLAST, -2i32 as u32),
+            (DADDR, 0x4042_0000),
+            (DOFF, 1),
+            (CITER, 2),
+            (BITER, 2),
+            (DLAST, -2i32 as u32),
+            (CSR, MAJORELINK | 4 << 8),
+        ],
+    );
+    tcd(
+        &mut m,
+        4,
+        &[
+            (SADDR, src),
+            (ATTR, 0),
+            (SOFF, 1),
+            (NBYTES, 1),
+            (DADDR, 0x4042_0100),
+            (DOFF, 1),
+            (CITER, 5),
+            (BITER, 5),
+            (CSR, 0),
+        ],
+    );
+    w(&mut m, SERQ, Size::Byte, 20);
+    grant(&mut m, port, 1);
+    assert_eq!(get(&mut m, 20, CITER), 1);
+    assert_eq!(
+        get(&mut m, 4, CITER),
+        5,
+        "no link before the major loop completes"
+    );
+    grant(&mut m, port, 1);
+    assert_eq!(get(&mut m, 20, CSR), MAJORELINK | 4 << 8 | DONE);
+    assert_eq!(get(&mut m, 4, CITER), 4, "linked at the major loop's end");
+    assert_eq!(m.mem.peek(0x4042_0000, 2).unwrap(), b"ab");
+    assert_eq!(m.mem.peek(0x4042_0100, 2).unwrap(), [b'x', 0]);
+    no_halt(&mut m);
+}
+
+#[test]
+fn self_linked_channel_runs_all_minor_loops() {
+    // The shape of a software channel 30: 16-byte reads inside a 4 MiB SMOD ring, 32-bit writes, CITER = BITER =
+    // 0xBC11 (E_LINK to itself, count 17), DLAST_SGA the next TCD in RAM and CSR START | E_SG, written by the
+    // program. Each TCD of the chain runs its 17 minor loops within the CSR write; the last one waits.
+    const TCD30: u32 = EDMA + 0x1000 + 30 * 32;
+    let ring = 0x4040_0000; // 0-modulo 4 MiB
+    let src = ring + 0x3F_FD40;
+    let dst = 0x4090_0000;
+    let (sg1, sg2) = (0x40A0_0000, 0x40A0_0020);
+    let snippet = format!(
+        "lea {TCD30:#x},%a0
+        move.l #{src:#x},%d0
+        move.l %d0,(%a0)
+        move.l #0xB4020010,%d0
+        move.l %d0,(4,%a0)
+        moveq #0x10,%d0
+        move.l %d0,(8,%a0)
+        clr.l (12,%a0)
+        move.l #{dst:#x},%d0
+        move.l %d0,(16,%a0)
+        move.l #0xBC110004,%d0
+        move.l %d0,(20,%a0)
+        move.l #{sg1:#x},%d0
+        move.l %d0,(24,%a0)
+        move.w #0xBC11,%d0
+        move.w %d0,(28,%a0)
+        moveq #0x11,%d0
+        move.w %d0,(30,%a0)
+        end: nop"
+    );
+    let (mut m, l) = common::prepare(&snippet, &["end"]);
+    m.add_bus_master(EDMA, 0x2000, Box::new(Edma::new()));
+    let data: Vec<u8> = (0..2 * 17 * 16u32).map(|i| (i * 7 + 3) as u8).collect();
+    m.mem.load(src, &data).unwrap();
+    let shape = |saddr: u32, daddr: u32, sga: u32| {
+        tcd_image(&[
+            (SADDR, saddr),
+            (ATTR, 0xB402),
+            (SOFF, 0x10),
+            (NBYTES, 0x10),
+            (SLAST, 0),
+            (DADDR, daddr),
+            (CITER, 0xBC11),
+            (DOFF, 4),
+            (DLAST, sga),
+            (BITER, 0xBC11),
+            (CSR, START | ESG),
+        ])
+    };
+    m.mem
+        .load(sg1, &shape(src + 17 * 16, dst + 17 * 16, sg2))
+        .unwrap();
+    let last = copy4(0x4041_0000, 0x4042_0000);
+    m.mem.load(sg2, &tcd_image(&last)).unwrap();
+    let stop = m.run(common::until(l[0]));
+    assert_eq!(stop.kind, Stop::UntilPc, "{stop:?}");
+    assert_eq!(
+        m.mem.peek(dst, data.len() as u32).unwrap(),
+        data,
+        "2 x 17 minor loops"
+    );
+    assert_eq!(
+        m.mem.peek(dst + data.len() as u32, 16).unwrap(),
+        [0; 16],
+        "no more"
+    );
+    for (f, v) in &last {
+        assert_eq!(get(&mut m, 30, *f), *v, "{f:?}: the last TCD, loaded");
+    }
+    assert_eq!(get(&mut m, 30, CSR), 0);
+    assert_eq!(r(&mut m, ES, Size::Long), 0);
+    no_halt(&mut m);
+}
+
+#[test]
+fn an_endless_link_chain_is_refused() {
+    // a channel whose major loop links to itself starts again forever: a backstop of 1 << 20 minor loops
+    let (mut m, _, _) = board(1);
+    m.mem.load(0x4041_0000, &[1]).unwrap();
+    tcd(
+        &mut m,
+        5,
+        &[
+            (SADDR, 0x4041_0000),
+            (ATTR, 0),
+            (SOFF, 0),
+            (NBYTES, 1),
+            (DADDR, 0x4042_0000),
+            (DOFF, 0),
+            (CITER, 1),
+            (BITER, 1),
+        ],
+    );
+    let d = refused(
+        &mut m,
+        tcd_addr(5, CSR),
+        Size::Word,
+        Some(MAJORELINK | 5 << 8 | START),
+    );
+    assert!(
+        d.contains("eDMA channel 5") && d.contains("1048576 minor loops"),
+        "{d}"
+    );
+}
+
+#[test]
+fn sixteen_byte_transfers_with_smod_ring() {
+    let (mut m, _, port) = board(1);
+    let ring = 0x4010_0000; // a 64-byte ring: SMOD 6
+    let dst = 0x4020_0000;
+    let data: Vec<u8> = (0..64).collect();
+    m.mem.load(ring, &data).unwrap();
+    tcd(
+        &mut m,
+        12,
+        &[
+            (SADDR, ring + 32),
+            (ATTR, 6 << 11 | 4 << 8 | 4),
+            (SOFF, 16),
+            (NBYTES, 32),
+            (SLAST, 0),
+            (DADDR, dst),
+            (DOFF, 16),
+            (CITER, 3),
+            (BITER, 3),
+            (DLAST, 0),
+            (CSR, START),
+        ],
+    );
+    w(&mut m, SSRT, Size::Byte, 12);
+    w(&mut m, SSRT, Size::Byte, 12);
+    let expect = [&data[32..], &data[..32], &data[32..]].concat();
+    assert_eq!(
+        m.mem.peek(dst, 96).unwrap(),
+        expect,
+        "SADDR wrapped in the ring"
+    );
+    assert_eq!(get(&mut m, 12, SADDR), ring, "wrapped to the ring's start");
+    assert_eq!(get(&mut m, 12, DADDR), dst + 96);
+    assert_eq!(get(&mut m, 12, CSR), DONE);
+    // a 16-byte transfer to a device is a burst of four longword accesses
+    with_port(&mut m, port, |p| p.budget = 100);
+    tcd(
+        &mut m,
+        12,
+        &[
+            (SADDR, ring),
+            (ATTR, 4 << 8 | 4),
+            (DADDR, PORT + 0x100),
+            (NBYTES, 16),
+            (CITER, 1),
+            (BITER, 1),
+            (CSR, START),
+        ],
+    );
+    assert_eq!(m.device::<Port>(port).mem[0x100..0x110], data[..16]);
+    assert_eq!(m.device::<Port>(port).budget, 96, "four accesses");
+    with_port(&mut m, port, |p| p.budget = 0);
+    // addresses must be 0-modulo 16 (RM 19.4.2), the errors as for the smaller sizes
+    tcd(&mut m, 12, &[(SADDR, ring + 8), (DADDR, dst), (CSR, START)]);
+    assert_eq!(
+        r(&mut m, ES, Size::Long),
+        0x8000_0000 | 12 << 8 | 0x80,
+        "SAE"
+    );
+    w(&mut m, CERR, Size::Byte, 12);
+    tcd(&mut m, 12, &[(SADDR, ring), (DADDR, dst + 4), (CSR, START)]);
+    assert_eq!(
+        r(&mut m, ES, Size::Long),
+        0x8000_0000 | 12 << 8 | 0x20,
+        "DAE"
+    );
+    w(&mut m, CERR, Size::Byte, 12);
+    no_halt(&mut m);
+}
+
+#[test]
+fn thirty_two_byte_transfers() {
+    // guess: ATTR size 101 is a 32-byte transfer (as on later eDMA revisions; RM Table 19-21 lists it as reserved)
+    let (mut m, _, port) = board(1);
+    let (src, dst) = (0x4010_0000, 0x4020_0000);
+    let data: Vec<u8> = (0..64u32).map(|i| (i * 5 + 1) as u8).collect();
+    m.mem.load(src, &data).unwrap();
+    tcd(
+        &mut m,
+        40,
+        &[
+            (SADDR, src),
+            (ATTR, 0x0505),
+            (SOFF, 32),
+            (NBYTES, 64),
+            (SLAST, -64i32 as u32),
+            (DADDR, dst),
+            (DOFF, 32),
+            (CITER, 1),
+            (BITER, 1),
+            (DLAST, 0),
+            (CSR, START),
+        ],
+    );
+    assert_eq!(m.mem.peek(dst, 64).unwrap(), data);
+    assert_eq!(get(&mut m, 40, SADDR), src);
+    assert_eq!(get(&mut m, 40, DADDR), dst + 64);
+    assert_eq!(get(&mut m, 40, CSR), DONE);
+    // 32 bytes in, 32-bit out
+    tcd(
+        &mut m,
+        40,
+        &[
+            (ATTR, 0x0502),
+            (NBYTES, 32),
+            (DADDR, dst + 0x100),
+            (DOFF, 4),
+            (CSR, START),
+        ],
+    );
+    assert_eq!(m.mem.peek(dst + 0x100, 40).unwrap()[..32], data[..32]);
+    assert_eq!(get(&mut m, 40, DADDR), dst + 0x120);
+    // a 32-byte transfer to a device is a burst of eight longword accesses
+    with_port(&mut m, port, |p| p.budget = 100);
+    tcd(
+        &mut m,
+        40,
+        &[
+            (SADDR, src),
+            (ATTR, 0x0505),
+            (DADDR, PORT + 0x100),
+            (DOFF, 32),
+            (CSR, START),
+        ],
+    );
+    assert_eq!(m.device::<Port>(port).mem[0x100..0x120], data[..32]);
+    assert_eq!(m.device::<Port>(port).budget, 92, "eight accesses");
+    with_port(&mut m, port, |p| p.budget = 0);
+    // 0-modulo 32: an address on a 16-byte boundary is misaligned
+    tcd(&mut m, 40, &[(SADDR, src + 16), (DADDR, dst), (CSR, START)]);
+    assert_eq!(
+        r(&mut m, ES, Size::Long),
+        0x8000_0000 | 40 << 8 | 0x80,
+        "SAE"
+    );
+    w(&mut m, CERR, Size::Byte, 40);
     no_halt(&mut m);
 }
