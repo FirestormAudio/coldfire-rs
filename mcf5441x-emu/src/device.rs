@@ -28,9 +28,9 @@ pub trait Device: Any {
     fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx);
     /// The absolute tick of the next thing this device does by itself, if any. It is asked again after every
     /// call into this device (a register access, [`Device::advance`], [`Device::service`], [`Device::gate`], an
-    /// interrupt acknowledge, [`Machine::with_device`](crate::Machine::with_device)), when its clock gate opens,
-    /// and after the host had it through [`Machine::device_mut`](crate::Machine::device_mut); the answer is kept
-    /// in between. So the event may depend only on the device's own state, changed only by those calls: not on
+    /// interrupt acknowledge, [`Machine::with_device`](crate::Machine::with_device)), when its gated state
+    /// changes (its clock gate closing or opening), and after the host had it through
+    /// [`Machine::device_mut`](crate::Machine::device_mut); the answer is kept in between. So the event may depend only on the device's own state, changed only by those calls: not on
     /// state it shares with another device (through a cell, say), which a call into that device could change.
     fn next_event(&self) -> Option<u64> {
         None

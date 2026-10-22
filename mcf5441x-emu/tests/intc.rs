@@ -3,8 +3,8 @@
 mod common;
 
 use common::{STACK, prepare, set_vector, until};
-use mcf5441x_emu::soc::Intc;
-use mcf5441x_emu::{DeviceId, Fault, InterruptController, Irq, Machine, Size, Stop};
+use mcf5441x_emu::soc::{Edma, Intc};
+use mcf5441x_emu::{DeviceId, Fault, InterruptController, Irq, Limit, Machine, Size, Stop};
 
 const INTC0: u32 = 0xFC04_8000;
 const INTC1: u32 = 0xFC04_C000;
@@ -581,5 +581,125 @@ fn equal_levels_across_controllers_go_to_intc0() {
     assert_eq!(
         (m.cpu.d[5], m.cpu.d[6], m.cpu.d[2], m.cpu.d[7]),
         (0, 1, 2, 3)
+    );
+}
+
+// The controllers' change counter (`InterruptController::generation`): every change to their shared state moves it
+// on, so the machine never reuses an answer the change made stale. Each test below fails when one of those moves
+// is left out.
+
+/// Where the eDMA is mapped, and its SSRT register.
+const EDMA: u32 = 0xFC04_4000;
+const SSRT: u32 = EDMA + 0x1E;
+/// A scratch byte the eDMA writes.
+const SINK: u32 = 0x4010_2100;
+
+/// `body`, then `end`, on the chip's controllers and the eDMA: INTC0 source 6 (vector 70) at level 3, unmasked and
+/// asserted, with ICONFIG\[EMASK\] set and CLMASK at `clmask`. The handler counts in D4, keeps the stacked PC in
+/// D6 and masks source 6. Channel 0's TCD reads one byte at `dma_from` into [`SINK`] at each SSRT 0.
+fn held(body: &str, clmask: u32, dma_from: u32) -> (Machine, Vec<u32>) {
+    let src = format!(
+        "{body}\nend: nop\n\
+         h70: addq.l #1,%d4\nmove.l 4(%sp),%d6\nmoveq #6,%d1\nmove.b %d1,0xFC04801C\nrte"
+    );
+    let (mut m, l) = prepare(&src, &["end", "h70", "next"]);
+    set_vector(&mut m, 70, l[1]);
+    add_chip(&mut m);
+    m.add_bus_master(EDMA, 0x2000, Box::new(Edma::new()));
+    for (f, size, v) in [
+        (0x00, Size::Long, dma_from),
+        (0x04, Size::Word, 0),
+        (0x06, Size::Word, 0),
+        (0x08, Size::Long, 1),
+        (0x10, Size::Long, SINK),
+        (0x14, Size::Word, 1),
+        (0x16, Size::Word, 0),
+        (0x1C, Size::Word, 1),
+        (0x1E, Size::Word, 0),
+    ] {
+        w(&mut m, EDMA + 0x1000 + f, size, v);
+    }
+    w(&mut m, INTC0 + ICR0 + 6, Size::Byte, 3);
+    w(&mut m, INTC0 + CIMR, Size::Byte, 6);
+    w(&mut m, INTC0 + ICONFIG, Size::Word, EMASK);
+    w(&mut m, INTC0 + CLMASK, Size::Byte, clmask);
+    m.mem.irq_lines_mut().set(0, 6, true);
+    (m, l)
+}
+
+/// [`held`] with the level-3 request held off by SR, then `iack` (an instruction acknowledging level 3 with
+/// EMASK: CLMASK becomes 3), then SR lowered to 0: the request stays masked. Returns the handler's count.
+fn acknowledged_then_lowered(iack: &str, dma_from: u32) -> u32 {
+    let body = format!("move.w #0x2700,%sr\nnop\n{iack}\nmove.w #0x2000,%sr\nnop\nnext: nop");
+    let (mut m, l) = held(&body, 0x0F, dma_from);
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(
+        r_byte(&mut m, INTC0 + CLMASK),
+        3,
+        "the acknowledge loaded CLMASK"
+    );
+    m.cpu.d[4]
+}
+
+fn r_byte(m: &mut Machine, addr: u32) -> u32 {
+    r(m, addr, Size::Byte)
+}
+
+#[test]
+fn a_request_a_global_iack_read_masks_stays_masked_when_sr_is_lowered() {
+    let gl3 = GIACK + iack(3);
+    assert_eq!(
+        acknowledged_then_lowered(&format!("move.b {gl3:#x},%d0"), 0),
+        0
+    );
+}
+
+#[test]
+fn a_request_an_edma_read_of_the_global_iack_masks_stays_masked_when_sr_is_lowered() {
+    let ssrt = format!("moveq #0,%d0\nmove.b %d0,{SSRT:#x}");
+    assert_eq!(acknowledged_then_lowered(&ssrt, GIACK + iack(3)), 0);
+}
+
+#[test]
+fn a_request_an_intc_iack_read_masks_stays_masked_when_sr_is_lowered() {
+    let l3 = INTC0 + iack(3);
+    assert_eq!(
+        acknowledged_then_lowered(&format!("move.b {l3:#x},%d0"), 0),
+        0
+    );
+}
+
+#[test]
+fn with_emask_a_forced_source_whose_handler_only_returns_is_taken_once() {
+    // The core's acknowledge loads CLMASK with the level taken, which masks the source the handler leaves forced.
+    let src = "move.w #0x2000,%sr\nnop\nnop\nnop\nend: nop\nh69: addq.l #1,%d4\nrte";
+    let (mut m, l) = prepare(src, &["end", "h69"]);
+    set_vector(&mut m, 69, l[1]);
+    add_chip(&mut m);
+    w(&mut m, INTC0 + ICR0 + 5, Size::Byte, 3);
+    w(&mut m, INTC0 + CIMR, Size::Byte, 5);
+    w(&mut m, INTC0 + ICONFIG, Size::Word, EMASK);
+    w(&mut m, INTC0 + INTFRCL, Size::Long, 1 << 5);
+    // Bounded: a source taken again and again would never reach `end`.
+    let r = m.run(Limit {
+        max_instructions: Some(1000),
+        ..until(l[0])
+    });
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.d[4], 1);
+    assert_eq!(r_byte(&mut m, INTC0 + CLMASK), 3);
+}
+
+#[test]
+fn clearing_emask_lets_a_masked_request_in_at_the_next_instruction() {
+    let body = "move.w #0x2000,%sr\nnop\nclr.l %d0\nmove.w %d0,0xFC04801A\nnext: nop";
+    let (mut m, l) = held(body, 3, 0);
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(
+        (m.cpu.d[4], m.cpu.d[6]),
+        (1, l[2]),
+        "taken right after the write to ICONFIG"
     );
 }
