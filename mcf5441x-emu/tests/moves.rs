@@ -345,6 +345,35 @@ fn mvs_mvz_extend() {
     assert_eq!(m.cpu.ccr(), Z);
 }
 
+/// Measured on an MCF54415: A1 = 0x123456F0, `mvs.b %a1,%d1` gives D1 = 0xFFFFFFF0 with N only.
+#[test]
+fn mvs_b_takes_an_measured() {
+    let (mut m, end) = prepare("mvs.b %a1,%d1\nend:");
+    m.cpu.a[1] = 0x1234_56F0;
+    finish(&mut m, end);
+    assert_eq!(m.cpu.d[1], 0xFFFF_FFF0);
+    assert_eq!(m.cpu.ccr(), N);
+}
+
+/// Measured on an MCF54415: from CCR 0x0F, `mvz.b %a1,%d1` gives D1 = 0xF0 with N, Z, V and C all clear.
+#[test]
+fn mvz_b_takes_an_measured() {
+    let (mut m, end) = prepare("mvz.b %a1,%d1\nend:");
+    m.cpu.a[1] = 0x1234_56F0;
+    m.cpu.set_sr(0x2700 | 0x0F);
+    finish(&mut m, end);
+    assert_eq!(m.cpu.d[1], 0x0000_00F0);
+    assert_eq!(m.cpu.ccr(), 0);
+}
+
+/// Measured on an MCF54415: `cmp.b %a1,%d1` (0xB209) is an illegal instruction.
+#[test]
+fn cmp_b_with_an_is_illegal_measured() {
+    let (mut m, end) = prepare(".short 0xB209\nend:");
+    let r = m.run(until(end));
+    assert_eq!((r.kind, r.pc), (Stop::Illegal, BASE), "{r:?}");
+}
+
 #[test]
 fn illegal_opword_stops_with_illegal() {
     let (mut m, end) = prepare("moveq #1,%d0\n.short 0x4AFC\nmoveq #2,%d0\nend:");

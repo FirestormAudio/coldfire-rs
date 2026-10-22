@@ -237,10 +237,10 @@ const KNOWN_OBJDUMP_DIFFERENCES: &[Known] = &[
         cfprm: "CFPRM ch. 4 BRA, p. 4-20",
     },
     Known {
-        what: "MVS.B, MVZ.B and CMP.B with an Ay source",
-        matches: |op| matches!(op & 0xf1f8, 0x7108 | 0x7188 | 0xb008),
-        reason: "objdump accepts Ay as a byte operand; address registers cannot be byte-size operands (a guess in the description)",
-        cfprm: "CFPRM 1.9.1, p. 1-20; ch. 4 MVS p. 4-59, MVZ p. 4-60, CMP p. 4-28",
+        what: "CMP.B with an Ay source",
+        matches: |op| op & 0xf1f8 == 0xb008,
+        reason: "objdump accepts Ay as a byte operand; CMP.B with Ay was measured illegal on an MCF54415",
+        cfprm: "CFPRM ch. 4 CMP, p. 4-28",
     },
     Known {
         what: "MOVE <ea>,ACCext01 and MOVE <ea>,ACCext23 with an EA other than Dy or Ay",

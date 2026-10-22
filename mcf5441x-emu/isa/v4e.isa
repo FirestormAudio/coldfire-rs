@@ -67,7 +67,7 @@ bset     A    L  0000RRR111mmmeee  Dn  -  BsetDnEa  # CFPRM ch. 4 BSET, p. 4-22
 bset     A    B  0000RRR111mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  BsetDnEa  # CFPRM ch. 4 BSET, p. 4-22
 
 # ---- lines 1-3: MOVE (size 01 byte, 11 word, 10 longword) ---------------------------------------------
-# Source/destination combinations from the table on p. 4-48; #imm to (d16,Ax) for .B and .W from ISA_B.
+# guess: the byte forms leave out An as a source (CMP.B with Ay was measured illegal; MVS.B and MVZ.B accept it):
 # guess: the byte forms leave out An as a source, the same reading as MVS.B, MVZ.B and CMP.B below:
 # "address registers cannot be used for byte-size operands" (CFPRM ch. 1, p. 1-20).
 move     A    B  0001EEEMMMmmmeee  Dn,(An),(An)+,-(An)>Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
@@ -155,11 +155,11 @@ bcc      B    L  0110cccc11111111  none  l  Bcc         # CFPRM ch. 4 Bcc, p. 4-
 
 # ---- line 7: MOVEQ, MVS, MVZ --------------------------------------------------------------------------
 moveq    A    L  0111RRR0qqqqqqqq  none  -  Moveq       # CFPRM ch. 4 MOVEQ, p. 4-52
-# guess (MVS.B, MVZ.B, CMP.B): the p. 4-59/4-60/4-28 tables list Ay without a size note, but CFPRM 1.9.1 (p. 1-20)
-# says address registers cannot be byte-size operands, so the byte forms leave An out (TST.B does, p. 4-85).
-mvs      B    B  0111RRR100mmmeee  data  -  Mvs         # CFPRM ch. 4 MVS, p. 4-59; 1.9.1, p. 1-20
+# MVS.B and MVZ.B take an address register source (measured on an MCF54415); CMP.B with Ay is illegal (measured on
+# an MCF54415). The p. 4-59/4-60 tables list Ay for MVS and MVZ; TST.B leaves Ay out (p. 4-85).
+mvs      B    B  0111RRR100mmmeee  all  -  Mvs         # CFPRM ch. 4 MVS, p. 4-59
 mvs      B    W  0111RRR101mmmeee  all  -  Mvs          # CFPRM ch. 4 MVS, p. 4-59
-mvz      B    B  0111RRR110mmmeee  data  -  Mvz         # CFPRM ch. 4 MVZ, p. 4-60; 1.9.1, p. 1-20
+mvz      B    B  0111RRR110mmmeee  all  -  Mvz         # CFPRM ch. 4 MVZ, p. 4-60
 mvz      B    W  0111RRR111mmmeee  all  -  Mvz          # CFPRM ch. 4 MVZ, p. 4-60
 
 # ---- line 8: OR, DIV.W --------------------------------------------------------------------------------
@@ -195,8 +195,8 @@ move     Emac L  101011111000rrrr  none  -  MoveFromAccext23       # CFPRM ch. 6
 mov3q    B    L  1010qqq101mmmeee  Dn,An,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Mov3q  # CFPRM ch. 4 MOV3Q, p. 4-46
 
 # ---- line B: CMP, CMPA, EOR ---------------------------------------------------------------------------
-# guess: no Ay source for CMP.B, as for MVS.B and MVZ.B above (CFPRM 1.9.1, p. 1-20).
-cmp      B    B  1011RRR000mmmeee  data  -  Cmp         # CFPRM ch. 4 CMP, p. 4-28 (.B from ISA_B); 1.9.1, p. 1-20
+# CMP.B with Ay is illegal (measured on an MCF54415); the p. 4-28 table lists Ay without a size note.
+cmp      B    B  1011RRR000mmmeee  data  -  Cmp         # CFPRM ch. 4 CMP, p. 4-28 (.B from ISA_B)
 cmp      B    W  1011RRR001mmmeee  all  -  Cmp          # CFPRM ch. 4 CMP, p. 4-28 (.W from ISA_B)
 cmp      A    L  1011RRR010mmmeee  all  -  Cmp          # CFPRM ch. 4 CMP, p. 4-28
 cmpa     B    W  1011RRR011mmmeee  all  -  Cmpa         # CFPRM ch. 4 CMPA, p. 4-29 (.W from ISA_B)
