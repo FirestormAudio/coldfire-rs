@@ -1130,13 +1130,13 @@ impl Device for UsbOtg {
         }
     }
 
-    /// The USB interrupt while a host script runs or a timer with its enable counts: nothing else raises it by
-    /// itself.
     /// It serves no DMA requests: its bus is for its own descriptors and buffers.
     fn serves(&self, _dma: &DmaLines) -> bool {
         false
     }
 
+    /// The USB interrupt while a host script runs or a timer with its enable counts: nothing else raises it by
+    /// itself.
     fn wake_sources(&self, out: &mut Vec<(usize, u8)>) -> bool {
         let timer = self
             .timers

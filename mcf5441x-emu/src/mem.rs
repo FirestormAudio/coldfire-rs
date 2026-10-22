@@ -693,7 +693,7 @@ impl Memory {
     /// last set the horizon (see [`Machine`](crate::Machine)'s boundary).
     #[inline(always)]
     pub(crate) fn resample(&mut self) {
-        self.horizon = self.horizon.min(self.now + 1);
+        self.horizon = self.horizon.min(self.now.saturating_add(1));
     }
 
     /// An instruction-stream word: RAM, or a read of the device whose window holds it that is neither traced nor

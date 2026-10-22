@@ -3,10 +3,15 @@
 
 mod common;
 
+use std::cell::Cell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 
-use common::{BASE, prepare, until};
-use mcf5441x_emu::{Access, Device, DeviceCx, Fault, Limit, Machine, Size, Stop};
+use common::{BASE, prepare, set_vector, until};
+use mcf5441x_emu::{
+    Access, Device, DeviceCx, DeviceId, Fault, InterruptController, Irq, IrqLines, Limit, Machine,
+    Size, Stop,
+};
 
 const FIFO: u32 = 0xFC00_0000;
 const MOVER: u32 = 0xFC01_0000;
@@ -641,4 +646,153 @@ fn a_master_is_serviced_after_every_write_to_sr_while_it_serves_the_lines() {
 #[test]
 fn a_master_that_serves_none_of_the_lines_is_not_serviced() {
     assert_eq!(services_across_sr_writes(false), 0);
+}
+
+/// Counts the calls to its [`Device::next_event`] in `asks`; its one event is far off.
+struct Asked {
+    asks: Rc<Cell<u32>>,
+}
+
+impl Device for Asked {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
+    fn next_event(&self) -> Option<u64> {
+        self.asks.set(self.asks.get() + 1);
+        Some(1 << 40)
+    }
+}
+
+/// The times an [`Asked`] timer is asked for its event in a run of `body` (then `end`), with the FIFO mapped.
+fn asks_in(body: &str) -> u32 {
+    let (mut m, l) = prepare(&format!("{body}\nend: nop"), &["end"]);
+    m.add_device(FIFO, 0x100, Box::new(Fifo::default()));
+    let asks = Rc::new(Cell::new(0));
+    m.add_timer(Box::new(Asked { asks: asks.clone() }));
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    asks.get()
+}
+
+#[test]
+fn writes_to_sr_that_let_nothing_in_do_not_ask_the_devices_for_events() {
+    let none = asks_in("");
+    let sr = "move.w #0x2700,%sr\n".repeat(10);
+    assert_eq!(
+        asks_in(&sr),
+        none,
+        "no device is asked again after a write to SR"
+    );
+    let reads = "tst.l 0xFC000008\n".repeat(10);
+    assert!(
+        asks_in(&reads) >= none + 10,
+        "but after every device access"
+    );
+}
+
+/// A controller with one source, 6 of controller 0, at level 5 and vector 70.
+struct OneSource;
+
+impl Device for OneSource {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
+}
+
+impl InterruptController for OneSource {
+    fn pending(&self, lines: &IrqLines, _: bool) -> Option<Irq> {
+        (lines.asserted(0) & 1 << 6 != 0).then_some(Irq {
+            level: 5,
+            vector: 70,
+        })
+    }
+    fn level7(&self, _: &IrqLines) -> bool {
+        false
+    }
+}
+
+/// A bus master serving every line: at its `raise_at`th service it asserts interrupt source 6 of controller 0, and
+/// at its `schedule_at`th it schedules an event `delay` ticks out, recording the ticks it is advanced at.
+#[derive(Default)]
+struct Acting {
+    services: u32,
+    raise_at: u32,
+    schedule_at: u32,
+    delay: u64,
+    at: Option<u64>,
+    advanced: Vec<u64>,
+}
+
+impl Device for Acting {
+    fn read(&mut self, _: u32, _: Size, _: &mut DeviceCx) -> u32 {
+        0
+    }
+    fn write(&mut self, _: u32, _: Size, _: u32, _: &mut DeviceCx) {}
+    fn service(&mut self, cx: &mut DeviceCx) {
+        self.services += 1;
+        if self.services == self.raise_at {
+            cx.irq.set(0, 6, true);
+        }
+        if self.services == self.schedule_at {
+            self.at = Some(cx.now + self.delay);
+        }
+    }
+    fn next_event(&self) -> Option<u64> {
+        self.at
+    }
+    fn advance(&mut self, now: u64, _: &mut DeviceCx) {
+        self.advanced.push(now);
+        self.at = None;
+    }
+}
+
+/// `src` in a machine with [`OneSource`] and the master `acting`, request line [`LINE`] asserted and the master's
+/// count of services started again; the handler of vector 70 is the label `handler`.
+fn with_acting(src: &str, labels: &[&str], acting: Acting) -> (Machine, Vec<u32>, DeviceId) {
+    let (mut m, l) = prepare(src, labels);
+    if let Some(i) = labels.iter().position(|&s| s == "handler") {
+        set_vector(&mut m, 70, l[i]);
+    }
+    m.add_interrupt_controller(0xFC04_8000, 0x4000, Box::new(OneSource));
+    let id = m.add_bus_master(MOVER, 0x100, Box::new(acting));
+    m.with_device::<Acting, _>(id, |_, cx| cx.dma.set(LINE, true));
+    m.device_mut::<Acting>(id).services = 0;
+    (m, l, id)
+}
+
+#[test]
+fn a_request_a_master_raises_after_a_write_to_sr_is_taken_before_the_next_instruction() {
+    // Services: the run's start, then one after each write to SR; the third raises a level-5 request above IPL 3.
+    let src = "move.w #0x2300,%sr\nmove.w #0x2300,%sr\nafter: nop\nend: nop\nhandler: nop";
+    let acting = Acting {
+        raise_at: 3,
+        ..Acting::default()
+    };
+    let (mut m, l, _) = with_acting(src, &["after", "end", "handler"], acting);
+    let r = m.run(until(l[2]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(
+        m.instructions(),
+        2,
+        "taken right after the second write to SR"
+    );
+    let stacked = m.mem.read(m.cpu.a[7] + 4, Size::Long).unwrap();
+    assert_eq!(stacked, l[0]);
+}
+
+#[test]
+fn an_event_a_master_schedules_after_a_write_to_sr_is_advanced_at_its_tick() {
+    // The second service follows the write to SR at tick 0, at tick 1: the event is at tick 4.
+    let src = format!("move.w #0x2700,%sr\n{}end: nop", "nop\n".repeat(6));
+    let acting = Acting {
+        schedule_at: 2,
+        delay: 3,
+        ..Acting::default()
+    };
+    let (mut m, l, id) = with_acting(&src, &["end"], acting);
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.device::<Acting>(id).advanced, [4]);
 }
