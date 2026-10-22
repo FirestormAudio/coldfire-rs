@@ -256,13 +256,13 @@ impl Space {
         Some((r.store, off))
     }
 
-    /// The pages holding the same bytes as some byte of `page`, `page` among them when it is RAM.
-    fn aliases(&self, page: u32) -> Vec<u32> {
+    /// Append to `pages` the pages holding the same bytes as some byte of `page`, `page` among them when it is
+    /// RAM.
+    fn aliases(&self, page: u32, pages: &mut Vec<u32>) {
         let (first, last) = (
             page << PAGE_SHIFT,
             page << PAGE_SHIFT | ((1 << PAGE_SHIFT) - 1),
         );
-        let mut pages = Vec::new();
         for r in self.ram.iter().filter(|r| r.overlaps(first, last)) {
             // The part of the page in `r`, as offsets in its store.
             let lo = r.at + (first.max(r.base) - r.base) as usize;
@@ -276,7 +276,6 @@ impl Space {
                 }
             }
         }
-        pages
     }
 
     /// Whether one RAM region covers `[addr, addr + len)`.
@@ -316,24 +315,25 @@ impl Space {
 
     /// RAM in pages `first..=last` was written: report the ones holding code in `written`, so that their blocks
     /// are dropped before the next instruction. With mirrors, a page holding code has its bit set at every address
-    /// of its bytes ([`Memory::mark_code`]), and all of them are reported.
+    /// of its bytes ([`Memory::mark_code`]), and a page reported takes with it every page holding code that shares
+    /// a byte with it, and so on: an alias page can hold bytes of several code pages, and once its bit is clear a
+    /// later write through it would reach none of them.
     #[cold]
     #[inline(never)]
     fn code_written(&mut self, first: u32, last: u32) {
+        let mut todo = Vec::new();
         for page in first..=last {
             if !self.has_code(page) {
                 continue;
             }
-            let mut pages = if self.mirrored {
-                self.aliases(page)
-            } else {
-                Vec::new()
-            };
-            pages.push(page);
-            for p in pages {
+            todo.push(page);
+            while let Some(p) = todo.pop() {
                 if self.has_code(p) {
                     self.code[(p >> 6) as usize] &= !(1 << (p & 63));
                     self.written.push(p);
+                    if self.mirrored {
+                        self.aliases(p, &mut todo);
+                    }
                 }
             }
         }
@@ -559,7 +559,9 @@ impl Memory {
         for page in first..=last {
             self.space.code[(page >> 6) as usize] |= 1 << (page & 63);
             if self.space.mirrored {
-                for p in self.space.aliases(page) {
+                let mut pages = Vec::new();
+                self.space.aliases(page, &mut pages);
+                for p in pages {
                     self.space.code[(p >> 6) as usize] |= 1 << (p & 63);
                 }
             }

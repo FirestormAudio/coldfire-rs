@@ -302,3 +302,49 @@ fn mirror_overlap_panics() {
     m.mem.map_mirror(MIRROR + 0x1000, 0x1000, 0x4020_0000);
     m.mem.map_mirror(0xFBFF_F000, 0x1000, 0x4010_0000);
 }
+
+/// `loop: addq.l #1,%d1; subq.l #1,%d2; bne.s loop; nop`.
+const LOOP: [u8; 8] = [0x52, 0x81, 0x53, 0x82, 0x66, 0xFA, 0x4E, 0x71];
+
+/// Run [`LOOP`] at `at` with D2 = 3; returns D1, 3 when the `addq` ran and 0 when a `nop` replaced it.
+fn run_loop(m: &mut mcf5441x_emu::Machine, at: u32) -> u32 {
+    use mcf5441x_emu::{Limit, Stop};
+    m.cpu.pc = at;
+    m.cpu.d[1] = 0;
+    m.cpu.d[2] = 3;
+    let r = m.run(Limit {
+        until_pc: Some(at + 6),
+        ..Limit::default()
+    });
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    m.cpu.d[1]
+}
+
+#[test]
+fn a_write_through_a_mirror_drops_code_that_shares_a_page_only_by_way_of_it() {
+    // One mirror page holding the halves of two RAM pages, each with a cached loop. A data write in the first RAM
+    // page, then a write over the second loop through the mirror: the second loop's blocks must go.
+    let mut m = mcf5441x_emu::Machine::new();
+    m.mem.map_ram(0x4010_0000, 0x2000);
+    m.mem.map_mirror(MIRROR, 0x1000, 0x4010_0800);
+    m.mem.load(0x4010_0800, &LOOP).unwrap();
+    m.mem.load(0x4010_1000, &LOOP).unwrap();
+    assert_eq!(run_loop(&mut m, 0x4010_0800), 3);
+    assert_eq!(run_loop(&mut m, 0x4010_1000), 3);
+    m.mem.write(0x4010_0C00, Size::Long, 0).unwrap();
+    m.mem.write(MIRROR + 0x800, Size::Word, 0x4e71).unwrap();
+    assert_eq!(run_loop(&mut m, 0x4010_1000), 0);
+
+    // Two small mirrors of two RAM pages, side by side in one page.
+    let mut m = mcf5441x_emu::Machine::new();
+    m.mem.map_ram(0x4010_0000, 0x2000);
+    m.mem.map_mirror(0x3000_0000, 0x100, 0x4010_0000);
+    m.mem.map_mirror(0x3000_0100, 0x100, 0x4010_1000);
+    m.mem.load(0x4010_0000, &LOOP).unwrap();
+    m.mem.load(0x4010_1000, &LOOP).unwrap();
+    assert_eq!(run_loop(&mut m, 0x4010_0000), 3);
+    assert_eq!(run_loop(&mut m, 0x4010_1000), 3);
+    m.mem.write(0x4010_0800, Size::Long, 0).unwrap();
+    m.mem.write(0x3000_0100, Size::Word, 0x4e71).unwrap();
+    assert_eq!(run_loop(&mut m, 0x4010_1000), 0);
+}
