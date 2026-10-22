@@ -177,7 +177,7 @@ fn isatty_for_stdio() {
         b"",
     );
     assert_eq!(r.run(), Outcome::Exit(0));
-    // guess: fds 0-2 are terminals and every other fd is EBADF, as a console host reports.
+    // fds 0-2 are terminals and every other fd is EBADF, as QEMU reports.
     assert_eq!(r.m.cpu.d[6], 1);
     assert_eq!(r.m.cpu.d[7], 0);
     assert_eq!(r.long(BLOCK + 4), 9, "EBADF");
