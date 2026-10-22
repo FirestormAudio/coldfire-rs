@@ -808,3 +808,50 @@ fn uart_tx_request_drops_inside_the_utb_write() {
     assert_eq!(uart(&m, id2).text(), "ab");
     assert_eq!(uart(&m, id).dropped(), 0);
 }
+
+fn connect(m: &mut Machine, id: DeviceId, on: bool) {
+    m.with_device::<Uart, _>(id, |u, cx| u.set_irq_connected(on, cx));
+}
+
+#[test]
+fn a_disconnected_uart_raises_no_interrupt_and_still_requests_dma() {
+    let (mut m, id) = board(true);
+    assert!(uart(&m, id).irq_connected(), "connected by default");
+    connect(&mut m, id, false);
+    w(&mut m, UCR, 0x05);
+    w(&mut m, UISR, 0x03); // UIMR: TXRDY and RXRDY
+    assert_eq!(r(&mut m, UISR), 0x01, "UISR shows TXRDY");
+    assert!(!source(&m, 1, SOURCE));
+    assert_eq!(m.dma_lines().asserted(), 1 << TX_CH, "the transmit request");
+    receive(&mut m, id, &[(0, Some(0x5A))]);
+    let mut out = Vec::new();
+    assert!(uart(&m, id).wake_sources(&mut out));
+    assert_eq!(out, [], "nothing can raise the source");
+    idle(&mut m, 100);
+    assert_eq!(r(&mut m, UISR), 0x03);
+    assert!(!source(&m, 1, SOURCE));
+    assert_eq!(
+        m.dma_lines().asserted(),
+        1 << TX_CH | 1 << CH,
+        "the receive request"
+    );
+    assert_eq!(r(&mut m, URB), 0x5A);
+}
+
+#[test]
+fn reconnecting_follows_the_current_state() {
+    let (mut m, id) = board(false);
+    w(&mut m, UCR, 0x04);
+    w(&mut m, UISR, 0x01); // UIMR: TXRDY
+    assert!(source(&m, 1, SOURCE));
+    connect(&mut m, id, false);
+    assert!(!source(&m, 1, SOURCE), "lowered at once");
+    connect(&mut m, id, true);
+    assert!(source(&m, 1, SOURCE), "TXRDY is up: raised at once");
+    connect(&mut m, id, false);
+    w(&mut m, URB, 0x41); // TXRDY clears until the character moves
+    connect(&mut m, id, true);
+    assert!(!source(&m, 1, SOURCE), "TXRDY is down");
+    idle(&mut m, 3);
+    assert!(source(&m, 1, SOURCE));
+}

@@ -3,7 +3,7 @@
 mod common;
 
 use common::{BASE, prepare, until};
-use mcf5441x_emu::{Access, Device, DeviceCx, Limit, Size, Stop};
+use mcf5441x_emu::{Access, AccessKind, Device, DeviceCx, Limit, Size, Stop};
 
 /// A register block: reads return `regs[offset / 4]` (truncated to the access), writes are recorded.
 #[derive(Default)]
@@ -220,4 +220,100 @@ fn overlapping_devices_panic() {
     let (mut m, _) = prepare("nop", &[]);
     m.add_device(0xFC00_0000, 0x1000, Box::new(Stub::default()));
     m.add_device(0xFC00_0800, 0x1000, Box::new(Stub::default()));
+}
+
+/// A run to `end` with an access breakpoint.
+fn watching(end: u32, base: u32, len: u32, kind: AccessKind) -> Limit {
+    Limit {
+        until_pc: Some(end),
+        until_access: Some((base, len, kind)),
+        ..Limit::default()
+    }
+}
+
+#[test]
+fn until_access_stops_before_the_first_write_to_a_device_range() {
+    // A write outside the range and a read inside it (the watch is on writes) go through; the long write that
+    // overlaps the range's first bytes is not made, and the run stops on it with the registers as before it.
+    let src = "move.l #0x55,%d0\nmove.l %d0,0xFC000000\nmove.l 0xFC000014,%d1\n\
+               at: move.l %d0,-(%a0)\nmove.l %d1,0xFC000020\nend: nop";
+    let (mut m, l) = prepare(src, &["at", "end"]);
+    m.cpu.a[0] = 0xFC00_0014;
+    let mut stub = Stub::default();
+    stub.regs[5] = 0x1234;
+    let id = m.add_device(0xFC00_0000, 0x1000, Box::new(stub));
+    let limit = watching(l[1], 0xFC00_0012, 0x10, AccessKind::Write);
+    let r = m.run(limit);
+    assert_eq!(
+        (r.kind, r.pc, m.cpu.pc),
+        (Stop::UntilAccess, l[0], l[0]),
+        "{r:?}"
+    );
+    assert!(r.detail.contains("0xfc000010"), "{r:?}");
+    assert_eq!(m.cpu.a[0], 0xFC00_0014, "the predecrement is undone");
+    assert_eq!(m.cpu.d[1], 0x1234);
+    let stub = m.device::<Stub>(id);
+    assert_eq!(stub.writes, [(0, Size::Long, 0x55)]);
+    assert_eq!(stub.reads, 1);
+    // The same limit stops there again at once; without it the write is made.
+    let r = m.run(limit);
+    assert_eq!((r.kind, r.pc), (Stop::UntilAccess, l[0]), "{r:?}");
+    assert_eq!(m.device::<Stub>(id).writes.len(), 1);
+    let r = m.run(until(l[1]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(
+        m.device::<Stub>(id).writes,
+        [
+            (0, Size::Long, 0x55),
+            (0x10, Size::Long, 0x55),
+            (0x20, Size::Long, 0x1234)
+        ]
+    );
+}
+
+#[test]
+fn until_access_on_ram() {
+    // Watched RAM is RAM to every access the watch lets through: the bytes beside it, a read of it while writes
+    // are watched, and the host. Cached and uncached runs stop alike.
+    let w = common::MEM + 0x1000;
+    let src = "move.l #0x77,%d0\nmove.l %d0,-4(%a1)\nmove.l (%a1),%d1\nlea 4(%a1),%a0\n\
+               at: move.l %d0,-(%a0)\nend: nop";
+    for cached in [true, false] {
+        let (mut m, l) = prepare(src, &["at", "end"]);
+        m.cpu.a[1] = w;
+        m.mem.load(w, &[0xA5; 4]).unwrap();
+        let limit = watching(l[1], w, 4, AccessKind::Write);
+        let r = if cached {
+            m.run(limit)
+        } else {
+            m.run_uncached(limit)
+        };
+        assert_eq!((r.kind, r.pc), (Stop::UntilAccess, l[0]), "{r:?}");
+        assert!(r.detail.contains(&format!("{w:#010x}")), "{r:?}");
+        assert_eq!(m.cpu.a[0], w + 4, "the predecrement is undone");
+        assert_eq!(m.cpu.d[1], 0xA5A5_A5A5, "the read went through");
+        assert_eq!(
+            m.mem.peek(w - 4, 8).unwrap(),
+            [0, 0, 0, 0x77, 0xA5, 0xA5, 0xA5, 0xA5]
+        );
+        // The host's accesses are not watched.
+        assert_eq!(m.access(w, Size::Long, None), Ok(0xA5A5_A5A5));
+        // A read watch lets the write through.
+        let r = m.run(watching(l[1], w, 4, AccessKind::Read));
+        assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+        assert_eq!(m.mem.peek(w, 4).unwrap(), [0, 0, 0, 0x77]);
+    }
+    // A watch on the last byte of a read stops it; one on any access stops a byte write.
+    let (mut m, l) = prepare(
+        "at: move.l (%a1),%d1\nmove.b %d1,7(%a1)\nend: nop",
+        &["at", "end"],
+    );
+    m.cpu.a[1] = w;
+    let r = m.run(watching(l[1], w + 3, 1, AccessKind::Read));
+    assert_eq!((r.kind, r.pc), (Stop::UntilAccess, l[0]), "{r:?}");
+    let r = m.run(watching(l[1], w + 7, 1, AccessKind::Any));
+    assert_eq!((r.kind, r.pc), (Stop::UntilAccess, l[0] + 2), "{r:?}");
+    // An empty range watches nothing.
+    let r = m.run(watching(l[1], w + 7, 0, AccessKind::Any));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
 }

@@ -267,3 +267,21 @@ fn take_log_and_take_writes_drain_and_record_off_changes_only_the_logs() {
     cmd(&mut nor, &[0x06]);
     assert_eq!(nor.log().len(), 1);
 }
+
+#[test]
+fn a_latched_nor_error_reads_until_clsr() {
+    // E_ERR, P_ERR and WIP as given (WEL and the rest of the byte are not latched), held across status reads and
+    // commands until CLSR.
+    let mut nor = nor256();
+    nor.set_status(0xFF & !0x20);
+    assert!((0..5).all(|_| rdsr(&mut nor) == 0x41));
+    cmd(&mut nor, &[0x06]);
+    assert_eq!(rdsr(&mut nor), 0x43);
+    cmd(&mut nor, &[0x04]);
+    cmd(&mut nor, &[0x30]);
+    assert_eq!(rdsr(&mut nor), 0x00);
+    nor.set_status(0x20);
+    assert_eq!(rdsr(&mut nor), 0x20);
+    cmd(&mut nor, &[0x30]);
+    assert_eq!(rdsr(&mut nor), 0x00);
+}

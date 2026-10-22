@@ -169,15 +169,15 @@ fn schedule(
 /// (UMR1\[ERR\]) it holds until RESET ERROR STATUS (RM 41.4.2.3).
 ///
 /// Requests: the interrupt (source [`UartConfig::source`] of controller [`UartConfig::controller`]) is
-/// `UIMR[0] & TXRDY | UIMR[1] & RXRDY`; the receive DMA request (line [`UartConfig::rx_dma`]) is RXRDY (RM
-/// 41.5.1.2), so the eDMA's read of URB empties the holding register and lowers it. The transmit DMA request
-/// (line [`UartConfig::tx_dma`]) is UISR\[TXRDY\] (RM 41.5.1.2, RM Table 41-15): the transmitter is enabled and
-/// its holding register is free. UIMR does not mask it (UISR gives true status whatever UIMR holds, RM 41.3.10)
-/// and the UART has no DMA enable of its own: the eDMA's ERQ bit for the channel is the only gate (RM 41.5.1.1
-/// step 4, RM Table 19-6). A UTB write fills the holding register and clears TXRDY (RM 41.3.7), so the request
-/// drops inside that write, before the access returns: an eDMA serving it runs one minor loop per TXRDY and
-/// serves again when the character moves to the shift register (guess: the chip's request-to-acknowledge timing
-/// is not measured; a request left up across the write would put more characters into UTB than it holds).
+/// `UIMR[0] & TXRDY | UIMR[1] & RXRDY` while it is connected ([`Uart::set_irq_connected`]); the receive DMA request
+/// (line [`UartConfig::rx_dma`]) is RXRDY (RM 41.5.1.2), so the eDMA's read of URB empties the holding register and
+/// lowers it. The transmit DMA request (line [`UartConfig::tx_dma`]) is UISR\[TXRDY\] (RM 41.5.1.2, RM Table 41-15):
+/// the transmitter is enabled and its holding register is free. UIMR does not mask it (UISR gives true status whatever
+/// UIMR holds, RM 41.3.10) and the UART has no DMA enable of its own: the eDMA's ERQ bit for the channel is the only
+/// gate (RM 41.5.1.1 step 4, RM Table 19-6). A UTB write fills the holding register and clears TXRDY (RM 41.3.7), so
+/// the request drops inside that write, before the access returns: an eDMA serving it runs one minor loop per TXRDY and
+/// serves again when the character moves to the shift register (guess: the chip's request-to-acknowledge timing is not
+/// measured; a request left up across the write would put more characters into UTB than it holds).
 pub struct Uart {
     config: UartConfig,
     umr: [u8; 2],
@@ -205,6 +205,8 @@ pub struct Uart {
     peer: Option<Box<dyn SerialPeer>>,
     lost: u64,
     dropped: u64,
+    /// The interrupt request reaches the controller ([`Uart::set_irq_connected`]).
+    irq_connected: bool,
 }
 
 impl fmt::Debug for Uart {
@@ -244,7 +246,22 @@ impl Uart {
             peer: None,
             lost: 0,
             dropped: 0,
+            irq_connected: true,
         }
+    }
+
+    /// Connect the interrupt request to its controller source (`true`, the default) or cut it (`false`), as a
+    /// board with the line not wired would: while cut the UART never asserts the source, and the line is lowered
+    /// at once. Registers, UISR and the DMA requests are unaffected. Reconnecting drives the line from the current
+    /// state at once. Call it through [`Machine::with_device`](crate::Machine::with_device).
+    pub fn set_irq_connected(&mut self, on: bool, cx: &mut DeviceCx) {
+        self.irq_connected = on;
+        self.drive(cx);
+    }
+
+    /// Whether the interrupt request is connected ([`Uart::set_irq_connected`]).
+    pub fn irq_connected(&self) -> bool {
+        self.irq_connected
     }
 
     /// Characters on the receive line: (tick of the start bit, character), `None` for a character with a framing
@@ -367,7 +384,7 @@ impl Uart {
     }
 
     fn drive(&self, cx: &mut DeviceCx) {
-        let on = self.uisr(cx.now) & self.uimr & 3 != 0;
+        let on = self.irq_connected && self.uisr(cx.now) & self.uimr & 3 != 0;
         cx.irq.set(self.config.controller, self.config.source, on);
         if let Some(ch) = self.config.rx_dma {
             cx.dma.set(ch, self.rbr.is_some());
@@ -579,7 +596,7 @@ impl Device for Uart {
             .is_some_and(|p| p.next_event().is_some() || self.holding.is_some());
         let rx = self.uimr & 2 != 0 && (!self.rx_pending.is_empty() || from_peer);
         let tx = self.uimr & 1 != 0 && self.holding.is_some();
-        if rx || tx {
+        if self.irq_connected && (rx || tx) {
             out.push((self.config.controller, self.config.source));
         }
         true

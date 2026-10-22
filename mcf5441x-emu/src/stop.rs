@@ -5,6 +5,8 @@
 pub enum Stop {
     /// The program counter reached a requested address.
     UntilPc,
+    /// An instruction was about to access the range [`Limit::until_access`] watches.
+    UntilAccess,
     /// The instruction limit was reached.
     InstructionLimit,
     /// The time limit was reached.
@@ -35,6 +37,26 @@ pub struct StopReason {
     pub detail: String,
 }
 
+/// Which accesses [`Limit::until_access`] stops at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessKind {
+    Read,
+    Write,
+    /// A read or a write.
+    Any,
+}
+
+impl AccessKind {
+    /// Whether an access that writes when `write` is of this kind.
+    pub fn matches(self, write: bool) -> bool {
+        match self {
+            AccessKind::Read => !write,
+            AccessKind::Write => write,
+            AccessKind::Any => true,
+        }
+    }
+}
+
 /// Bounds for one [`Machine::run`](crate::Machine::run); the default has none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Limit {
@@ -42,4 +64,13 @@ pub struct Limit {
     pub until_pc: Option<u32>,
     /// Stop after this many instructions of this run.
     pub max_instructions: Option<u64>,
+    /// An access breakpoint: `(base, len, kind)`. Stop with [`Stop::UntilAccess`] before the first access of
+    /// `kind` by the core (an instruction's operand access, or an exception's stacking and vector fetch) that
+    /// touches a byte of `base..base + len`, RAM or device. Nothing of it is performed: the instruction does not
+    /// complete, PC stays on it and the registers are as before it, as for a refused device access (an access the
+    /// same instruction made before it, such as the read of a read-modify-write when `kind` is
+    /// [`AccessKind::Write`], or an earlier register of a MOVEM, stands). The detail names the access and its
+    /// address. Instruction fetches, bus masters and the host's accesses are not watched. `len` 0 watches
+    /// nothing; a range past the end of the address space stops there. `None` (the default) costs nothing.
+    pub until_access: Option<(u32, u32, AccessKind)>,
 }

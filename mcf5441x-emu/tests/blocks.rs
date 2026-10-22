@@ -219,6 +219,7 @@ fn same_counts_with_and_without_cache() {
         let r = sliced.run(Limit {
             until_pc: Some(end),
             max_instructions: Some(7),
+            ..Limit::default()
         });
         if r.kind == Stop::UntilPc {
             break;

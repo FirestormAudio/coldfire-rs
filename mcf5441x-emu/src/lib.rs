@@ -20,4 +20,4 @@ pub use device::{Access, Device, DeviceCx, DeviceId};
 pub use irq::{InterruptController, Irq, IrqLines};
 pub use machine::Machine;
 pub use mem::{Fault, Memory, Ram, Size};
-pub use stop::{Limit, Stop, StopReason};
+pub use stop::{AccessKind, Limit, Stop, StopReason};

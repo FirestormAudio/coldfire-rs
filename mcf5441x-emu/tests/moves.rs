@@ -456,6 +456,7 @@ fn until_pc_and_instruction_limit() {
     let r = m.run(Limit {
         until_pc: Some(end),
         max_instructions: Some(10),
+        ..Limit::default()
     });
     assert_eq!((r.kind, r.pc), (Stop::UntilPc, end), "{r:?}");
     assert_eq!(m.instructions(), 5);

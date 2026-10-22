@@ -4,7 +4,7 @@
 mod common;
 
 use common::{prepare, until};
-use mcf5441x_emu::Stop;
+use mcf5441x_emu::{AccessKind, Limit, Stop};
 
 /// Where the buffer is.
 const BUF: u32 = 0x4030_0000;
@@ -74,4 +74,41 @@ fn core_runs_at_least_150_mips() {
         m.instructions()
     );
     assert!(mips >= 150.0, "{mips:.1} MIPS");
+}
+
+/// MIPS of the CRC run under `limit` (its `until_pc` set to the end).
+fn crc_mips(limit: impl FnOnce(u32) -> Limit) -> f64 {
+    let (mut m, l) = prepare(CRC, &["end"]);
+    let buf = buffer();
+    m.mem.load(BUF, &buf).unwrap();
+    let t = std::time::Instant::now();
+    let r = m.run(limit(l[0]));
+    let secs = t.elapsed().as_secs_f64();
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(m.cpu.d[0], crc32_reference(&buf));
+    m.instructions() as f64 / secs / 1e6
+}
+
+/// Without an access breakpoint (the default) RAM accesses take the same path as before there was one; a
+/// breakpoint on a device range leaves RAM's path as it is too. The comparison with a build from before the
+/// breakpoint is made by running this and [`core_runs_at_least_150_mips`] on both, back to back.
+#[test]
+#[ignore = "a release-build benchmark"]
+fn until_access_none_costs_nothing() {
+    let mut none = Vec::new();
+    let mut device = Vec::new();
+    for _ in 0..3 {
+        none.push(crc_mips(until));
+        device.push(crc_mips(|end| Limit {
+            until_access: Some((0xFC00_0000, 0x1000, AccessKind::Any)),
+            ..until(end)
+        }));
+    }
+    let best = |v: &[f64]| v.iter().copied().fold(0.0, f64::max);
+    let (none, device) = (best(&none), best(&device));
+    println!(
+        "CRC-32, best of 3: no breakpoint {none:.1} MIPS, a device-range breakpoint {device:.1} MIPS"
+    );
+    assert!(none >= 150.0, "{none:.1} MIPS");
+    assert!(device >= 150.0, "{device:.1} MIPS");
 }

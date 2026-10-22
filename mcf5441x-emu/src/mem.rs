@@ -5,6 +5,11 @@
 //! [`Bus`](crate::bus::Bus)); every such access also ends the current instruction's run of uninterrupted
 //! execution, so the machine looks at interrupts and events before the next instruction.
 //!
+//! An access breakpoint ([`Limit::until_access`](crate::Limit::until_access)) takes the bytes it watches out of the
+//! regions the core's operand accesses look in, so that an access to them misses RAM and reaches the path RAM does not
+//! cover, where the breakpoint is checked; every other path finds them as RAM. Without one, the core looks in the
+//! regions as mapped.
+//!
 //! A mirror ([`Memory::map_mirror`]) is a second address range for RAM already mapped: its lookup entry points at
 //! the same backing store, so every path that finds RAM (core accesses, instruction fetch, bus masters and the host)
 //! sees the same bytes through either range, at no cost to the lookup.
@@ -19,7 +24,7 @@ use crate::bus::DmaLines;
 use crate::device::{Access, Device, DeviceCx, DeviceId, Refusal, halt_on};
 use crate::irq::{InterruptController, Irq, IrqLines};
 use crate::sched::{Devices, Kind};
-use crate::stop::{Stop, StopReason};
+use crate::stop::{AccessKind, Stop, StopReason};
 
 /// Access width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +95,46 @@ impl Ram {
     }
 }
 
+/// An access breakpoint: the bytes `first..=last` and the accesses it stops at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Watch {
+    first: u32,
+    last: u32,
+    kind: AccessKind,
+}
+
+impl Watch {
+    /// The watch for `(base, len, kind)`; `None` when `len` is 0.
+    fn new((base, len, kind): (u32, u32, AccessKind)) -> Option<Watch> {
+        let last = (base as u64 + len.checked_sub(1)? as u64).min(u32::MAX as u64) as u32;
+        Some(Watch {
+            first: base,
+            last,
+            kind,
+        })
+    }
+
+    /// Whether an access of `size` at `addr` (a write when `write`) stops here.
+    fn hits(&self, addr: u32, size: Size, write: bool) -> bool {
+        let end = addr as u64 + (size.bytes() - 1) as u64;
+        self.kind.matches(write) && addr <= self.last && end >= self.first as u64
+    }
+}
+
+/// The region of `ram` holding `[addr, addr + len)`, trying `last` first and caching the one found there: its
+/// backing store and the offset in it.
+#[inline]
+fn lookup(ram: &[Ram], last: &mut Ram, addr: u32, len: u32) -> Option<(usize, usize)> {
+    if let Some(off) = last.span(addr, len) {
+        return Some((last.store, off));
+    }
+    let i = ram.partition_point(|r| r.base <= addr).checked_sub(1)?;
+    let r = ram[i];
+    let off = r.span(addr, len)?;
+    *last = r;
+    Some((r.store, off))
+}
+
 /// A region no access of a byte or more lies in.
 const NO_RAM: Ram = Ram {
     base: 0,
@@ -118,6 +163,14 @@ pub(crate) struct Space {
     /// A copy of the region that served the last access, so that the next access to it needs no other load to
     /// find its store.
     last: Ram,
+    /// The regions the core's operand accesses look in: `ram` without the bytes `watch` covers, so that an
+    /// access to them takes the path RAM does not cover, where the watch is checked. The same as `ram` without a
+    /// watch.
+    core: Vec<Ram>,
+    /// As `last`, for `core`.
+    core_last: Ram,
+    /// The access breakpoint of the run ([`Limit::until_access`](crate::Limit::until_access)).
+    watch: Option<Watch>,
     pub(crate) devices: Devices,
     /// One bit per 4 KiB page of the address space: the page holds bytes of a decoded block.
     code: Box<[u64]>,
@@ -160,6 +213,9 @@ impl Default for Memory {
                 stores: Vec::new(),
                 mirrored: false,
                 last: NO_RAM,
+                core: Vec::new(),
+                core_last: NO_RAM,
+                watch: None,
                 devices: Devices::default(),
                 code: vec![0; 1 << (32 - PAGE_SHIFT - 6)].into_boxed_slice(),
                 written: Vec::new(),
@@ -243,17 +299,40 @@ fn window(what: &str, base: u32, size: u32) -> (u32, u32) {
 impl Space {
     /// Find the region holding `[addr, addr + len)`; returns its backing store and the offset in it.
     fn find(&mut self, addr: u32, len: u32) -> Option<(usize, usize)> {
-        if let Some(off) = self.last.span(addr, len) {
-            return Some((self.last.store, off));
+        lookup(&self.ram, &mut self.last, addr, len)
+    }
+
+    /// As [`Space::find`], for the core's operand accesses: the bytes the watch covers are not found.
+    fn find_core(&mut self, addr: u32, len: u32) -> Option<(usize, usize)> {
+        lookup(&self.core, &mut self.core_last, addr, len)
+    }
+
+    /// Set the core's regions: the RAM regions less the watched bytes.
+    fn carve(&mut self) {
+        self.core_last = NO_RAM;
+        self.core.clear();
+        for &r in &self.ram {
+            let Some(w) = self.watch.filter(|w| r.overlaps(w.first, w.last)) else {
+                self.core.push(r);
+                continue;
+            };
+            let end = r.base as u64 + r.len as u64;
+            if w.first > r.base {
+                self.core.push(Ram {
+                    len: w.first - r.base,
+                    ..r
+                });
+            }
+            if (w.last as u64) + 1 < end {
+                let base = w.last + 1;
+                self.core.push(Ram {
+                    base,
+                    len: (end - base as u64) as u32,
+                    store: r.store,
+                    at: r.at + (base - r.base) as usize,
+                });
+            }
         }
-        let i = self
-            .ram
-            .partition_point(|r| r.base <= addr)
-            .checked_sub(1)?;
-        let r = self.ram[i];
-        let off = r.span(addr, len)?;
-        self.last = r;
-        Some((r.store, off))
     }
 
     /// Append to `pages` the pages holding the same bytes as some byte of `page`, `page` among them when it is
@@ -296,15 +375,29 @@ impl Space {
     /// decoded code (reported in `written`).
     #[inline(always)]
     pub(crate) fn ram_write(&mut self, addr: u32, size: Size, value: u32) -> Option<bool> {
+        let (i, off) = self.find(addr, size.bytes())?;
+        Some(self.store_write(i, off, addr, size, value))
+    }
+
+    /// As [`Space::ram_write`], for the core's operand accesses ([`Space::find_core`]).
+    #[inline(always)]
+    fn core_write(&mut self, addr: u32, size: Size, value: u32) -> Option<bool> {
+        let (i, off) = self.find_core(addr, size.bytes())?;
+        Some(self.store_write(i, off, addr, size, value))
+    }
+
+    /// Write `value` at offset `off` of store `i`, which holds `addr`; whether it wrote into a page holding
+    /// decoded code (reported in `written`).
+    #[inline(always)]
+    fn store_write(&mut self, i: usize, off: usize, addr: u32, size: Size, value: u32) -> bool {
         let n = size.bytes() as usize;
-        let (i, off) = self.find(addr, n as u32)?;
         self.stores[i][off..off + n].copy_from_slice(&value.to_be_bytes()[4 - n..]);
         let (first, last) = (addr >> PAGE_SHIFT, (addr + (n as u32 - 1)) >> PAGE_SHIFT);
         let code = self.has_code(first) || self.has_code(last);
         if code {
             self.code_written(first, last);
         }
-        Some(code)
+        code
     }
 
     /// Whether `page` holds bytes of a decoded block.
@@ -526,13 +619,23 @@ impl Memory {
         };
         space.ram.insert(i, r);
         space.last = NO_RAM;
+        space.carve();
+    }
+
+    /// Set the access breakpoint of the core's accesses ([`Limit::until_access`](crate::Limit::until_access)).
+    pub(crate) fn set_watch(&mut self, watch: Option<(u32, u32, AccessKind)>) {
+        let watch = watch.and_then(Watch::new);
+        if watch != self.space.watch {
+            self.space.watch = watch;
+            self.space.carve();
+        }
     }
 
     /// Read a big-endian value, zero-extended.
     #[inline]
     pub fn read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
         let n = size.bytes();
-        let Some((i, off)) = self.space.find(addr, n) else {
+        let Some((i, off)) = self.space.find_core(addr, n) else {
             return self.device_read(addr, size);
         };
         let b = &self.space.stores[i][off..off + n as usize];
@@ -542,7 +645,7 @@ impl Memory {
     /// Write the low bytes of `value`, big-endian.
     #[inline]
     pub fn write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
-        match self.space.ram_write(addr, size, value) {
+        match self.space.core_write(addr, size, value) {
             None => self.device_write(addr, size, value),
             Some(code) => {
                 if code {
@@ -601,6 +704,15 @@ impl Memory {
     #[cold]
     #[inline(never)]
     fn device_read(&mut self, addr: u32, size: Size) -> Result<u32, Fault> {
+        if let Some(w) = self.space.watch {
+            if w.hits(addr, size, false) {
+                return Err(self.watched(addr, size, None));
+            }
+            // RAM next to the watched bytes, or in them for an access the watch does not stop.
+            if let Some(v) = self.space.ram_read(addr, size) {
+                return Ok(v);
+            }
+        }
         self.device_op(addr, size, None, true)
     }
 
@@ -608,8 +720,30 @@ impl Memory {
     #[cold]
     #[inline(never)]
     fn device_write(&mut self, addr: u32, size: Size, value: u32) -> Result<(), Fault> {
+        if let Some(w) = self.space.watch {
+            if w.hits(addr, size, true) {
+                return Err(self.watched(addr, size, Some(value)));
+            }
+            if let Some(code) = self.space.ram_write(addr, size, value) {
+                if code {
+                    self.horizon = 0;
+                }
+                return Ok(());
+            }
+        }
         self.polls.clear();
         self.device_op(addr, size, Some(value), false).map(|_| ())
+    }
+
+    /// The core's access of `size` at `addr` hit the watch: it is not made, and the run stops before the
+    /// instruction (or exception) making it.
+    #[cold]
+    fn watched(&mut self, addr: u32, size: Size, write: Option<u32>) -> Fault {
+        self.refused = Some(match write {
+            Some(v) => format!("{size:?} write of {:#x} at {addr:#010x}", truncate(v, size)),
+            None => format!("{size:?} read at {addr:#010x}"),
+        });
+        Fault::Device(Stop::UntilAccess)
     }
 
     /// An operand access to the devices: one access when it is aligned to its size, else the aligned pieces of

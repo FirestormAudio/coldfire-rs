@@ -162,6 +162,7 @@ impl Rig {
         self.m.run(Limit {
             until_pc: None,
             max_instructions: Some(50_000_000),
+            ..Limit::default()
         })
     }
 }

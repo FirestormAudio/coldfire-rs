@@ -87,7 +87,8 @@ impl Default for NorFaults {
 /// command, whether it acted, failed or was ignored (guess: an S25FL-S keeps WEL after a failed program or erase
 /// until CLSR or WRDI; unchecked on a part). A program ANDs its bytes into the page, wrapping within it; an
 /// erase sets its sector to 0xFF. Either into a protected sector (its DYB 0x00 or its PPB set) or a program into a
-/// page set to fail ([`NorFaults`]) changes nothing and sets E_ERR or P_ERR with WIP, which stay until CLSR.
+/// page set to fail ([`NorFaults`]) changes nothing and sets E_ERR or P_ERR with WIP, which stay until CLSR
+/// ([`SpiNor::set_status`] latches them from outside).
 /// After a successful program or erase, WIP reads set for [`NorFaults::busy_polls`] status reads (guess: a real
 /// part times them; the count keeps the older model's timing, which code that polls RDSR cannot tell apart).
 ///
@@ -206,6 +207,14 @@ impl SpiNor {
     /// Whether commands and writes are logged (default on). Off changes only the logs, never the part.
     pub fn record(&mut self, on: bool) {
         self.record = on;
+    }
+
+    /// Latch the E_ERR, P_ERR and WIP bits of status register 1 as `sr` gives them, as a failed program or erase
+    /// before the run would have left them: they read set until CLSR. The other bits of `sr` are ignored (WEL is
+    /// WREN's and WRDI's). Status reads that see WIP after a successful program or erase
+    /// ([`NorFaults::busy_polls`]) are not changed.
+    pub fn set_status(&mut self, sr: u8) {
+        self.status = sr & (E_ERR | P_ERR | WIP);
     }
 
     /// The injected faults and the WIP timing.

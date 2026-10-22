@@ -236,7 +236,8 @@ impl Machine {
 
     /// Execute until a limit is reached or something stops the core. `until_pc` is checked before each
     /// instruction, after any interrupt due there is taken (so a run that starts there with nothing to service
-    /// stops at once); `max_instructions` counts this run's instructions.
+    /// stops at once); `max_instructions` counts this run's instructions. `until_access` stops before the access
+    /// it watches, as a refused access does (below), so a run started again with the same limit stops at once.
     ///
     /// An instruction that faults or stops does not complete: PC stays on it, the registers are as they were before
     /// it (RM 3.3.4.16) and it is not counted. An exception the [`ExceptionPolicy`] stops on ends the run the same
@@ -343,6 +344,7 @@ impl Machine {
         self.mem.reset_polls();
         self.mem.refused = None;
         self.mem.horizon = 0;
+        self.mem.set_watch(limit.until_access);
         limit
             .max_instructions
             .map_or(u64::MAX, |n| self.instructions.saturating_add(n))

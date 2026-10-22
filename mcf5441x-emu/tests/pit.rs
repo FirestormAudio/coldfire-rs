@@ -223,6 +223,7 @@ fn interrupt_pending_at_stop_is_taken_once() {
     let r = m.run(Limit {
         until_pc: Some(l[0]),
         max_instructions: Some(200_000),
+        ..Limit::default()
     });
     assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
     assert_eq!(m.cpu.a[7], STACK, "no leaked exception frame");
@@ -251,6 +252,7 @@ fn stop_with_only_masked_timer_halts() {
     let r = m.run(Limit {
         until_pc: Some(l[0]),
         max_instructions: Some(10_000),
+        ..Limit::default()
     });
     assert_eq!(r.kind, Stop::HaltedForever, "{r:?}");
 }

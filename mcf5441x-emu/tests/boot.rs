@@ -142,6 +142,7 @@ fn run_to(m: &mut Machine, pc: u32) -> StopReason {
     m.run(Limit {
         until_pc: Some(pc),
         max_instructions: Some(LIMIT),
+        ..Limit::default()
     })
 }
 

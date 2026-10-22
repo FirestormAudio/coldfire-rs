@@ -71,10 +71,13 @@ the chip's peripherals ([Peripherals](#peripherals)) and the board's own:
 - `m.device::<T>(id)` and `m.device_mut::<T>(id)` give typed access to a device after the fact.
 
 `Machine::run(Limit)` returns a [`StopReason`] with a [`Stop`] kind, the program counter and a detail string.
-A [`Limit`] bounds a run by `until_pc` and `max_instructions`; `set_time_limit` bounds it by the clock. Stops include
-`UntilPc`, `InstructionLimit`, `TimeLimit`, `HaltedForever` (STOP with nothing that can wake the core), `Illegal`,
-`Unmapped`, `Poll`, `Unmodelled`, `Exception(vector)` and `Halt(reason)`. A faulting instruction does not complete: PC
-stays on it, and a later run can resume.
+A [`Limit`] bounds a run by `until_pc` and `max_instructions`; `set_time_limit` bounds it by the clock. `until_access`
+is an access breakpoint: `(base, len, AccessKind::Read | Write | Any)` stops the run before the first operand access
+of the core (or stacking by an exception) that touches the range, RAM or device, leaving the instruction as a faulting
+one is; without it RAM accesses cost what they did. Stops include `UntilPc`, `UntilAccess`, `InstructionLimit`,
+`TimeLimit`, `HaltedForever` (STOP with nothing that can wake the core), `Illegal`, `Unmapped`, `Poll`, `Unmodelled`,
+`Exception(vector)` and `Halt(reason)`. A faulting instruction does not complete: PC stays on it, and a later run can
+resume.
 
 For debugging a board model: `m.mem.trace(true)` records device accesses (`take_trace`), a poll detector stops a loop
 that reads one device register over and over with no write in between (`set_poll_limit`), and `m.profile(true)` counts
@@ -215,14 +218,17 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   into UTB per TXRDY (guess: the chip's request timing is not measured). A [`SerialPeer`](soc::SerialPeer) attached
   with `Uart::attach` stands for whatever is on the far end of the lines: it is called with each character as it
   leaves the shift register and at its own events, and sends characters back (or ends the run) through a
-  [`PeerCx`](soc::PeerCx); `Uart::peer` and `peer_mut` give it back by type.
+  [`PeerCx`](soc::PeerCx); `Uart::peer` and `peer_mut` give it back by type. `Uart::set_irq_connected(false)`
+  (through `with_device`) cuts the interrupt request, as on a board that leaves it unwired; the DMA requests stay.
 - **SSI0-1** (RM ch. 35): I2S master or network mode with transmit and receive FIFO 0, one frame per frame period,
   the watermark DMA requests; 24-bit words send bits 23:0 of a FIFO word (measured on an MCF54415); an underrun sends
   silence and empties the FIFO (where the RM re-transmits the previous data). The host supplies the received samples
   and reads what was sent.
 - **DSPI0-3** (RM ch. 40): master mode, 8- and 16-bit frames through any of CTAR0-7 (PUSHR CTAS), the FIFOs, EOQ
   and the transfer counter; the TFFF (TX FIFO fill) and RFDF (RX FIFO drain) DMA requests (RSER RE with DIRS);
-  frames take no time and are logged with their CTAS. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select.
+  frames take no time and are logged with their CTAS. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select;
+  `SpiNor::faults` injects program failures, stuck bits, protection and WIP timing, and `SpiNor::set_status` latches
+  E_ERR, P_ERR and WIP until CLSR.
 - **eSDHC** (RM ch. 25): commands, responses and block reads through DATPORT, drained by eDMA channel 59, with an
   [`Emmc`](parts::Emmc) (read-only) behind it; the reset values and the RSTA/RSTD behaviour measured on an MCF54415.
 - **USB OTG** (RM ch. 24): device mode with dQHs and dTDs in memory, endpoints 0-3, and host primitives (setup, IN and
