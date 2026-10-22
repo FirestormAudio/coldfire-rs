@@ -190,6 +190,7 @@ impl GpTimer {
             return false;
         };
         if self.repeat {
+            // a read in the same tick as the expiry (now == d) reloads with the anchor at d
             let period = (u64::from(self.ld) + 1) * tpu;
             self.anchor = d + (now - d) / period * period;
             self.count = self.ld;
@@ -326,12 +327,15 @@ pub struct UsbStats {
 /// and expire one microsecond later, so a period is GPTLD + 1 µs (a load of 9999 is 10 ms). An expiry sets
 /// USBSTS\[TI0\] or \[TI1\] (write 1 to clear), which interrupts while USBINTR\[TIE0\] or \[TIE1\] is set. In
 /// repeat mode the count reloads from GPTLD and goes on; in one-shot mode it stays 0 and the timer stops (RUN
-/// reads as written). RST reloads the count and, with RUN, restarts the period; setting RUN restarts the period
-/// from the count the timer holds; clearing RUN holds the count. The timers are event driven
-/// ([`Device::next_event`]): nothing steps per tick. They are part of the controller's reset. While the clock gate
+/// reads as written). RST reloads the count from GPTLD (measured on an MCF54415) and, with RUN, restarts the
+/// period; setting RUN restarts the period from the count the timer holds; clearing RUN holds the count. A GPTLD
+/// write does not load the count (measured on an MCF54415). RUN set from a count of 0 expires at once (measured on
+/// an MCF54415: TI0 sets, the count reloads from GPTLD and counts down again in repeat mode; guess: exactly
+/// when, taken as 1 µs later, and a one-shot just stops at 0). The timers are event driven
+/// ([`Device::next_event`]): nothing steps per tick. guess: they are part of the controller's reset (GPTLD, CTL
+/// and TI clear). While the clock gate
 /// is closed ([`Device::gate`]) the count stops and resumes where it stopped.
-/// - guess: writing GPTLD while the timer is not running loads the count (so GPTLD then RUN counts GPTLD without
-///   RST); while it runs, the new GPTLD applies at the next reload.
+/// - The new GPTLD of a running timer applies at the next reload.
 /// - guess: the expiry comes GPTLD + 1 µs after the load (the count reads 0 for the last microsecond).
 /// - guess: setting RUN again after a one-shot expiry, without RST, expires again 1 µs later.
 ///
@@ -966,9 +970,7 @@ impl UsbOtg {
         let was = t.count_at(now, tpu);
         if off & 4 == 0 {
             t.ld = v & GPT_COUNT;
-            if !t.run {
-                t.count = t.ld; // guess: loading GPTLD loads the count while stopped
-            }
+            // measured on an MCF54415: an LD write does not load the count, stopped or not
             return;
         }
         let run = v & GPT_RUN != 0;
@@ -977,15 +979,17 @@ impl UsbOtg {
         if v & GPT_RST != 0 {
             t.count = t.ld;
             t.deadline = None;
-        } else if t.deadline.is_some() {
-            t.count = was; // the count so far, from here
-            t.anchor = now;
         }
         t.run = run;
         if !run {
+            if v & GPT_RST == 0 {
+                t.count = was; // clearing RUN holds the count
+            }
             t.deadline = None;
         } else if v & GPT_RST != 0 || rising {
-            // guess: RUN rising continues from the count the timer holds
+            // RUN rising counts from the count the timer holds; from 0 it expires at the next microsecond
+            // boundary (measured on an MCF54415: it expires at once, reloads LD and goes on; guess: exactly when,
+            // taken as 1 µs)
             let from = if v & GPT_RST != 0 { t.count } else { was };
             t.start(from, now, tpu);
         }
@@ -1115,7 +1119,7 @@ impl Device for UsbOtg {
     // guess: a gated controller's timers stop counting and resume where they stopped (not measured).
     fn gate(&mut self, closed: bool, now: u64) {
         if closed {
-            self.gated_at = Some(now);
+            self.gated_at.get_or_insert(now);
         } else if let Some(at) = self.gated_at.take() {
             let d = now.saturating_sub(at);
             for t in &mut self.timers {
