@@ -67,9 +67,9 @@ bset     A    L  0000RRR111mmmeee  Dn  -  BsetDnEa  # CFPRM ch. 4 BSET, p. 4-22
 bset     A    B  0000RRR111mmmeee  (An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  BsetDnEa  # CFPRM ch. 4 BSET, p. 4-22
 
 # ---- lines 1-3: MOVE (size 01 byte, 11 word, 10 longword) ---------------------------------------------
-# guess: the byte forms leave out An as a source (CMP.B with Ay was measured illegal; MVS.B and MVZ.B accept it):
-# guess: the byte forms leave out An as a source, the same reading as MVS.B, MVZ.B and CMP.B below:
-# "address registers cannot be used for byte-size operands" (CFPRM ch. 1, p. 1-20).
+# Source/destination combinations from the table on p. 4-48; #imm to (d16,Ax) for .B and .W from ISA_B.
+# guess: the byte forms leave out An as a source, reading "address registers cannot be used for byte-size
+# operands" (CFPRM ch. 1, p. 1-20); that reading was measured wrong for MVS.B and MVZ.B and right for CMP.B.
 move     A    B  0001EEEMMMmmmeee  Dn,(An),(An)+,-(An)>Dn,(An),(An)+,-(An),(d16,An),(d8,An,Xi),abs.W,abs.L  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
 move     A    B  0001EEEMMMmmmeee  (d16,An),(d16,PC)>Dn,(An),(An)+,-(An),(d16,An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
 move     A    B  0001EEEMMMmmmeee  (d8,An,Xi),(d8,PC,Xi),abs.W,abs.L,#imm>Dn,(An),(An)+,-(An)  -  Move  # CFPRM ch. 4 MOVE, p. 4-48
