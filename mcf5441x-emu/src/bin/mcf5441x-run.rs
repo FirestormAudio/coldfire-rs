@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 use mcf5441x_emu::elf::{load_elf, symbols};
-use mcf5441x_emu::semihost::{Outcome, Semihost};
+use mcf5441x_emu::semihost::{DEFAULT_CLOCK_HZ, Outcome, Semihost};
 use mcf5441x_emu::soc::{ChipOptions, Gates, Mcf5441x};
 use mcf5441x_emu::{Limit, Machine, Stop};
 
@@ -16,7 +16,7 @@ semihosting on this process's stdin, stdout and stderr.
 
   --max-ms N            stop after N ms of emulated time (default 60000)
   --max-instructions N  stop after N instructions (default: no limit)
-  --clock-hz N          the emulated clock, for time (default 132000000)
+  --clock-hz N          the emulated clock, for time (default 125000000)
   --epoch S             gettimeofday's seconds at the start (default 0)
 
 Exit status: the program's exit(n) & 0xFF; 124 when a limit is reached; 125 when the emulator stops (an illegal
@@ -39,7 +39,7 @@ fn parse() -> Result<Args, ExitCode> {
     let mut args = Args {
         max_ms: 60_000,
         max_instructions: None,
-        clock_hz: 132_000_000,
+        clock_hz: DEFAULT_CLOCK_HZ,
         epoch: 0,
         elf: String::new(),
     };

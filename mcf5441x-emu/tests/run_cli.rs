@@ -169,7 +169,7 @@ fn illegal_is_125_with_the_pc() {
     let o = run_elf("illegal", &[]);
     assert_eq!(o.status.code(), Some(125));
     assert!(
-        text(&o.stderr).contains("Illegal at PC 0x40000006"),
+        text(&o.stderr).contains(&format!("Illegal at PC 0x{:08X}", 0x4000_0006)),
         "{}",
         text(&o.stderr)
     );
@@ -191,7 +191,7 @@ fn a_plain_halt_is_125() {
     let o = run_elf("halt", &[]);
     assert_eq!(o.status.code(), Some(125));
     assert!(
-        text(&o.stderr).contains("Halt(\"halt\") at PC 0x40000008"),
+        text(&o.stderr).contains(&format!("Halt(\"halt\") at PC 0x{:08X}", 0x4000_0008)),
         "{}",
         text(&o.stderr)
     );

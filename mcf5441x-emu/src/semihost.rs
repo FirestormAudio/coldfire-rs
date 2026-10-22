@@ -21,6 +21,10 @@ const TRAP: [u8; 8] = [0x4E, 0x71, 0x4A, 0xC8, 0x4E, 0x7B, 0xF0, 0x00];
 const EBADF: u32 = 9;
 const EINVAL: u32 = 22;
 
+/// The clock [`Semihost::new`] assumes: 125 MHz, the MCF5441x's top bus clock (a 250 MHz core, RM ch. 8), whose
+/// ticks the machine counts.
+pub const DEFAULT_CLOCK_HZ: u64 = 125_000_000;
+
 /// How a [`Semihost::run`] ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -87,14 +91,14 @@ enum Served {
 }
 
 impl Semihost {
-    /// A host on these streams, with the epoch at 0 and the clock at 132 MHz.
+    /// A host on these streams, with the epoch at 0 and the clock at [`DEFAULT_CLOCK_HZ`].
     pub fn new(stdin: Box<dyn Read>, stdout: Box<dyn Write>, stderr: Box<dyn Write>) -> Semihost {
         Semihost {
             stdin,
             stdout,
             stderr,
             epoch: 0,
-            clock_hz: 132_000_000,
+            clock_hz: DEFAULT_CLOCK_HZ,
         }
     }
 
@@ -205,7 +209,7 @@ impl Semihost {
                 m.mem.load(tv, &val).unwrap();
                 (0, 0)
             }
-            // guess: fds 0-2 are terminals and every other fd is EBADF, as a console host reports.
+            // fds 0-2 are terminals and every other fd is EBADF, as QEMU reports (tests/qemu_semihost.rs).
             12 if arg(0) <= 2 => (1, 0),
             12 => (0, EBADF),
             _ => unreachable!(),
