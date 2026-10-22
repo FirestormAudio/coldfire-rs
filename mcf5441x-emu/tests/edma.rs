@@ -14,6 +14,10 @@ const RAM: u32 = 0x4000_0000;
 const CODE: u32 = 0x4010_F000;
 
 const ES: u32 = EDMA + 0x04;
+const ERQH: u32 = EDMA + 0x08;
+const ERQL: u32 = EDMA + 0x0C;
+const INTH: u32 = EDMA + 0x20;
+const INTL: u32 = EDMA + 0x24;
 const ERRH: u32 = EDMA + 0x28;
 const ERRL: u32 = EDMA + 0x2C;
 const SERQ: u32 = EDMA + 0x18;
@@ -272,6 +276,42 @@ fn one_byte_per_request_with_dmod_wrap_and_interrupt() {
 }
 
 #[test]
+fn request_and_interrupt_maps_read_back() {
+    // RM 19.4.3, RM 19.4.13: ERQH/ERQL and INTH/INTL read (high word channels 63-32)
+    let (mut m, edma, port) = board(36);
+    rx_channel(&mut m, 0x4010_1000);
+    w(&mut m, SERQ, Size::Byte, 1);
+    assert_eq!(
+        (r(&mut m, ERQH, Size::Long), r(&mut m, ERQL, Size::Long)),
+        (1 << 4, 1 << 1)
+    );
+    assert_eq!(
+        (r(&mut m, INTH, Size::Long), r(&mut m, INTL, Size::Long)),
+        (0, 0)
+    );
+    assert_eq!(m.device::<Edma>(edma).erq(), 1 << 36 | 1 << 1);
+    push(&mut m, port, 0x41);
+    assert_eq!(
+        (r(&mut m, INTH, Size::Long), r(&mut m, INTL, Size::Long)),
+        (1 << 4, 0)
+    );
+    assert_eq!(m.device::<Edma>(edma).int(), 1 << 36);
+    assert_eq!(m.device::<Edma>(edma).err(), 0);
+    w(&mut m, CINT, Size::Byte, 36);
+    w(&mut m, CERQ, Size::Byte, 1);
+    assert_eq!(
+        (r(&mut m, INTH, Size::Long), r(&mut m, ERQL, Size::Long)),
+        (0, 0)
+    );
+    assert_eq!(r(&mut m, ERQH, Size::Long), 1 << 4);
+    assert_eq!(
+        (m.device::<Edma>(edma).erq(), m.device::<Edma>(edma).int()),
+        (1 << 36, 0)
+    );
+    no_halt(&mut m);
+}
+
+#[test]
 fn disabled_channel_does_nothing_and_dreq_disables() {
     let (mut m, _, port) = board(36);
     let ring = 0x4010_1000;
@@ -364,8 +404,12 @@ fn unmodelled_features_halt() {
 #[test]
 fn unmodelled_registers_halt() {
     let (mut m, _, _) = board(36);
-    let d = refused(&mut m, EDMA + 0x0E, Size::Word, None); // ERQ: not modelled on purpose
+    let d = refused(&mut m, EDMA + 0x0E, Size::Word, None); // ERQL reads 32-bit only
     assert!(d.contains("eDMA"), "{d}");
+    // the request, interrupt and error maps change only through the commands and the channels
+    for reg in [ERQH, ERQL, INTH, INTL, ERRH, ERRL] {
+        refused(&mut m, reg, Size::Long, Some(1 << 4));
+    }
     let d = refused(&mut m, SERQ, Size::Byte, Some(0x40)); // SERQ "all channels"
     assert!(d.contains("eDMA"), "{d}");
     // the error interrupt (INTC0 source 24) is not modelled: enabling it is refused, disabling it is not

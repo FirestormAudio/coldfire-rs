@@ -205,6 +205,8 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   16-bit, 32-bit and 16-byte transfers (16-byte measured on an MCF54415; there is no 32-byte size), mixed source and
   destination sizes, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR, D_REQ, scatter/gather and minor- and major-loop
   channel linking (linked starts run in the same call, bounded); CR is stored (EDBG, ERCA and ERGA change nothing).
+  ERQH/ERQL, INTH/INTL and ERRH/ERRL read back (32-bit; also `Edma::erq`, `Edma::int` and `Edma::err`); the commands
+  set and clear their bits, and writing them directly is refused.
   Misaligned addresses and reserved sizes (011 and 101 measured, 110 and 111 a guess) are configuration errors with ES
   as measured on an MCF54415; a scatter/gather load comes after the major-loop link (overwriting a START it gave the
   channel itself) and DONE is set onto the loaded CSR, and a misaligned scatter/gather address is the SGE error after

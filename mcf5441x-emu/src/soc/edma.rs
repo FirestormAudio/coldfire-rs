@@ -10,6 +10,8 @@ const TCD_END: u32 = TCD0 + 64 * 32;
 
 const CR: u32 = 0x00;
 const ES: u32 = 0x04;
+const ERQH: u32 = 0x08;
+const ERQL: u32 = 0x0C;
 const EEIH: u32 = 0x10;
 const EEIL: u32 = 0x14;
 const SERQ: u32 = 0x18;
@@ -20,6 +22,8 @@ const CINT: u32 = 0x1C;
 const CERR: u32 = 0x1D;
 const SSRT: u32 = 0x1E;
 const CDNE: u32 = 0x1F;
+const INTH: u32 = 0x20;
+const INTL: u32 = 0x24;
 const ERRH: u32 = 0x28;
 const ERRL: u32 = 0x2C;
 
@@ -172,13 +176,15 @@ fn unit(bytes: u32) -> Size {
 /// transfers take no time, so debug stalls and the arbitration order inside one call do not show); its reserved
 /// bits are dropped.
 ///
-/// Registers: CR (32-bit); ES, ERRH and ERRL (read, 32-bit); EEIH and EEIL read 0 and take 0; the byte commands
+/// Registers: CR (32-bit); ES, ERQH/ERQL, INTH/INTL and ERRH/ERRL (read, 32-bit; RM 19.4.3, RM 19.4.13,
+/// RM 19.4.14); EEIH and EEIL read 0 and take 0; the byte commands
 /// SERQ, CERQ, CINT, CERR, SSRT and CDNE for one channel, CEEI, and any command with NOP set (ignored); the TCDs
 /// (any size, raw). Everything this model leaves out is refused with [`Stop::Unmodelled`], the detail naming the
 /// eDMA and the feature:
 /// - CR\[CX\], CR\[ECX\], CR\[EMLM\], CR\[CLM\], CR\[HALT\], CR\[HOE\] and group priorities other than the reset
-///   ones (the detail names the bit); ERQH/ERQL, INTH/INTL, the hardware request status registers, DCHPRIn,
-///   writes to ES and ERRH/ERRL, reads of the commands and commands at other sizes
+///   ones (the detail names the bit); the hardware request status registers, DCHPRIn, writes to ES, ERQH/ERQL,
+///   INTH/INTL and ERRH/ERRL (the commands set and clear their bits), reads of the commands, and commands and
+///   ERQ/INT/ERR reads at other sizes
 /// - the "all channels" commands (SAER, CAER, CAIR, CAEI, SAST, CADN)
 /// - error interrupts: SEEI, or a nonzero write to EEIH/EEIL (INTC0 source 24 is not driven)
 /// - SERQ on a channel whose request line nothing drives ([`Edma::with_driven`]; [`Edma::new`] takes every line
@@ -263,6 +269,21 @@ impl Edma {
             driven,
             ..Edma::new()
         }
+    }
+
+    /// ERQH:ERQL: the channels whose peripheral requests are enabled (bit `n` is channel `n`).
+    pub fn erq(&self) -> u64 {
+        self.erq
+    }
+
+    /// INTH:INTL: the channels with an interrupt request not cleared.
+    pub fn int(&self) -> u64 {
+        self.int
+    }
+
+    /// ERRH:ERRL: the channels with an error not cleared.
+    pub fn err(&self) -> u64 {
+        self.err
     }
 
     fn field(&self, ch: usize, off: usize, n: usize) -> u32 {
@@ -720,6 +741,10 @@ impl Device for Edma {
         match (offset, size) {
             (CR, Size::Long) => self.cr,
             (ES, Size::Long) => self.es | if self.err != 0 { VLD } else { 0 },
+            (ERQH, Size::Long) => (self.erq >> 32) as u32,
+            (ERQL, Size::Long) => self.erq as u32,
+            (INTH, Size::Long) => (self.int >> 32) as u32,
+            (INTL, Size::Long) => self.int as u32,
             (ERRH, Size::Long) => (self.err >> 32) as u32,
             (ERRL, Size::Long) => self.err as u32,
             (EEIH | EEIL, Size::Long) => 0,
