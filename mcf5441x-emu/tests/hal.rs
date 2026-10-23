@@ -11,9 +11,10 @@ use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
 
 use mcf5441x_emu::elf::load_elf;
+use mcf5441x_emu::parts::{Emmc, EmmcConfig};
 use mcf5441x_emu::semihost::{Outcome, Semihost};
 use mcf5441x_emu::soc::{
-    Chip, ChipOptions, Dspi, Frame, Mcf5441x, PeerCx, PinChange, SerialPeer, SpiDevice, Uart,
+    Chip, ChipOptions, Dspi, Frame, Mcf5441x, PeerCx, PinChange, SerialPeer, SpiDevice, Ssi, Uart,
 };
 use mcf5441x_emu::{Limit, Machine};
 
@@ -374,4 +375,69 @@ fn dma_copies_rings_links_and_interrupts() {
     let (mut m, _) = machine(ChipOptions::default());
     let r = run(&mut m, &elf, 100);
     passed(&r);
+}
+
+#[test]
+fn esdhc_reads_the_card() {
+    let Some(elf) = elf("esdhc") else { return };
+    const SECTORS: u32 = 2048;
+    let image: Vec<u8> = (0..SECTORS as usize * 512)
+        .map(|i| (i * 13 + i / 512) as u8)
+        .collect();
+    // a card answering as tests/esdhc.rs's does: MID 0x15, powered up with sector addressing
+    let card = Emmc::new(
+        image,
+        EmmcConfig {
+            sec_count: SECTORS,
+            cid: [0x0000_0001, 0, 0, 0x0015_0000],
+            csd: [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x0044_4444],
+            ext_csd: vec![],
+            ocr: 0xC0FF_8080,
+        },
+    );
+    let (mut m, _) = machine(ChipOptions::default().with_card(card));
+    let r = run(&mut m, &elf, 2_000);
+    passed(&r);
+}
+
+/// The SSI0 line's frame `n`: two 16-bit slots.
+fn ssi_frame(n: u64) -> Vec<i32> {
+    let x = (n & 0x7FFF) as i32;
+    vec![x, -x]
+}
+
+/// From the first frame `capture` sends that isn't silence, each frame is the line's frame a fixed delay earlier
+/// plus `add` (16-bit), for `frames` frames; returns the delay.
+fn ssi_follows(capture: &[(u64, Vec<i32>)], add: i32, frames: usize) -> usize {
+    let first = capture
+        .iter()
+        .position(|(_, f)| f.iter().any(|&w| w != 0))
+        .expect("the stream sends something");
+    let x = (capture[first].1[0] as i16).wrapping_sub(add as i16) as i64;
+    let delay = first - x as usize;
+    for (k, (_, f)) in capture[first..first + frames].iter().enumerate() {
+        let want: Vec<i16> = ssi_frame((first + k - delay) as u64)
+            .iter()
+            .map(|&w| (w as i16).wrapping_add(add as i16))
+            .collect();
+        let got: Vec<i16> = f.iter().map(|&w| w as i16).collect();
+        assert_eq!(got, want, "frame {}", first + k);
+    }
+    delay
+}
+
+/// 48 kHz frames at the bus clock.
+const FRAME_TICKS: u64 = BUS_HZ / 48_000;
+
+#[test]
+fn ssi_streams_render_output() {
+    let Some(elf) = elf("ssi") else { return };
+    let (mut m, chip) = machine(ChipOptions::default().with_ssi_ticks(0, FRAME_TICKS));
+    m.device_mut::<Ssi>(chip.ssi[0])
+        .set_source(Box::new(ssi_frame));
+    let r = run(&mut m, &elf, 200);
+    passed(&r);
+    let capture = m.device_mut::<Ssi>(chip.ssi[0]).take_capture();
+    // 20 blocks of 64 frames were rendered; half of them is well inside the stream
+    ssi_follows(&capture, 1, 640);
 }
