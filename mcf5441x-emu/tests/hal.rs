@@ -405,3 +405,11 @@ fn eport_waits_for_edges_and_levels() {
         r.stdout
     );
 }
+
+#[test]
+fn dtim_counts_the_bus_clock() {
+    let Some(elf) = elf("dtim") else { return };
+    let (mut m, _) = machine(ChipOptions::default());
+    let r = run(&mut m, &elf, 90_000);
+    passed(&r);
+}
