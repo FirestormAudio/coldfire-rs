@@ -127,15 +127,12 @@ fn gpio_drives_reads_and_pulls() {
     passed(&r);
     assert_eq!(r.stdout.lines().count(), 5, "{}", r.stdout);
     let changes = chip.gpio_mut(&mut m).take_changes();
-    // PA0: high, then an output driving it, then low, then high again
-    assert_eq!(
-        port_states(&changes, 0, 1),
-        [(0, 1), (1, 1), (1, 0), (1, 1)]
-    );
-    // PB0: low as it becomes an output, so no change of the latch
-    assert_eq!(port_states(&changes, 1, 1), [(1, 0)]);
-    // PC2: low, then an output
-    assert_eq!(port_states(&changes, 2, 1 << 2), [(1 << 2, 0)]);
+    // PA0: its latch high from reset, an output driving it, then low, then high again
+    assert_eq!(port_states(&changes, 0, 1), [(1, 1), (1, 0), (1, 1)]);
+    // PB0: its latch cleared from reset, then an output
+    assert_eq!(port_states(&changes, 1, 1), [(0, 0), (1, 0)]);
+    // PC2: its latch cleared from reset, then an output
+    assert_eq!(port_states(&changes, 2, 1 << 2), [(0, 0), (1 << 2, 0)]);
     assert_eq!(chip.gpio(&m).output(2, 2), Some(false));
     // PD0 stays an input
     assert_eq!(chip.gpio(&m).output(3, 0), None);
@@ -305,12 +302,10 @@ fn spi_frames_follow_the_transactions() {
     ]);
     assert_eq!(log, want);
     assert_eq!(m.device::<Dspi>(chip.dspi[0]).device::<Echo>(0).selects, 3);
-    // PC2, the bare bus's select: high as it becomes an output, low around the frames, high again
+    // PC2, the bare bus's select: its latch high from reset as it becomes an output, low around the frames, high
+    // again
     let changes = chip.gpio_mut(&mut m).take_changes();
-    assert_eq!(
-        port_states(&changes, 2, 1 << 2),
-        [(0, 4), (4, 4), (4, 0), (4, 4)]
-    );
+    assert_eq!(port_states(&changes, 2, 1 << 2), [(4, 4), (4, 0), (4, 4)]);
 }
 
 #[test]

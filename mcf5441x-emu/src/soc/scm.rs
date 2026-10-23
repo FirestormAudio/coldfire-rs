@@ -12,6 +12,7 @@ const PPMSR0: u32 = 0x2C;
 const PPMCR0: u32 = 0x2D;
 const PPMSR1: u32 = 0x2E;
 const PPMCR1: u32 = 0x2F;
+const PPMHR0: u32 = 0x30;
 /// SAMCD and CAMCD: set or clear every bit of the pair (RM Table 9-3, Table 9-4).
 const ALL: u8 = 0x40;
 /// SMCD and CMCD: the CDn to set or clear.
@@ -40,12 +41,15 @@ pub fn gates([hr0, lr0, hr1, lr1]: [u32; 4]) -> u128 {
 /// - PPMSR0, PPMCR0, PPMSR1, PPMCR1 (+0x2C-+0x2F, bytes, write-only, read 0): a write sets (PPMSRn) or clears
 ///   (PPMCRn) CDn bit `value[5:0]` of PPM{H,L}Rn, or with bit 6 (SAMCD, CAMCD) all 64 of them.
 /// - PPMHR0, PPMLR0, PPMHR1, PPMLR1 (+0x30-+0x3C, read/write): the gates, bit set while the slot's clock is off.
+///   A write to PPMHR0 leaves bits 0x7F92_0300 set, and one to PPMLR0 leaves bits 0x0000_3000 set and bits
+///   0x0021_0001 clear (measured on an MCF54415: 0 written read 0x7F92_0300 and 0x0000_3000, all ones written read
+///   all ones and 0xFFDE_FFFE).
 ///
-/// Accesses address bytes: a word or longword access covers the registers of each of its bytes, in address order
-/// (a longword write at +0x2C is a PPMSR0, PPMCR0, PPMSR1 and PPMCR1 write).
-// guess: a word or longword write over PPMSRn and PPMCRn acts as its byte writes in address order (not measured).
-// guess: every bit of PPM{H,L}Rn is stored, the reserved ones too; RM Figures 9-4 to 9-7 show some reserved bits as
-// fixed, which is not modelled (not measured).
+/// Accesses address bytes: a word or longword access covers the registers of each of its bytes, in address order,
+/// except that a word or longword write drops its bytes over PPMSRn and PPMCRn: only a byte write sets or clears a
+/// gate (measured on an MCF54415).
+// guess: every bit of PPMHR1 and PPMLR1 is stored, the reserved ones too, and PPMSRn and PPMCRn set and clear the
+// fixed bits of PPMHR0 and PPMLR0 like the others (not measured).
 #[derive(Debug, Default)]
 pub struct PowerManagement;
 
@@ -68,6 +72,10 @@ fn byte(closed: u128, offset: u32) -> u8 {
     }
 }
 
+/// The bits of PPMHR0 and PPMLR0 a write leaves set, and those it leaves clear (measured on an MCF54415).
+const FIXED_SET: [u32; 2] = [0x7F92_0300, 0x0000_3000];
+const FIXED_CLEAR: [u32; 2] = [0, 0x0021_0001];
+
 /// `closed` after a write of `value` to the byte at `offset`.
 fn write_byte(closed: u128, offset: u32, value: u8) -> u128 {
     let pair = |n: u32| -> u128 { u128::from(u64::MAX) << (64 * n) };
@@ -84,6 +92,10 @@ fn write_byte(closed: u128, offset: u32, value: u8) -> u128 {
             let mut b = regs[k / 4].to_be_bytes();
             b[k % 4] = value;
             regs[k / 4] = u32::from_be_bytes(b);
+            if let (Some(set), Some(clear)) = (FIXED_SET.get(k / 4), FIXED_CLEAR.get(k / 4)) {
+                let lane = 0xFF00_0000u32 >> (8 * (k % 4));
+                regs[k / 4] = regs[k / 4] & !(clear & lane) | set & lane;
+            }
             gates(regs)
         }
         _ => closed,
@@ -98,9 +110,12 @@ impl Device for PowerManagement {
 
     fn write(&mut self, offset: u32, size: Size, value: u32, cx: &mut DeviceCx) {
         let n = size.bytes();
-        let closed = (0..n).fold(cx.clock_gates(), |c, k| {
-            write_byte(c, offset + k, (value >> (8 * (n - 1 - k))) as u8)
-        });
+        let closed = (0..n)
+            // Measured on an MCF54415: only a byte write acts on PPMSRn and PPMCRn.
+            .filter(|&k| n == 1 || offset + k >= PPMHR0)
+            .fold(cx.clock_gates(), |c, k| {
+                write_byte(c, offset + k, (value >> (8 * (n - 1 - k))) as u8)
+            });
         cx.set_clock_gates(closed);
     }
 

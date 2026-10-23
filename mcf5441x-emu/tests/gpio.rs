@@ -87,7 +87,47 @@ fn pclrr_reads_zero() {
 }
 
 #[test]
-fn the_gaps_read_zero_and_drop_writes() {
+fn reset_values_measured() {
+    // measured on an MCF54415: PODR resets to 0xFF on every port, PDDR to 0, PCLRR reads 0; PCR_A resets to
+    // 0x0300, PCR_J to 0x0008, PCR_K to 0x0002 and every other PCR to 0
+    let (mut m, chip) = chip();
+    for port in 0..11 {
+        assert_eq!(r(&mut m, PODR + port, Size::Byte), 0xFF, "port {port}");
+        assert_eq!(r(&mut m, PDDR + port, Size::Byte), 0, "port {port}");
+        assert_eq!(r(&mut m, PCLRR + port, Size::Byte), 0, "port {port}");
+        let pcr = match port {
+            0 => 0x0300,
+            9 => 0x0008,
+            10 => 0x0002,
+            _ => 0,
+        };
+        assert_eq!(r(&mut m, PCR + 2 * port, Size::Word), pcr, "port {port}");
+    }
+    // every pin an input: PA4 pulled up, PJ1 and PK0 pulled down, the rest with no pull
+    assert_eq!(chip.gpio(&m).output(0, 0), None);
+    assert_eq!(r(&mut m, PPDSDR, Size::Byte), 0xFF);
+    assert_eq!(r(&mut m, PPDSDR + 9, Size::Byte), 0xFD);
+    assert_eq!(r(&mut m, PPDSDR + 10, Size::Byte), 0xFE);
+    // the first change is logged against the reset state: making a pin an output drives it high
+    w(&mut m, PDDR + E, Size::Byte, 0x01);
+    assert!(chip.gpio(&m).level(E as u8, 0));
+    let changes = chip.gpio_mut(&mut m).take_changes();
+    assert_eq!(
+        changes
+            .iter()
+            .map(|c| (c.port, c.pddr, c.podr))
+            .collect::<Vec<_>>(),
+        [(4, 1, 0xFF)]
+    );
+    // a write of the reset latch changes nothing
+    w(&mut m, PODR + 3, Size::Byte, 0xFF);
+    assert!(chip.gpio(&m).changes().is_empty());
+}
+
+#[test]
+fn the_gaps_read_zero_and_drop_writes_measured() {
+    // measured on an MCF54415: the reserved bytes +0x0B, +0x17, +0x23, +0x2F, +0x46 and +0x47 read 0 and drop
+    // writes
     let (mut m, _) = chip();
     for gap in [0x0B, 0x17, 0x23, 0x2F, 0x46, 0x47] {
         w(&mut m, GPIO + gap, Size::Byte, 0x5A);
@@ -107,6 +147,7 @@ fn pin_mux_offsets_stay_read_back() {
 #[test]
 fn the_change_log_records_each_change_once() {
     let (mut m, chip) = chip();
+    w(&mut m, PODR + E, Size::Byte, 0);
     w(&mut m, PDDR + E, Size::Byte, 0x01);
     w(&mut m, PPDSDR + E, Size::Byte, 0x01);
     w(&mut m, PPDSDR + E, Size::Byte, 0x01); // no change
@@ -122,7 +163,7 @@ fn the_change_log_records_each_change_once() {
              }| (port, pddr, podr),
         )
         .collect();
-    assert_eq!(changes, [(4, 1, 0), (4, 1, 1), (4, 1, 0)]);
+    assert_eq!(changes, [(4, 0, 0), (4, 1, 0), (4, 1, 1), (4, 1, 0)]);
     assert!(chip.gpio(&m).changes().is_empty());
 }
 

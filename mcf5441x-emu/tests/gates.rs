@@ -200,9 +200,40 @@ fn ppmsr_and_ppmcr_set_and_clear_one_or_all() {
         [0xABCD, 0x5C, !(1 << 4 | 1 << 31), 0x1234_5678]
     );
     assert_eq!(r(&mut m, PPMLR1 + 1, Size::Byte), 0x34);
-    // guess: a longword write at +0x2C is a PPMSR0, PPMCR0, PPMSR1 and PPMCR1 write, in that order (not measured)
-    w(&mut m, PPMSR0, Size::Long, 0x0102_4040);
-    assert_eq!(chip.gates(&m), [0xABCD, 0x5A, 0, 0]);
+}
+
+#[test]
+fn wide_writes_to_ppmsr_and_ppmcr_change_nothing_measured() {
+    // measured on an MCF54415: word and longword writes over PPMSR0, PPMCR0, PPMSR1 and PPMCR1 change nothing; only
+    // byte writes act
+    let (mut m, chip) = chip(Gates::Open);
+    w(&mut m, PPMSR0, Size::Long, 0x4040_4040);
+    w(&mut m, PPMSR0, Size::Word, 0x0203);
+    w(&mut m, PPMSR1, Size::Word, 0x4040);
+    assert_eq!(chip.gates(&m), [0; 4]);
+    w(&mut m, PPMSR1, Size::Byte, ALL);
+    w(&mut m, PPMSR0, Size::Long, 0x0040_0040);
+    w(&mut m, PPMCR1 - 1, Size::Word, 0x4040);
+    assert_eq!(chip.gates(&m), [0, 0, !0, !0]);
+    w(&mut m, PPMCR1, Size::Byte, ALL);
+    assert_eq!(chip.gates(&m), [0; 4]);
+}
+
+#[test]
+fn ppmhr0_and_ppmlr0_keep_their_fixed_bits_measured() {
+    // measured on an MCF54415: PPMHR0 written 0 reads 0x7F920300 and written all ones reads all ones; PPMLR0
+    // written 0 reads 0x00003000 and written all ones reads 0xFFDEFFFE
+    let (mut m, _) = chip(Gates::Open);
+    w(&mut m, PPMHR0, Size::Long, 0);
+    w(&mut m, PPMLR0, Size::Long, 0);
+    assert_eq!(registers(&mut m)[..2], [0x7F92_0300, 0x0000_3000]);
+    w(&mut m, PPMHR0, Size::Long, !0);
+    w(&mut m, PPMLR0, Size::Long, !0);
+    assert_eq!(registers(&mut m)[..2], [0xFFFF_FFFF, 0xFFDE_FFFE]);
+    // a byte write keeps the fixed bits of its byte
+    w(&mut m, PPMHR0 + 2, Size::Byte, 0);
+    w(&mut m, PPMLR0 + 3, Size::Byte, 0xFF);
+    assert_eq!(registers(&mut m)[..2], [0xFFFF_03FF, 0xFFDE_FFFE]);
 }
 
 #[test]
