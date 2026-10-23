@@ -8,10 +8,10 @@
 //! 17.3.2): add the three to the machine in order.
 //!
 //! ICONFIG, CLMASK and SLMASK exist once for the three controllers, in INTC0's space (RM 17.2.4, RM 17.2.7, RM
-//! 17.2.8). With ICONFIG\[EMASK\] set, an interrupt acknowledge (the core's, or a read of an LnIACK register)
-//! saves CLMASK in SLMASK and loads CLMASK with the level acknowledged, and requests at levels up to CLMASK are
-//! masked in every controller. [`Intc::chip`] builds the three controllers sharing that state, and the global
-//! IACK registers ([`GlobalIack`], at 0xFC05_4000, RM Table 17-1) that read over all three.
+//! 17.2.8). With ICONFIG\[EMASK\] set, an interrupt acknowledge (the core's, or a read of a SWIACK or LnIACK
+//! register) saves CLMASK in SLMASK and loads CLMASK with the level acknowledged, and requests at levels up to
+//! CLMASK are masked in every controller. [`Intc::chip`] builds the three controllers sharing that state, and the
+//! global IACK registers ([`GlobalIack`], at 0xFC05_4000, RM Table 17-1) that read over all three.
 //!
 //! Accesses outside the register map, accesses of the wrong size to the 16- and 32-bit registers, and writes to
 //! the IACK registers are refused with [`Stop::Unmodelled`], the detail naming the controller and the register.
@@ -156,21 +156,21 @@ impl Chip {
     }
 
     /// A read of the software IACK (`n` = 0) or the level-`n` IACK over the controllers in `which`: the vector of
-    /// the highest request (at level `n`), or 0 (SWIACK) or 0x18 (LnIACK) when there is none (RM 17.2.10). A
-    /// level-`n` IACK that finds a request is an acknowledge.
-    // guess: the RM has the level-n IACK load CLMASK, not the software IACK, which only looks; and an IACK sees only
-    // the requests CLMASK lets through (with EMASK), so a masked level reads as spurious and loads nothing.
+    /// the highest request (at level `n`), or 0 (SWIACK) or 0x18 (LnIACK) when there is none (RM 17.2.10). With
+    /// EMASK every such read saves CLMASK in SLMASK and loads CLMASK: a SWIACK read with the level of the request it
+    /// returns (0 when none), an LnIACK read with `n`, spurious or not; an IACK sees only the requests CLMASK lets
+    /// through, so a masked level reads as spurious (measured on an MCF54415).
     fn iack(&mut self, n: u32, which: impl Iterator<Item = usize>, lines: &IrqLines) -> u32 {
         if n == 0 {
-            return self.best_of(which, lines, |_| true).map_or(0, |(_, v)| v);
+            let best = self.best_of(which, lines, |_| true);
+            self.acknowledge(best.map_or(0, |(l, _)| l));
+            return best.map_or(0, |(_, v)| v);
         }
-        match self.best_of(which, lines, |l| u32::from(l) == n) {
-            Some((level, v)) => {
-                self.acknowledge(level);
-                v
-            }
-            None => SPURIOUS,
-        }
+        let v = self
+            .best_of(which, lines, |l| u32::from(l) == n)
+            .map_or(SPURIOUS, |(_, v)| v);
+        self.acknowledge(n as u8);
+        v
     }
 }
 
@@ -216,15 +216,18 @@ enum Reg {
 /// - IMRH/IMRL (reset all ones) and INTFRCH/INTFRCL (reset 0): read/write; a forced source requests whatever its
 ///   IMR bit (RM 17.2.3; measured on an MCF54415: a forced source with its IMR bit set reads from LnIACK and
 ///   GLnIACK as when unmasked).
-/// - SIMR/CIMR (bytes, read 0): set or clear IMR bit `value & 63`, or every bit with SALL/CALL (0x40). Written
-///   together (a word at SIMR) the clear is applied first, so SIMR wins (RM 17.2.6).
+/// - SIMR/CIMR (bytes, read 0): set or clear IMR bit `value & 63`, or every bit with SALL/CALL (0x40).
 /// - ICR0-63 (bytes at 0x40-0x7F, reset 0): the level in bits 2:0; an access of any size covers consecutive
-///   ICRs, big-endian. The byte registers SIMR, CIMR, CLMASK and SLMASK pack the same way (guess: the RM gives
-///   them as 8-bit registers only; a word or longword over them is the model's extension).
+///   ICRs, big-endian. A read over SIMR, CIMR, CLMASK and SLMASK packs the same way (a longword at SIMR reads
+///   0x0000_0302 with CLMASK 3 and SLMASK 2), and so does a write, except that the CIMR byte of a word or
+///   longword write is ignored: a word at SIMR writes SIMR only, a longword SIMR, CLMASK and SLMASK (measured on
+///   an MCF54415).
 /// - ICONFIG (16-bit), CLMASK and SLMASK (bytes, reset 0x0F): INTC0 only, shared by the controllers of one
 ///   [`Intc::chip`]. CLMASK and SLMASK values other than 0-7 and 0x0F are reserved and refused.
 /// - SWIACK and L1IACK-L7IACK (bytes at 0xE0 + 4n, read-only): see [`GlobalIack`]'s registers; these look at this
-///   controller only.
+///   controller only. With EMASK every read loads the level masks: SLMASK takes CLMASK, and CLMASK the level of
+///   the request SWIACK returns (0 when none) or LnIACK's n, even when it reads 0x18 (measured on an MCF54415 on
+///   INTC0; guess: INTC1's and INTC2's do the same).
 ///
 /// The 32-bit registers take only 32-bit accesses and ICONFIG only 16-bit ones: other sizes are refused (a
 /// tripwire for code that relies on narrow accesses the RM does not describe).
@@ -283,8 +286,9 @@ impl Intc {
                 Reg::Iconfig
             }
             0x1C..0x20 if end <= 0x20 => {
-                // guess: a word or longword over SIMR, CIMR, CLMASK and SLMASK is one access per byte register,
-                // big-endian; the RM gives them as 8-bit registers only.
+                // A word or longword over SIMR, CIMR, CLMASK and SLMASK is one access per byte register,
+                // big-endian, CIMR's dropped from a write (measured on an MCF54415 at 0x1C). guess: a word at
+                // CLMASK, or a misaligned one, does the same.
                 if self.index != 0 {
                     for (o, name) in [(0x1E, "CLMASK"), (0x1F, "SLMASK")] {
                         if (offset..end).contains(&o) {
@@ -389,13 +393,13 @@ impl Device for Intc {
                     }
                 }
                 let mut chip = self.chip.changed();
-                // guess: SIMR and CIMR written together (RM 17.2.6: SIMR has priority) apply the clear first.
-                let cimr_first = bytes.iter().filter(|(o, _)| *o == 0x1D);
-                for &(o, b) in cimr_first.chain(bytes.iter().filter(|(o, _)| *o != 0x1D)) {
+                for &(o, b) in &bytes {
                     let r = &mut chip.intc[i];
                     match o {
                         0x1C if b & ALL != 0 => r.imr = !0,
                         0x1C => r.imr |= 1 << (b & 63),
+                        // A word or longword write ignores the CIMR byte (measured on an MCF54415).
+                        0x1D if n != 1 => {}
                         0x1D if b & ALL != 0 => r.imr = 0,
                         0x1D => r.imr &= !(1 << (b & 63)),
                         0x1E => chip.clmask = b,
@@ -452,8 +456,9 @@ impl InterruptController for Intc {
 /// The global IACK registers (RM 17.2.10, at 0xFC05_4000 with a window of 0x4000, from [`Intc::chip`]): GSWIACK
 /// (byte at 0xE0) reads the vector of the highest request over all three controllers, or 0 when there is none;
 /// GLnIACK (bytes at 0xE0 + 4n, n = 1-7) the vector of the highest request at level n, or 0x18 when there is none.
-/// At an equal level INTC0 wins, then INTC1 (RM 17.3.2). With ICONFIG\[EMASK\] set, a GLnIACK read that finds a
-/// request is an acknowledge: CLMASK is saved in SLMASK and loaded with n. Writes, other sizes and other offsets
+/// At an equal level INTC0 wins, then INTC1 (RM 17.3.2). With ICONFIG\[EMASK\] set, every read loads the level
+/// masks as INTC0's IACK registers do (CLMASK saved in SLMASK, CLMASK loaded with n, or for GSWIACK the level of
+/// the request returned; guess: measured on INTC0's IACK registers only). Writes, other sizes and other offsets
 /// are refused.
 #[derive(Debug)]
 pub struct GlobalIack {

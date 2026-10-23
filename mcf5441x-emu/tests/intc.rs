@@ -255,14 +255,6 @@ fn intc_register_basics() {
     w(&mut m, INTC2 + IMRL, Size::Long, 0x9ABC_DEF0);
     assert_eq!(r(&mut m, INTC2 + IMRH, Size::Long), 0x1234_5678);
     assert_eq!(r(&mut m, INTC2 + IMRL, Size::Long), 0x9ABC_DEF0);
-    // A word write to SIMR and CIMR together: SIMR wins (RM 17.2.6).
-    // guess: a word over the 8-bit SIMR and CIMR writes both (the RM gives only 8-bit accesses); the CIMR byte
-    // is applied first, then the SIMR byte.
-    w(&mut m, INTC2 + IMRL, Size::Long, 0);
-    w(&mut m, INTC2 + SIMR, Size::Word, 3 << 8 | 3);
-    assert_eq!(r(&mut m, INTC2 + IMRL, Size::Long), 1 << 3);
-    w(&mut m, INTC2 + SIMR, Size::Word, 4 << 8 | 3);
-    assert_eq!(r(&mut m, INTC2 + IMRL, Size::Long), 1 << 4);
     // Within a level the higher-numbered source wins (RM 17.3.1); the highest level wins over that.
     w(&mut m, INTC2 + CIMR, Size::Byte, 64);
     w(&mut m, INTC2 + ICR0 + 40, Size::Byte, 6);
@@ -456,10 +448,30 @@ fn level_mask_registers_are_only_in_intc0() {
     // ICONFIG keeps only ELVLPRI and EMASK (RM Table 17-9).
     w(&mut m, INTC0 + ICONFIG, Size::Word, 0xFFFF);
     assert_eq!(r(&mut m, INTC0 + ICONFIG, Size::Word), 0xFE20);
-    // CLMASK and SLMASK pack with SIMR and CIMR in a longword read. guess: the RM gives the four as 8-bit
-    // registers only; a longword over them is the model's extension.
+    // CLMASK and SLMASK pack with SIMR and CIMR in a longword read.
     w(&mut m, INTC0 + CLMASK, Size::Byte, 6);
     assert_eq!(r(&mut m, INTC0 + SIMR, Size::Long), 0x0000_0605);
+}
+
+#[test]
+fn wide_writes_at_simr_ignore_cimr_measured() {
+    // measured on an MCF54415: a word write at SIMR (0x1C) applies SIMR only, the CIMR byte ignored; a longword
+    // write there applies SIMR, CLMASK and SLMASK, CIMR again ignored; byte writes act normally; a longword read
+    // at 0x1C reads 0x0000_0302 with CLMASK 3 and SLMASK 2 (SIMR and CIMR read 0)
+    let (mut m, _) = one(0);
+    w(&mut m, INTC0 + IMRL, Size::Long, 1 << 3);
+    w(&mut m, INTC0 + SIMR, Size::Word, 4 << 8 | 3);
+    assert_eq!(r(&mut m, INTC0 + IMRL, Size::Long), 1 << 4 | 1 << 3);
+    w(&mut m, INTC0 + SIMR, Size::Long, 0x0504_0302);
+    assert_eq!(
+        r(&mut m, INTC0 + IMRL, Size::Long),
+        1 << 5 | 1 << 4 | 1 << 3
+    );
+    assert_eq!(r(&mut m, INTC0 + SIMR, Size::Long), 0x0000_0302);
+    assert_eq!(r(&mut m, INTC0 + CLMASK, Size::Byte), 3);
+    assert_eq!(r(&mut m, INTC0 + SLMASK, Size::Byte), 2);
+    w(&mut m, INTC0 + CIMR, Size::Byte, 4);
+    assert_eq!(r(&mut m, INTC0 + IMRL, Size::Long), 1 << 5 | 1 << 3);
 }
 
 #[test]
@@ -500,30 +512,43 @@ fn iack_registers_return_the_pending_vector_or_0x18() {
     // Without EMASK the reads leave the level masks alone.
     assert_eq!(r(&mut m, INTC0 + CLMASK, Size::Byte), 0x0F);
 
-    // With EMASK a level-n IACK read loads CLMASK with n and saves the old value in SLMASK (RM 17.2.10).
+    // measured on an MCF54415: with EMASK every read of SWIACK or LnIACK saves CLMASK in SLMASK and loads CLMASK,
+    // SWIACK with the level of the request it returns (0 when none), LnIACK with n even when it reads spurious
+    // (0x18); an IACK sees only the levels CLMASK lets through (L3IACK with CLMASK 3 read 0x18)
     w(&mut m, INTC0 + ICONFIG, Size::Word, EMASK);
-    // guess: a software IACK only looks; the RM has only the level-n IACK load CLMASK.
-    assert_eq!(r(&mut m, INTC0 + SWIACK, Size::Byte), 64 + 9);
-    assert_eq!(r(&mut m, INTC0 + CLMASK, Size::Byte), 0x0F);
-    assert_eq!(r(&mut m, INTC0 + iack(3), Size::Byte), 64 + 9);
-    assert_eq!(r(&mut m, INTC0 + CLMASK, Size::Byte), 3);
-    assert_eq!(r(&mut m, INTC0 + SLMASK, Size::Byte), 0x0F);
-    // Level 3 is now masked everywhere; level 5 is not.
-    assert_eq!(r(&mut m, INTC0 + SWIACK, Size::Byte), 0);
-    assert_eq!(r(&mut m, GIACK + SWIACK, Size::Byte), 128 + 4);
-    // guess: a level-n IACK sees only requests CLMASK lets through, so a masked level reads as spurious and
-    // loads nothing.
-    assert_eq!(r(&mut m, INTC2 + iack(3), Size::Byte), 0x18);
-    assert_eq!(r(&mut m, INTC0 + CLMASK, Size::Byte), 3);
-    // A global level-n IACK loads the masks too.
-    assert_eq!(r(&mut m, GIACK + iack(5), Size::Byte), 128 + 4);
-    assert_eq!(
+    let masks = |m: &mut Machine| {
         (
-            r(&mut m, INTC0 + CLMASK, Size::Byte),
-            r(&mut m, INTC0 + SLMASK, Size::Byte)
-        ),
-        (5, 3)
-    );
+            r(m, INTC0 + CLMASK, Size::Byte),
+            r(m, INTC0 + SLMASK, Size::Byte),
+        )
+    };
+    assert_eq!(r(&mut m, INTC0 + SWIACK, Size::Byte), 64 + 9);
+    assert_eq!(masks(&mut m), (3, 0x0F));
+    // Level 3 is now masked everywhere: INTC0 has nothing above it.
+    assert_eq!(r(&mut m, INTC0 + SWIACK, Size::Byte), 0);
+    assert_eq!(masks(&mut m), (0, 3));
+    assert_eq!(r(&mut m, GIACK + SWIACK, Size::Byte), 128 + 4);
+    assert_eq!(masks(&mut m), (5, 0));
+    // A spurious level-n IACK loads n all the same.
+    assert_eq!(r(&mut m, INTC0 + iack(3), Size::Byte), 0x18);
+    assert_eq!(masks(&mut m), (3, 5));
+    assert_eq!(r(&mut m, INTC2 + iack(3), Size::Byte), 0x18);
+    assert_eq!(masks(&mut m), (3, 3));
+    w(&mut m, INTC0 + CLMASK, Size::Byte, 2);
+    assert_eq!(r(&mut m, INTC0 + iack(3), Size::Byte), 64 + 9);
+    assert_eq!(masks(&mut m), (3, 2));
+    // guess: the global IACK registers load the masks as INTC0's do (measured on INTC0's).
+    assert_eq!(r(&mut m, GIACK + iack(5), Size::Byte), 128 + 4);
+    assert_eq!(masks(&mut m), (5, 3));
+    assert_eq!(r(&mut m, INTC0 + iack(5), Size::Byte), 0x18);
+    assert_eq!(masks(&mut m), (5, 5));
+    // Without EMASK no read loads them.
+    w(&mut m, INTC0 + ICONFIG, Size::Word, 0);
+    w(&mut m, INTC0 + CLMASK, Size::Byte, 0x0F);
+    assert_eq!(r(&mut m, INTC0 + SWIACK, Size::Byte), 64 + 9);
+    assert_eq!(r(&mut m, INTC0 + iack(3), Size::Byte), 64 + 9);
+    assert_eq!(r(&mut m, INTC0 + iack(4), Size::Byte), 0x18);
+    assert_eq!(masks(&mut m), (0x0F, 5));
 
     // A write to an IACK register is an error termination (RM Table 17-18): refused.
     assert!(refused(&mut m, INTC1 + iack(2), Size::Byte, Some(0)).contains("L2IACK"));
