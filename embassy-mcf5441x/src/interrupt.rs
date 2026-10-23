@@ -234,6 +234,7 @@ pub mod typelevel {
     }
 
     irqs!(
+        EPORT_EPF1, EPORT_EPF2, EPORT_EPF3, EPORT_EPF4, EPORT_EPF5, EPORT_EPF6, EPORT_EPF7,
         PIT0, PIT1, PIT2, PIT3,
         UART0, UART1,
         #[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] UART2,

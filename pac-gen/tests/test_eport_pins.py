@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 HAL = Path(__file__).resolve().parents[2] / "embassy-mcf5441x"
-ROW = re.compile(r"^\s*irq!\((?:#\[[^\]]*\]\s*)?(\d), (P[A-K]\d), (PAR_\w+), (\d), (\d), (\w+)\);", re.M)
+ROW = re.compile(r"^\s*irq!\((?:#\[[^\]]*\]\s*)?(\d), EPORT_EPF\1, (P[A-K]\d), (PAR_\w+), (\d), (\d), (\w+)\);", re.M)
 COLUMN = {"Primary": 0, "Alt1": 2, "Alt2": 3}
 
 

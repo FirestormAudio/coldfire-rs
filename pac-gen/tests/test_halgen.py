@@ -268,7 +268,7 @@ def render_eport():
                                     json.loads((HAL / "pinmux.json").read_text()))
 
 
-EPORT_ROW = re.compile(r"irq!\((?:#\[[^\]]*\]\s*)?(\d), (P[A-K]\d), (PAR_\w+), (\d), (\d), (\w+)\);")
+EPORT_ROW = re.compile(r"irq!\((?:#\[[^\]]*\]\s*)?(\d), EPORT_EPF\1, (P[A-K]\d), (PAR_\w+), (\d), (\d), (\w+)\);")
 
 
 def test_eport_pins_output_is_committed():
@@ -283,4 +283,4 @@ def test_eport_pins_are_the_settled_irq_pads():
         ("3", "PC3", "PAR_IRQ0L", "4", "2", "Primary"),
         ("6", "PC5", "PAR_IRQ0L", "6", "2", "Primary"),
     }
-    assert f"irq!(#[cfg({P256})] 2, PC2," in render_eport()
+    assert f"irq!(#[cfg({P256})] 2, EPORT_EPF2, PC2," in render_eport()

@@ -73,6 +73,7 @@ pub enum Gate {
     Pit1 = 33,
     Pit2 = 34,
     Pit3 = 35,
+    Eport = 36,
     UsbOtg = 44,
     Ssi0 = 47,
     Ssi1 = 50,
