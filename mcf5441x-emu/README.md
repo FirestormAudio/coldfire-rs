@@ -351,20 +351,27 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 - Bus masters' accesses are not split: a misaligned access from the eDMA or USB reaches a device whole. The chip's
   models refuse one that crosses a register.
 
-Open guesses (each a `guess:` comment in the code and its test): the clock gates' held events (the PIT, the DMA
-timers, the SSI, the eSDHC and the USB timers continue where they stopped; the UARTs and the USB host script catch up
-on opening), the lines a gated module keeps, the reserved bits of PPMHR/PPMLR and the edge port latching no edge while
-gated; the edge port's pins starting high; the eDMA's 110 and 111 sizes as errors, the order of INT_MAJOR, D_REQ and
-the major link before the SGE error, and the order of queued linked starts (highest channel first); the PIT's expiry
-one count after PCNTR reads 0 and the prescaler's partial count on a PRE change; the UART hand-over to the shift
-register taking the shortest of the measured 2 to 9 instructions, and its transmit DMA request dropping inside the UTB
-write; the DSPI's FIFO counters with 16 entries and the deselect of a part reached by an idle-low select; the eSDHC's
-RSTA reset of the registers not measured and a data timeout one tick after the data phase; USB detach 100 µs after RS
-clears; the SSI's underrun sending silence and emptying the FIFO, where RM Table 35-8 re-transmits the previous data;
-the word and longword accesses over the INTC's 8-bit SIMR, CIMR, CLMASK and SLMASK; the DDR controller's PADCR bit 9;
-the NFC's address increment after a single-page read and its ECC status byte, which follows the RM and is not measured
-(in ECC bypass mode, a guess); the PLL relocking at once (LOCKS stays clear after a lost lock); the NOR flash's WEL
-and WIP timing around a failed program.
+Open guesses (each a `guess:` comment in the code and its test): the clock gates' held events (the SSI, the eSDHC
+and the USB timers continue where they stopped, a DMA timer dropping its prescaler's partial count when the gate
+opens; the UARTs and the USB host script catch up on opening), the lines a gated module keeps, the reserved bits of
+PPMHR1/PPMLR1 and PPMSRn/PPMCRn acting on PPMHR0/PPMLR0's fixed bits, and the edge port latching no edge while gated;
+the edge port's pins starting high; NCE for a reserved size when NBYTES is not a multiple of 32, and a reserved DSIZE
+alone; an earlier DONE kept through a configuration error when the start doesn't write CSR (SSRT or a request); the
+order of queued linked starts (highest channel first); a DMA timer's DTXMR kept through the RST reset; the PIT
+prescaler's partial count on a PRE change; the UART hand-over to the shift register taking the shortest of the
+measured 2 to 9 instructions, its transmit DMA request dropping inside the UTB write, and RESET ERROR STATUS clearing
+the FE of every held character; the DSPI's FIFO counters with 16 entries, the deselect of a part reached by an
+idle-low select, and the FIFO clears doing nothing with MDIS set; the eSDHC's RSTA reset of the registers not
+measured, a data timeout one tick after the data phase, and transfers using the written BLKCNT while BLKATTR reads 1;
+USB detach 100 µs after RS clears, a GP timer running on through USBCMD RST, and the one-shot cases not measured (RUN
+cleared before it is set again; a one-shot that never expired started from count 0); the SSI's underrun sending
+silence and emptying the FIFO, where RM Table 35-8 re-transmits the previous data; a word at the INTC's CLMASK and
+misaligned wide accesses over SIMR, CIMR, CLMASK and SLMASK, and the global IACK registers and INTC1's and INTC2's own
+loading the level masks as INTC0's do; the DDR controller's CRs other than CR02 keeping their reserved bits; the NFC's
+address increment after a single-page read and its ECC status byte, which follows the RM and is not measured (in ECC
+bypass mode, a guess); the PLL relocking at once (LOCKS stays clear after a lost lock); the NOR flash's WEL and WIP
+timing around a failed program; MAC.W and MSAC with extension bits 1-0 set raising illegal; FRESTORE in user mode
+taking line F; a MAC load into its own -(Ay) register keeping the loaded value.
 
 ## Running a program
 
