@@ -12,7 +12,9 @@ use std::sync::{Mutex, OnceLock};
 
 use mcf5441x_emu::elf::load_elf;
 use mcf5441x_emu::semihost::{Outcome, Semihost};
-use mcf5441x_emu::soc::{Chip, ChipOptions, Mcf5441x, PeerCx, PinChange, SerialPeer, Uart};
+use mcf5441x_emu::soc::{
+    Chip, ChipOptions, Dspi, Frame, Mcf5441x, PeerCx, PinChange, SerialPeer, SpiDevice, Uart,
+};
 use mcf5441x_emu::{Limit, Machine};
 
 /// DDR as hal-tests/memory.x has it: 128 MB at 0x40000000, the stack at its top.
@@ -293,4 +295,83 @@ fn uart_buffered_wraps_its_ring_and_keeps_commands_whole() {
     let digits: Vec<u8> = rest.iter().copied().filter(u8::is_ascii_digit).collect();
     assert_eq!(digits, b"0123456789".repeat(10));
     assert_eq!(rest.last(), Some(&b'!'));
+}
+
+/// A part that answers each byte with its complement, counting its selects.
+#[derive(Default)]
+struct Echo {
+    selects: usize,
+    selected: bool,
+}
+
+impl SpiDevice for Echo {
+    fn select(&mut self, _now: u64) {
+        self.selects += 1;
+        self.selected = true;
+    }
+    fn transfer(&mut self, byte: u8) -> u8 {
+        assert!(self.selected, "a frame with the part deselected");
+        !byte
+    }
+    fn deselect(&mut self, _now: u64) {
+        self.selected = false;
+    }
+}
+
+/// (data, PCS, CONT, CTAS) of each frame.
+fn frames(log: &[Frame]) -> Vec<(u32, u8, bool, u8)> {
+    log.iter()
+        .map(|f| (f.data, f.pcs, f.cont, f.ctas))
+        .collect()
+}
+
+#[test]
+fn spi_frames_follow_the_transactions() {
+    let Some(elf) = elf("spi") else { return };
+    let (mut m, chip) = machine(ChipOptions::default());
+    m.device_mut::<Dspi>(chip.dspi[0])
+        .attach(0, Box::new(Echo::default()));
+    let r = run(&mut m, &elf, 100);
+    passed(&r);
+    let log = frames(&m.device_mut::<Dspi>(chip.dspi[0]).take_frame_log());
+    // the select is held from a transaction's first frame to its last (CONT); 8-bit frames through CTAR0
+    let byte = |d: u32, cont: bool| (d, 1, cont, 0);
+    let mut want = vec![
+        byte(1, true),
+        byte(2, true),
+        byte(3, true),
+        byte(0, true),
+        byte(0, false),
+        byte(0x10, true),
+        byte(0x20, false),
+        // wide reads: the write in 8-bit frames, the reads in 16-bit frames through CTAR1
+        byte(1, true),
+        byte(2, true),
+        byte(3, true),
+        (0, 1, true, 1),
+        (0, 1, false, 1),
+    ];
+    // the bare bus: no chip select, no CONT
+    want.extend([
+        (0xA5, 0, false, 0),
+        (0x5A, 0, false, 0),
+        (1, 0, false, 0),
+        (2, 0, false, 0),
+    ]);
+    assert_eq!(log, want);
+    assert_eq!(m.device::<Dspi>(chip.dspi[0]).device::<Echo>(0).selects, 3);
+    // PC2, the bare bus's select: high as it becomes an output, low around the frames, high again
+    let changes = chip.gpio_mut(&mut m).take_changes();
+    assert_eq!(
+        port_states(&changes, 2, 1 << 2),
+        [(0, 4), (4, 4), (4, 0), (4, 4)]
+    );
+}
+
+#[test]
+fn dma_copies_rings_links_and_interrupts() {
+    let Some(elf) = elf("dma") else { return };
+    let (mut m, _) = machine(ChipOptions::default());
+    let r = run(&mut m, &elf, 100);
+    passed(&r);
 }
