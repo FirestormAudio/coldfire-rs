@@ -14,8 +14,10 @@ use mcf5441x_emu::semihost::{Outcome, Semihost};
 use mcf5441x_emu::soc::{
     ChipOptions, Dspi, Frame, PeerCx, PinChange, SerialPeer, SpiDevice, Ssi, Uart,
 };
-use mcf5441x_emu::{Limit, Machine};
-use programs::{BUS_HZ, CHAR_TICKS, FRAME_TICKS, machine, ssi_follows, ssi_frame, start};
+use mcf5441x_emu::{Limit, Machine, Stop};
+use programs::{
+    BUS_HZ, CHAR_TICKS, FRAME_TICKS, TICKS_PER_MS, machine, ssi_follows, ssi_frame, start,
+};
 
 /// Program `name` of `hal-tests`.
 fn elf(name: &str) -> Option<Vec<u8>> {
@@ -52,7 +54,17 @@ struct Ran {
 /// Load `elf` as a boot stage leaves a program (supervisor mode, interrupts masked, the stack at the top of DDR)
 /// and run it under semihosting for at most `max_ms` of emulated time.
 fn run(m: &mut Machine, elf: &[u8], max_ms: u64) -> Ran {
+    run_slices(m, elf, &mut [], max_ms)
+}
+
+/// A change the host makes at a time of the run: (emulated ms from the start, the change).
+type Change<'a> = (u64, &'a mut dyn FnMut(&mut Machine));
+
+/// As [`run`], stopping at each of `changes`' times (in order) to make the change, then running on: the program
+/// sees each change at its time, and may wait for it asleep.
+fn run_slices(m: &mut Machine, elf: &[u8], changes: &mut [Change], max_ms: u64) -> Ran {
     start(m, elf, max_ms);
+    let end = m.time_limit();
     let (out, err) = (Sink::default(), Sink::default());
     let mut host = Semihost::new(
         Box::new(io::empty()),
@@ -60,7 +72,21 @@ fn run(m: &mut Machine, elf: &[u8], max_ms: u64) -> Ran {
         Box::new(err.clone()),
     );
     host.clock_hz = BUS_HZ;
-    let outcome = host.run(m, Limit::default());
+    let mut outcome = None;
+    for (ms, change) in changes.iter_mut() {
+        m.set_time_limit(Some(*ms * TICKS_PER_MS));
+        match host.run(m, Limit::default()) {
+            Outcome::Stopped(s) if s.kind == Stop::TimeLimit => change(m),
+            o => {
+                outcome = Some(o);
+                break;
+            }
+        }
+    }
+    let outcome = outcome.unwrap_or_else(|| {
+        m.set_time_limit(end);
+        host.run(m, Limit::default())
+    });
     Ran {
         outcome,
         stdout: out.text(),
@@ -348,4 +374,34 @@ fn an_interrupt_executor_preempts_a_lower_one() {
     let (mut m, _) = machine(ChipOptions::default());
     let r = run(&mut m, &elf, 100);
     passed(&r);
+}
+
+#[test]
+fn eport_waits_for_edges_and_levels() {
+    let Some(elf) = elf("eport") else { return };
+    let (mut m, chip) = machine(ChipOptions::default());
+    // IRQ2 low from the start, IRQ6 high
+    chip.drive_irq(&mut m, 2, false);
+    chip.drive_irq(&mut m, 6, true);
+    let c = &chip;
+    let r = run_slices(
+        &mut m,
+        &elf,
+        &mut [
+            (10, &mut |m: &mut Machine| c.drive_irq(m, 2, true)),
+            (20, &mut |m: &mut Machine| c.drive_irq(m, 6, false)),
+            (30, &mut |m: &mut Machine| c.drive_irq(m, 6, true)),
+            (40, &mut |m: &mut Machine| c.drive_irq(m, 2, false)),
+            (60, &mut |m: &mut Machine| c.drive_irq(m, 6, false)),
+            (70, &mut |m: &mut Machine| c.drive_irq(m, 6, true)),
+        ],
+        200,
+    );
+    passed(&r);
+    assert_eq!(
+        r.stdout.lines().filter(|l| l.starts_with("step")).count(),
+        8 + 5,
+        "{}",
+        r.stdout
+    );
 }

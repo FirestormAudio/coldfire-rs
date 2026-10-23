@@ -19,8 +19,10 @@ coldfire-rt = { path = "../coldfire-rt" }
 embassy-mcf5441x = { path = "../embassy-mcf5441x", default-features = false, features = ["time-driver-pit0", "executor-thread", "executor-interrupt", "bootloader"] }
 embassy-executor = "0.10.0"
 embassy-time = { version = "0.5.1", features = ["tick-hz-1_000"] }
+embassy-futures = "0.1.2"
 embassy-sync = "0.8.0"
 embedded-hal = "1.0"
+embedded-hal-async = "1.0"
 embedded-io-async = "0.7"
 static_cell = "2"
 
