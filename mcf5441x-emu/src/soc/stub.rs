@@ -1,5 +1,6 @@
 //! Blocks that accept writes and read back canned values, and blocks nobody models.
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -61,6 +62,18 @@ impl StubBlock {
     pub fn with_registers(mut self, range: Range<u32>, model: Box<dyn Device>) -> StubBlock {
         self.registers = Some((range, model));
         self
+    }
+
+    /// The model [`StubBlock::with_registers`] gave, if it is a `T`.
+    pub fn registers<T: Device>(&self) -> Option<&T> {
+        let (_, model) = self.registers.as_ref()?;
+        (&**model as &dyn Any).downcast_ref()
+    }
+
+    /// The model [`StubBlock::with_registers`] gave, mutably, if it is a `T`.
+    pub fn registers_mut<T: Device>(&mut self) -> Option<&mut T> {
+        let (_, model) = self.registers.as_mut()?;
+        (&mut **model as &mut dyn Any).downcast_mut()
     }
 
     /// The name given to [`StubBlock::new`].

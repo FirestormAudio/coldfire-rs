@@ -7,7 +7,7 @@ use crate::parts::{Emmc, SpiNor};
 
 use super::scm::{self, POWER_MANAGEMENT};
 use super::{
-    Ddrmc, Dspi, Dtim, Edma, Eport, Esdhc, EsdhcConfig, Intc, NandArray, Nfc, Pit, Pll,
+    Ddrmc, Dspi, Dtim, Edma, Eport, Esdhc, EsdhcConfig, GpioPorts, Intc, NandArray, Nfc, Pit, Pll,
     PowerManagement, Ssi, SsiConfig, StubBlock, StubMode, Uart, UartConfig, Unmodelled, UsbConfig,
     UsbOtg,
 };
@@ -387,6 +387,28 @@ impl Chip {
         scm::registers(m.clock_gates())
     }
 
+    /// The GPIO ports ([`GpioPorts`]) inside the GPIO stub block.
+    pub fn gpio<'m>(&self, m: &'m Machine) -> &'m GpioPorts {
+        m.device::<StubBlock>(self.stub("GPIO"))
+            .registers()
+            .expect("the GPIO stub holds the ports")
+    }
+
+    /// The GPIO ports, mutably: drive inputs, take the change log.
+    pub fn gpio_mut<'m>(&self, m: &'m mut Machine) -> &'m mut GpioPorts {
+        m.device_mut::<StubBlock>(self.stub("GPIO"))
+            .registers_mut()
+            .expect("the GPIO stub holds the ports")
+    }
+
+    fn stub(&self, name: &str) -> DeviceId {
+        self.stubs
+            .iter()
+            .find(|(n, _)| *n == name)
+            .expect("the chip has the stub")
+            .1
+    }
+
     /// The eSDHC's card, if [`ChipOptions::card`] gave one.
     pub fn card<'m>(&self, m: &'m Machine) -> Option<&'m Emmc> {
         m.device::<Esdhc>(self.esdhc).card()
@@ -564,6 +586,9 @@ impl Mcf5441x {
                 if name == "SCM" {
                     let pm = Box::new(PowerManagement::new());
                     block = block.with_registers(POWER_MANAGEMENT, pm);
+                }
+                if name == "GPIO" {
+                    block = block.with_registers(GpioPorts::RANGE, Box::new(GpioPorts::new()));
                 }
                 (name, m.add_device(base, SLOT, Box::new(block)))
             })

@@ -157,7 +157,8 @@ order, so INTC0 wins over INTC1 and INTC1 over INTC2 at an equal level (RM 17.3.
 Stub blocks, which accept every access and read back the last value written at each offset
 ([`StubBlock`](soc::StubBlock)): the crossbar switch (0xFC00_4000), the FlexBus registers (0xFC00_8000), the SCM
 (0xFC04_0000), the CCM with the reset controller and power management (0xEC09_0000) and pin multiplexing and GPIO
-(0xEC09_4000). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, the I2Cs, the ADC and DACs, the RTC, the
+(0xEC09_4000), whose port data registers below +0x48 are the [GPIO ports](soc::GpioPorts) model (the pin
+multiplexing, PAR, MSCR, SRCR and DSCR, stays read-back). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, the I2Cs, the ADC and DACs, the RTC, the
 SIM, the USB host, the RNG, the Ethernet MACs and switch, 1-Wire and the mcPWM) and RGPIO (0x8C00_0000) is an
 [`Unmodelled`](soc::Unmodelled) block: an access stops the run with `Stop::Unmodelled` and the module's name and offset
 as the detail, with PC on the instruction. The SRAM (where the board's RAMBAR puts it, RM ch. 7) and the DDR (its size
@@ -198,6 +199,13 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   on an MCF54415), the bus clock / 16 or the DT*n*IN pin (`ChipOptions::with_dtin`; by default it never toggles), the
   prescaler, MODE16, the reference with REF, ORRI and free-run or restart, and DTCN cleared by any write. Capture mode,
   the output modes, DMA requests (DMAEN), the 1588 timebase and programmable delay stop the run with `Stop::Unmodelled`.
+- **GPIO ports A-K** (RM ch. 16), inside the GPIO stub ([`Chip::gpio`](soc::Chip::gpio)): PODR and PDDR read back;
+  a PPDSDR write sets the PODR bits written as 1 and a PCLRR write clears those written as 0 (PCLRR reads 0); PPDSDR
+  reads an output's PODR bit and an input's level, which the host drives with `GpioPorts::drive` or which follows
+  the pin's PCR pull (an undriven pin with no pull reads 1, a guess). Accesses wider than a byte are split, big-endian;
+  the gaps between the register blocks read 0 and drop writes (a guess). Every register resets to 0 (a guess: not
+  measured), and the pin multiplexing is not consulted: a pin's direction and level are as if its pad were GPIO. Each
+  write that changes a port's direction or latch is logged (`GpioPorts::changes`).
 - **Edge port 0** (RM ch. 18): per-pin level or edge detection, EPIER and EPFR on INTC0 sources 1-7; the host drives
   pins IRQ1-IRQ7 with `Eport::set_pin` inside `Machine::with_device`, and a change asserts or drops the interrupt at
   once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2 lists):
