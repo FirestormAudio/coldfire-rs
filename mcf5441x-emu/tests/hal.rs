@@ -321,27 +321,66 @@ fn dma_copies_rings_links_and_interrupts() {
     passed(&r);
 }
 
-#[test]
-fn esdhc_reads_the_card() {
-    let Some(elf) = elf("esdhc") else { return };
+/// The programs' card: 2048 sectors, byte i `(i * 13 + i / 512) as u8`, answering as tests/esdhc.rs's does (MID 0x15,
+/// powered up with sector addressing), with `ext_csd` set.
+fn card(ext_csd: Vec<(usize, u8)>) -> Emmc {
     const SECTORS: u32 = 2048;
     let image: Vec<u8> = (0..SECTORS as usize * 512)
         .map(|i| (i * 13 + i / 512) as u8)
         .collect();
-    // a card answering as tests/esdhc.rs's does: MID 0x15, powered up with sector addressing
-    let card = Emmc::new(
+    Emmc::new(
         image,
         EmmcConfig {
             sec_count: SECTORS,
             cid: [0x0000_0001, 0, 0, 0x0015_0000],
             csd: [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x0044_4444],
-            ext_csd: vec![],
+            ext_csd,
             ocr: 0xC0FF_8080,
         },
-    );
-    let (mut m, _) = machine(ChipOptions::default().with_card(card));
+    )
+}
+
+#[test]
+fn esdhc_reads_the_card() {
+    let Some(elf) = elf("esdhc") else { return };
+    let (mut m, _) = machine(ChipOptions::default().with_card(card(vec![])));
     let r = run(&mut m, &elf, 2_000);
     passed(&r);
+}
+
+#[test]
+fn esdhc_writes_and_trims_the_card() {
+    let Some(elf) = elf("esdhc-write") else {
+        return;
+    };
+    // erased memory reads 0xFF; the first write's data fails its CRC once
+    let mut card = card(vec![(181, 1)]);
+    *card.faults() = 1;
+    let (mut m, chip) = machine(
+        ChipOptions::default()
+            .with_card(card)
+            .with_sd_busy(TICKS_PER_MS / 10, TICKS_PER_MS),
+    );
+    let r = run(&mut m, &elf, 5_000);
+    passed(&r);
+    let card = chip.card(&m).unwrap();
+    // each write landed once, LBA 3 after its retry; the 200 sectors as two 64 KiB pieces
+    assert_eq!(card.written(), [(3, 1), (100, 8), (500, 128), (628, 72)]);
+    let cmd25s: Vec<u32> = card
+        .commands()
+        .iter()
+        .filter(|&&(c, _)| c == 25)
+        .map(|&(_, a)| a)
+        .collect();
+    assert_eq!(cmd25s, [3, 3, 100, 500, 628], "the faulted write retried");
+    assert_eq!(card.trimmed(), [(101, 103)]);
+    let img = card.image();
+    assert!(img[101 * 512..104 * 512].iter().all(|&b| b == 0xFF));
+    let written = |lba: usize, k: usize| (k * 7 + lba * 31 + 1) as u8;
+    assert!((0..512).all(|k| img[3 * 512 + k] == written(3, k)));
+    assert!((0..200 * 512).all(|k| img[500 * 512 + k] == written(500, k)));
+    // sector 10, which the refused write would have hit, as the card was made
+    assert!((10 * 512..11 * 512).all(|i| img[i] == (i * 13 + i / 512) as u8));
 }
 
 #[test]
