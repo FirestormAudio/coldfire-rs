@@ -21,13 +21,14 @@ const WRITABLE: u16 = 0x0F7B;
 ///   continues it at the new rate. guess: the prescaler's partial count is dropped (RM 38.2.1 says changing PRE
 ///   resets the prescaler counter).
 /// - PMR (reset 0xFFFF): the modulus. Writing it clears PIF (RM 38.3.4). The counter takes it at its next reload,
-///   or at once with OVW. A write with the timer disabled and OVW set loads the held counter (guess: RM 38.2.2
-///   says PMR is then transparent to the counter).
-/// - PCNTR (read-only, reset 0xFFFF): the down-counter. A disabled timer holds its value (RM 38.2.1).
+///   or at once with OVW. A write with the timer disabled loads the held counter only with OVW set (measured on an
+///   MCF54415; RM 38.2.2 says PMR is then transparent to the counter).
+/// - PCNTR (read-only, reset 0xFFFF): the down-counter. A disabled timer holds its value (RM 38.2.1). The reset
+///   values of PCSR, PMR and PCNTR are measured on an MCF54415.
 /// - With RLD set the counter reloads PMR when it passes 0; with RLD clear it rolls over to 0xFFFF and counts
 ///   a full 65536 counts (RM 38.3.2). PIF is set at each expiry, which is the reload, one count after PCNTR
-///   reads 0 (guess: RM 38.3 says "when the counter reaches 0x0000"; this is the older model's grid). Expiries
-///   stay on the original grid when the timer is serviced late.
+///   first reads 0 (measured on an MCF54415; RM 38.3 says "when the counter reaches 0x0000"). Expiries stay on
+///   the original grid when the timer is serviced late.
 ///
 /// Byte and word accesses address their lanes of the registers: a byte at +0 is the high byte of PCSR (PRE and the
 /// reserved bits), at +1 its low byte, at +2 and +3 the bytes of PMR, and so on for PCNTR; a byte write to PCSR
@@ -38,7 +39,7 @@ const WRITABLE: u16 = 0x0F7B;
 /// The timer drives source `source` of interrupt controller `controller` with PIF and PIE.
 ///
 /// While its clock gate is closed ([`Device::gate`]) the counter stops and no expiry happens; opening the gate
-/// continues the count where it stopped. guess: not measured (a module without its clock is taken not to count).
+/// continues the count where it stopped (measured on an MCF54415, PIT1).
 #[derive(Debug)]
 pub struct Pit {
     controller: usize,
@@ -222,7 +223,7 @@ impl Device for Pit {
         false
     }
 
-    // guess: a gated timer stops counting and resumes where it stopped (not measured).
+    // Measured on an MCF54415: a gated timer stops counting and resumes where it stopped.
     fn gate(&mut self, closed: bool, now: u64) {
         if closed {
             self.gated_at = Some(now);

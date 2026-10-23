@@ -71,8 +71,9 @@ fn refusal(m: &mut Machine, addr: u32, size: Size, value: u32) -> String {
 }
 
 #[test]
-fn dtim_reset_values_follow_the_rm() {
-    // RM Table 39-1: DTMR 0, DTXMR 0, DTER 0, DTRR 0xFFFF_FFFF, DTCR 0, DTCN 0; a timer with RST clear holds DTCN.
+fn dtim_reset_values_follow_the_rm_measured() {
+    // measured on an MCF54415 (DMA timer 0), as RM Table 39-1 gives them: DTMR 0, DTXMR 0, DTER 0, DTRR
+    // 0xFFFF_FFFF, DTCR 0, DTCN 0; a timer with RST clear holds DTCN.
     let (mut m, _) = chip(ChipOptions::default());
     for base in DTIM {
         assert_eq!(r(&mut m, base + DTMR, Size::Long), 0);
@@ -93,14 +94,14 @@ fn dtim_counts_the_bus_clock() {
     assert_eq!(dtcn(&mut m, 0), 0);
     idle(&mut m, 100 + 12_345);
     assert_eq!(dtcn(&mut m, 0), 12_345);
-    // reading does not disturb the count (RM 39.2.6), and a write clears it (RM Table 39-7; guess: a byte write
-    // clears all 32 bits)
+    // reading does not disturb the count (RM 39.2.6), and a write clears it (RM Table 39-7; a byte write too,
+    // measured on an MCF54415)
     assert_eq!(dtcn(&mut m, 0), 12_345);
     w(&mut m, DTIM[0] + DTCN + 3, Size::Byte, 0x55);
     assert_eq!(dtcn(&mut m, 0), 0);
     idle(&mut m, 100 + 12_345 + 7);
     assert_eq!(dtcn(&mut m, 0), 7);
-    // CLK = 0 stops the count and holds it; RST from 1 to 0 clears it (guess: DTCN and DTER cleared)
+    // CLK = 0 stops the count and holds it; RST from 1 to 0 clears it (measured on an MCF54415)
     w(&mut m, DTIM[0] + DTMR, Size::Word, RST);
     idle(&mut m, 100 + 12_345 + 50);
     assert_eq!(dtcn(&mut m, 0), 7);
@@ -276,8 +277,8 @@ fn dtim_dmaen_stops_unmodelled() {
 }
 
 #[test]
-fn gated_dtim_reads_all_ones() {
-    // measured on an MCF54415 for a gated module: all ones at every size. guess: the gated timer stops counting
+fn gated_dtim_reads_all_ones_and_stops_measured() {
+    // measured on an MCF54415 (DMA timer 1 at the bus clock / 16): a gated timer reads all ones, stops counting,
     // and continues where it stopped when its gate (CD28-CD31, RM Table 9-6) opens.
     let (mut m, _) = chip(ChipOptions::default().with_gates(Gates::Open));
     w(&mut m, DTIM[0] + DTMR, Size::Word, RST | BUS);
@@ -299,27 +300,88 @@ fn gated_dtim_reads_all_ones() {
 }
 
 #[test]
-fn dtim_clock_change_while_running_stops_the_count_guess() {
+fn dtim_setting_clk_with_rst_set_counts_measured() {
     // RM Table 39-2: "Avoid setting CLK when RST is already set. Doing so causes CLK to zero (stop counting)".
-    // guess: a write that changes CLK while RST stays set leaves CLK 0; one that keeps CLK keeps counting.
+    // measured on an MCF54415: setting CLK with RST already set counts normally.
     let (mut m, _) = chip(ChipOptions::default());
-    w(&mut m, DTIM[0] + DTMR, Size::Word, RST | BUS);
+    w(&mut m, DTIM[0] + DTMR, Size::Word, RST);
     idle(&mut m, 10);
+    w(&mut m, DTIM[0] + DTMR, Size::Word, RST | BUS);
+    assert_eq!(r(&mut m, DTIM[0] + DTMR, Size::Word), RST | BUS);
+    idle(&mut m, 30);
+    assert_eq!(dtcn(&mut m, 0), 20);
+    // a write that keeps CLK keeps counting, and one that changes it counts at the new clock
     w(&mut m, DTIM[0] + DTMR, Size::Word, ORRI | RST | BUS);
-    idle(&mut m, 20);
-    assert_eq!(dtcn(&mut m, 0), 20);
+    idle(&mut m, 40);
+    assert_eq!(dtcn(&mut m, 0), 30);
     w(&mut m, DTIM[0] + DTMR, Size::Word, RST | BUS_16);
-    assert_eq!(r(&mut m, DTIM[0] + DTMR, Size::Word), RST);
-    idle(&mut m, 100);
-    assert_eq!(dtcn(&mut m, 0), 20);
+    assert_eq!(r(&mut m, DTIM[0] + DTMR, Size::Word), RST | BUS_16);
+    idle(&mut m, 47);
+    assert_eq!(dtcn(&mut m, 0), 30);
+    idle(&mut m, 48);
+    assert_eq!(dtcn(&mut m, 0), 31);
 }
 
 #[test]
-fn dtim_dtcr_ignores_writes_guess() {
-    // RM Figure 39-6 shows DTCR read-only (Table 39-1 says R/W). guess: a write is ignored.
+fn dtim_rst_from_1_to_0_resets_the_timer_measured() {
+    // measured on an MCF54415: RST from 1 to 0 resets the whole timer: DTMR 0 in all its fields, DTER 0, DTRR
+    // 0xFFFF_FFFF, DTCN 0
+    let (mut m, _) = chip(ChipOptions::default());
+    w(&mut m, DTIM[0] + DTRR, Size::Long, 9);
+    w(
+        &mut m,
+        DTIM[0] + DTMR,
+        Size::Word,
+        3 << 8 | ORRI | FRR | RST | BUS,
+    );
+    idle(&mut m, 45);
+    assert_eq!(r(&mut m, DTIM[0] + DTER, Size::Byte), REF);
+    assert!(line(&m, 0));
+    w(
+        &mut m,
+        DTIM[0] + DTMR,
+        Size::Word,
+        3 << 8 | ORRI | FRR | BUS,
+    );
+    assert_eq!(r(&mut m, DTIM[0] + DTMR, Size::Long), 0);
+    assert_eq!(r(&mut m, DTIM[0] + DTRR, Size::Long), 0xFFFF_FFFF);
+    assert_eq!(dtcn(&mut m, 0), 0);
+    assert!(!line(&m, 0));
+    idle(&mut m, 1000);
+    assert_eq!(dtcn(&mut m, 0), 0);
+}
+
+#[test]
+fn dtim_dtcr_ignores_writes_measured() {
+    // measured on an MCF54415 (RM Figure 39-6 shows DTCR read-only, Table 39-1 says R/W): a write is ignored
     let (mut m, _) = chip(ChipOptions::default());
     w(&mut m, DTIM[1] + DTCR, Size::Long, 0x1234_5678);
     assert_eq!(r(&mut m, DTIM[1] + DTCR, Size::Long), 0);
+}
+
+#[test]
+fn dtim_dtrr_takes_a_word_write_to_its_low_half_measured() {
+    // measured on an MCF54415: a word write at DTRR + 2 sets the low half and keeps the high one
+    let (mut m, _) = chip(ChipOptions::default());
+    w(&mut m, DTIM[0] + DTRR + 2, Size::Word, 0x1234);
+    assert_eq!(r(&mut m, DTIM[0] + DTRR, Size::Long), 0xFFFF_1234);
+}
+
+#[test]
+fn dtim_dtcn_write_drops_the_partial_count_measured() {
+    // measured on an MCF54415 (DMA timer 2 at the bus clock / 256): after a DTCN write 59 bus clocks before the
+    // next increment, the next one comes a full period after the write
+    let (mut m, _) = chip(ChipOptions::default());
+    w(&mut m, DTIM[2] + DTMR, Size::Word, 255 << 8 | RST | BUS);
+    idle(&mut m, 3 * 256 - 59);
+    assert_eq!(dtcn(&mut m, 2), 2);
+    w(&mut m, DTIM[2] + DTCN, Size::Long, 0);
+    idle(&mut m, 3 * 256);
+    assert_eq!(dtcn(&mut m, 2), 0, "not after the 59 left");
+    idle(&mut m, 3 * 256 - 59 + 255);
+    assert_eq!(dtcn(&mut m, 2), 0);
+    idle(&mut m, 3 * 256 - 59 + 256);
+    assert_eq!(dtcn(&mut m, 2), 1);
 }
 
 #[test]

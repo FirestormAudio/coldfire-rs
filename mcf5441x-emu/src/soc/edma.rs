@@ -54,9 +54,11 @@ const VLD: u32 = 1 << 31;
 const SAE: u32 = 0x80;
 const DAE: u32 = 0x20;
 const SGE: u32 = 0x04;
-/// What ES records for a reserved transfer size, besides VLD and ERRCHN: SAE, SOE, DAE and DOE together (measured
-/// on an MCF54415).
-const SIZE_ERROR: u32 = 0xF0;
+const NCE: u32 = 0x08;
+/// What ES records for a reserved SSIZE, besides VLD and ERRCHN: SAE and SOE (measured on an MCF54415).
+const SSIZE_ERROR: u32 = 0xC0;
+/// What ES records for a reserved DSIZE: DAE and DOE (measured on an MCF54415).
+const DSIZE_ERROR: u32 = 0x30;
 
 /// TCD field offsets (RM 19.4.17).
 const SADDR: usize = 0x00;
@@ -159,16 +161,20 @@ fn unit(bytes: u32) -> Size {
 /// A source or destination address that is not a multiple of its transfer size is a configuration error (RM
 /// 19.4.2): nothing moves, CITER and the TCD are unchanged but for START, DONE is not set, the channel's ERR bit is
 /// set and ES records the channel with SAE or DAE. ES\[VLD\] is the OR of the ERR bits (RM Table 19-4), so CERR
-/// clears it and ES keeps the channel and SAE/DAE (measured on an MCF54415). A request left asserted after an error
+/// clears it and ES keeps the channel and SAE/DAE (measured on an MCF54415). A CSR write of START to a channel with
+/// DONE set clears DONE by its own DONE of 0, and the error leaves CSR 0, as measured on an MCF54415; guess: a
+/// start by SSRT or a request keeps an earlier DONE through the error. A request left asserted after an error
 /// is not served again until the next boundary. A reserved SSIZE or DSIZE encoding (011, 101, 110, 111; there
-/// is no 32-byte size) is a configuration error the same way, with SAE, SOE, DAE and DOE all set in ES (measured
-/// on an MCF54415 for 011 and 101 on both sides; guess: 110, 111 and a reserved size on one side alike).
+/// is no 32-byte size) is a configuration error the same way: a reserved SSIZE sets SAE and SOE in ES, a reserved
+/// DSIZE DAE and DOE, and NCE comes with them when NBYTES is 4, not when it is 32 (all measured on an MCF54415:
+/// 011, 101, 110 and 111 on both sides, 011 as SSIZE alone; guess: NCE whenever NBYTES is not a multiple of 32,
+/// and a valid side's own alignment errors are not added).
 ///
 /// A DLAST_SGA that is not a multiple of 32 when a major loop with E_SG completes is the SGE configuration error,
 /// found after the completion (measured on an MCF54415): the minor loop has moved its data, CITER is reloaded,
 /// SLAST is added to SADDR and DLAST_SGA to DADDR, DONE is set and E_SG kept; ES records the channel with SGE and
-/// the ERR bit is set; no TCD is loaded. The INT_MAJOR interrupt, D_REQ and the major-loop link come before it
-/// (guess: RM's order, not measured).
+/// the ERR bit is set; no TCD is loaded. The INT_MAJOR interrupt, D_REQ (ERQ cleared) and the major-loop link
+/// come before it, in RM's order (measured on an MCF54415).
 ///
 /// Interrupt routes (RM Table 17-15, Table 17-16, Table 17-17): channels 0-15 drive INTC0 sources 8-23, channels
 /// 16-55 INTC1 sources 8-47, and channels 56-63 share INTC2 source 0. The interrupt of a channel holds until CINT.
@@ -386,10 +392,21 @@ impl Edma {
         let attr = self.field(ch, ATTR, 2);
         let mut csr = self.csr(ch) & !START;
         let (Some(ssize), Some(dsize)) = (size_bytes(attr >> 8 & 7), size_bytes(attr & 7)) else {
-            // Measured on an MCF54415 (011 and 101 on both sides): nothing moves, START clears, DONE is not set,
-            // SADDR and DADDR are unchanged, ES has SAE, SOE, DAE and DOE. guess: 110, 111 and a reserved size on
-            // one side only alike; an earlier DONE kept, as for a misaligned address.
-            self.error(ch, SIZE_ERROR);
+            // Measured on an MCF54415 (011, 101, 110 and 111 on both sides, 011 as SSIZE alone): nothing moves,
+            // START clears, DONE is not set, SADDR and DADDR are unchanged, ES has SAE and SOE for a reserved
+            // SSIZE, DAE and DOE for a reserved DSIZE, and NCE with NBYTES 4 (not with 32). guess: NCE whenever
+            // NBYTES is not a multiple of 32; an earlier DONE kept, as for a misaligned address.
+            let mut bits = 0;
+            if size_bytes(attr >> 8 & 7).is_none() {
+                bits |= SSIZE_ERROR;
+            }
+            if size_bytes(attr & 7).is_none() {
+                bits |= DSIZE_ERROR;
+            }
+            if !self.field(ch, NBYTES, 4).is_multiple_of(32) {
+                bits |= NCE;
+            }
+            self.error(ch, bits);
             self.set_csr(ch, csr);
             return Ok(Activation::Error);
         };
@@ -399,9 +416,10 @@ impl Edma {
         let mut saddr = self.field(ch, SADDR, 4);
         let mut daddr = self.field(ch, DADDR, 4);
         if !saddr.is_multiple_of(ssize) || !daddr.is_multiple_of(dsize) {
-            // Measured on an MCF54415: nothing moves, START clears, DONE is not set, CITER is unchanged.
-            // guess: an earlier DONE is kept (the older model). RM 19.6.4.1 step 3 clears DONE as the channel
-            // activates; whether that comes before the configuration check is not measured.
+            // Measured on an MCF54415: nothing moves, START clears, DONE is not set, CITER is unchanged. A CSR
+            // write of START to a channel with DONE set leaves CSR 0 (measured), as the write's DONE of 0 gives
+            // here. guess: a start that does not write CSR (SSRT, a request) keeps an earlier DONE; RM 19.6.4.1
+            // step 3 clears DONE as the channel activates, and whether that comes before the check is not known.
             self.error(
                 ch,
                 if !saddr.is_multiple_of(ssize) {
@@ -497,8 +515,8 @@ impl Edma {
         }
         if !load {
             // Measured on an MCF54415: the SGE error comes after the completion (data moved, DONE set, E_SG kept,
-            // CITER reloaded, DLAST_SGA added to DADDR) and nothing is loaded. guess: the INT_MAJOR interrupt,
-            // D_REQ and the major-loop link still happen, as they come before scatter/gather in RM's order.
+            // CITER reloaded, DLAST_SGA added to DADDR) and nothing is loaded; the INT_MAJOR interrupt, D_REQ and
+            // the major-loop link still happen, as they come before scatter/gather in RM's order.
             self.error(ch, SGE);
             return Ok(Activation::Error);
         }

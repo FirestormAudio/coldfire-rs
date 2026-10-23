@@ -83,8 +83,8 @@ fn next(m: &Machine, id: DeviceId) -> Option<u64> {
 }
 
 #[test]
-fn pit_reset_values_follow_the_rm() {
-    // RM 38.2: PCSR 0x0000, PMR 0xFFFF, PCNTR 0xFFFF.
+fn pit_reset_values_follow_the_rm_measured() {
+    // measured on an MCF54415 (PIT0), as RM 38.2 gives them: PCSR 0x0000, PMR 0xFFFF, PCNTR 0xFFFF.
     let (mut m, id) = regs();
     assert_eq!(r(&mut m, PCSR, Size::Word), 0);
     assert_eq!(r(&mut m, PMR, Size::Word), 0xFFFF);
@@ -306,6 +306,40 @@ fn pmr_write_without_ovw_takes_effect_at_the_next_reload() {
     assert_ne!(r(&mut m, PCSR, Size::Word) & PIF, 0);
     w(&mut m, PMR, Size::Word, 49);
     assert_eq!(r(&mut m, PCSR, Size::Word) & PIF, 0);
+}
+
+#[test]
+fn pmr_write_while_disabled_loads_the_counter_only_with_ovw_measured() {
+    // measured on an MCF54415: with the timer disabled, a PMR write leaves PCNTR with OVW clear and loads it with
+    // OVW set
+    let (mut m, id) = regs();
+    w(&mut m, PMR, Size::Word, 0x1234);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 0xFFFF);
+    w(&mut m, PCSR, Size::Word, OVW);
+    w(&mut m, PMR, Size::Word, 0x0042);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 0x0042);
+    assert_eq!(next(&m, id), None, "still disabled");
+}
+
+#[test]
+fn pif_sets_one_count_after_pcntr_reads_0_measured() {
+    // measured on an MCF54415 (PIT2, PRE 8, PMR 2, RLD): PCNTR reads 2, 1, 0, one count each 256 bus clocks,
+    // and PIF sets one count after PCNTR first reads 0, together with the reload
+    let (mut m, id) = regs();
+    w(&mut m, PMR, Size::Word, 2);
+    w(&mut m, PCSR, Size::Word, 0x0800 | RLD | EN);
+    for (k, count) in [2, 1, 0].into_iter().enumerate() {
+        let k = k as u64;
+        idle(&mut m, 256 * k);
+        assert_eq!(r(&mut m, PCNTR, Size::Word), count);
+        idle(&mut m, 256 * k + 255);
+        assert_eq!(r(&mut m, PCNTR, Size::Word), count);
+        assert_eq!(r(&mut m, PCSR, Size::Word) & PIF, 0);
+    }
+    idle(&mut m, 3 * 256);
+    assert_ne!(r(&mut m, PCSR, Size::Word) & PIF, 0);
+    assert_eq!(r(&mut m, PCNTR, Size::Word), 2, "reloaded with PIF");
+    assert_eq!(m.device::<Pit>(id).expiries(), 1);
 }
 
 #[test]
