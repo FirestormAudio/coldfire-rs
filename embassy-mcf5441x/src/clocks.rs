@@ -55,7 +55,9 @@ pub const fn pit_reload(bus_hz: u32, tick_hz: u32) -> (u8, u16) {
 
 const BANK1: u8 = 0x80;
 
-/// Module clock gates (slot numbers from RM ch. 9). Bank 0 is PPMCR0; bank 1 (`0x80 | slot`) is PPMCR1.
+/// Module clock gates (slot numbers from RM ch. 9). Bank 0 is PPMCR0; bank 1 (`0x80 | slot`) is PPMCR1. More gates
+/// are added as drivers need them, so a match on it needs a wildcard arm.
+#[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Gate {

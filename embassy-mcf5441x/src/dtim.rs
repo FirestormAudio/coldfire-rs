@@ -22,7 +22,8 @@ const DTMR_RST: u16 = 1;
 /// DTER CAP and REF: write 1 to clear (RM Table 39-4).
 const DTER_CLEAR: u8 = 0x03;
 
-/// The input clock (DTMR CLK, RM Table 39-2).
+/// The input clock (DTMR CLK, RM Table 39-2). The DTnIN pin may join these, so a match on it needs a wildcard arm.
+#[non_exhaustive]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Clock {
     /// The internal bus clock.
