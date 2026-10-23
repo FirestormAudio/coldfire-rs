@@ -23,9 +23,9 @@ const DDR: (u32, u32) = (0x4000_0000, 0x0800_0000);
 const STACK_TOP: u32 = 0x4800_0000;
 /// The SRAM where the programs' RAMBAR puts it.
 const SRAM: (u32, u32) = (0x8000_0000, 0x1_0000);
-/// The bus clock the HAL finds: the chip's reset PLL (FBKDIV 9, REFDIV ÷2, OUTDIV2 3) from the programs' 24 MHz
-/// reference, a 120 MHz VCO over 4. One tick is one bus clock (the PIT counts one per tick).
-const BUS_HZ: u64 = 30_000_000;
+/// The bus clock the HAL finds: the chip's reset PLL (FBKDIV 9, REFDIV 0, OUTDIV2 3) from the programs' 24 MHz
+/// reference, a 240 MHz VCO over 4. One tick is one bus clock (the PIT counts one per tick).
+const BUS_HZ: u64 = 60_000_000;
 const TICKS_PER_MS: u64 = BUS_HZ / 1000;
 
 fn root() -> PathBuf {
@@ -440,4 +440,23 @@ fn ssi_streams_render_output() {
     let capture = m.device_mut::<Ssi>(chip.ssi[0]).take_capture();
     // 20 blocks of 64 frames were rendered; half of them is well inside the stream
     ssi_follows(&capture, 1, 640);
+}
+
+#[test]
+fn time_follows_the_emulated_clock() {
+    let Some(elf) = elf("time") else { return };
+    let (mut m, _) = machine(ChipOptions::default());
+    let r = run(&mut m, &elf, 1_000);
+    passed(&r);
+    assert_eq!(r.stdout.lines().count(), 4, "{}", r.stdout);
+}
+
+#[test]
+fn an_interrupt_executor_preempts_a_lower_one() {
+    let Some(elf) = elf("executor-interrupt") else {
+        return;
+    };
+    let (mut m, _) = machine(ChipOptions::default());
+    let r = run(&mut m, &elf, 100);
+    passed(&r);
 }
