@@ -260,3 +260,27 @@ def test_ssi_tokens_and_pins():
     for pin, kind in (("PH3", "BclkPin"), ("PH5", "FsPin"), ("PH6", "TxdPin"), ("PH7", "RxdPin"), ("PH4", "MclkPin")):
         assert re.search(rf"pin!\((#\[[^\]]*\]\s*)?SSI0, {kind}, {pin}, PAR_SSI0[HL], \d, 2, Primary\);", s), (pin, kind)
     assert re.search(r"clkin!\((#\[[^\]]*\]\s*)?PH4, PAR_SSI0H, 0, 2, Alt1\);", s)
+
+
+def render_eport():
+    return halgen.render_eport_pins(json.loads((HAL / "pins.json").read_text()),
+                                    json.loads((ROOT / "pac-gen/parts_map.json").read_text()),
+                                    json.loads((HAL / "pinmux.json").read_text()))
+
+
+EPORT_ROW = re.compile(r"irq!\((?:#\[[^\]]*\]\s*)?(\d), (P[A-K]\d), (PAR_\w+), (\d), (\d), (\w+)\);")
+
+
+def test_eport_pins_output_is_committed():
+    assert (HAL / "src/eport/pins.rs").read_text() == render_eport()
+
+
+def test_eport_pins_are_the_settled_irq_pads():
+    # Table 15-2's IRQ2 PC2, IRQ3 PC3 and IRQ6 PC5 on PAR_IRQ0L; IRQ1 PC1, IRQ4 PC4 and IRQ7 PC6 are on PAR_IRQ0H,
+    # whose fields are not verified, so they are left out
+    assert set(EPORT_ROW.findall(render_eport())) == {
+        ("2", "PC2", "PAR_IRQ0L", "2", "2", "Primary"),
+        ("3", "PC3", "PAR_IRQ0L", "4", "2", "Primary"),
+        ("6", "PC5", "PAR_IRQ0L", "6", "2", "Primary"),
+    }
+    assert f"irq!(#[cfg({P256})] 2, PC2," in render_eport()
