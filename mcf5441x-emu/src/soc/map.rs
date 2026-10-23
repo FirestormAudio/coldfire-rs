@@ -402,9 +402,9 @@ impl Chip {
 
     /// Drive the pad of edge port pin IRQ`n` at `level`, for the edge port ([`Eport::set_pin`]) and as its GPIO
     /// port C pin ([`GpioPorts::drive`]), as the one pad it is: IRQ1 PC1, IRQ2 PC2, IRQ3 PC3, IRQ4 PC4, IRQ6 PC5 and
-    /// IRQ7 PC6 (RM Table 15-2's primary functions). guess: the GPIO data register reads the pad while it is muxed
-    /// to IRQ`n`, as the RM's port data registers read the pins whatever their function (not measured). Panics for
-    /// IRQ0 and IRQ5, which have no pad here.
+    /// IRQ7 PC6 (RM Table 15-2's primary functions). The model's PPDSDR reads the pad whatever its PAR field; on the
+    /// part a pad muxed to IRQ`n` reads 0 there (measured on an MCF54415). Panics for IRQ0 and IRQ5, which have no
+    /// pad here.
     pub fn drive_irq(&self, m: &mut Machine, n: u8, level: bool) {
         let bit = match n {
             1..=4 => n,

@@ -12,7 +12,7 @@ An [Embassy](https://embassy.dev) HAL for the NXP MCF5441x (ColdFire V4e: MCF544
 | `executor` | A thread executor that idles in `stop`, and an interrupt executor driven by a software interrupt. |
 | time driver | embassy-time on one PIT, ticking at 1 kHz. |
 | `gpio`, `pinmux` | `Output`, `Input` and `Flex` pins, pad slew rates. Each driver muxes its own pads. |
-| `eport` | The edge port's IRQ pads as async inputs: `Input` with `embedded-hal-async`'s `Wait` (edges and levels) and `InputPin`; IRQ2, IRQ3 and IRQ6 on MCF54415–MCF54418. |
+| `eport` | The edge port's IRQ pads as async inputs: `Input` with `embedded-hal-async`'s `Wait` (edges and levels) and `InputPin`; IRQ1, IRQ4 and IRQ7 on every part, IRQ2, IRQ3 and IRQ6 on MCF54415–MCF54418. |
 | `dma` | eDMA channels and transfer descriptors. |
 | `dtim` | DMA timers as free-running 32-bit timestamp counters (`Timestamp`) at the bus clock or bus/16, through a prescaler. |
 | `uart` | Blocking `Uart`, `UartTx` and `UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
@@ -130,8 +130,7 @@ static BOOT: BootConfig = BootConfig::builder(RefClock::Crystal(25_000_000), Pll
 
 - **Under `bootloader`, a bootloader has set up the PLL, the DDR controller and the boot pin mux.** The HAL reads
   the clocks; it doesn't program them. Under cold boot, the boot part did that.
-- **Pads with an uncertain pin-mux layout are left alone by GPIO.** That covers PAR_CS, PAR_IRQ0H and PAR_DSPIOWL's
-  OWDAT field, the serial-boot flash chip select (PC0), and the PAR_FEC group-mode pads.
+- **Some pads are left alone by GPIO:** the serial-boot flash chip select (PC0) and the PAR_FEC group-mode pads.
 - **Data cache:** the DMA drivers assume it is off.
 
 ## Building

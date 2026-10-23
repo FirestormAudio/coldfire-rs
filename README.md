@@ -35,7 +35,7 @@ chip (see [hal-tests/README.md](hal-tests/README.md)).
 | GPIO, pin mux | `Output`, `Input` and `Flex` pins. Each driver muxes its own pads, from the reference manual's pin table. |
 | PIT | The embassy-time driver, on one PIT at 1 kHz. |
 | INTC | Interrupt levels, `bind_interrupts!`, software pends, and thread and interrupt executors. |
-| EPORT | The IRQ pads as async inputs: `Wait` for edges and levels, `InputPin` (`embedded-hal-async`). IRQ2, IRQ3 and IRQ6 on MCF54415–MCF54418; emulation-tested only. |
+| EPORT | The IRQ pads as async inputs: `Wait` for edges and levels, `InputPin` (`embedded-hal-async`). IRQ1, IRQ4 and IRQ7 on every part, IRQ2, IRQ3 and IRQ6 on MCF54415–MCF54418; emulation-tested only. |
 | eDMA | Channels and transfer descriptors, as used by the drivers. |
 | DMA timers | `Timestamp`: a free-running 32-bit counter at the bus clock or bus/16, through a prescaler. Emulation-tested only. |
 | UART | Blocking `Uart`/`UartTx`/`UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |

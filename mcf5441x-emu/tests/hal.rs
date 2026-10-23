@@ -433,13 +433,14 @@ fn eport_waits_for_edges_and_levels() {
             (40, &mut |m: &mut Machine| c.drive_irq(m, 2, false)),
             (60, &mut |m: &mut Machine| c.drive_irq(m, 6, false)),
             (70, &mut |m: &mut Machine| c.drive_irq(m, 6, true)),
+            (80, &mut |m: &mut Machine| c.drive_irq(m, 7, false)),
         ],
         200,
     );
     passed(&r);
     assert_eq!(
         r.stdout.lines().filter(|l| l.starts_with("step")).count(),
-        8 + 5,
+        9 + 6,
         "{}",
         r.stdout
     );

@@ -93,10 +93,14 @@ def test_reserved_fields_are_settled_and_say_why():
     assert pcs1["verified"] and "SBF_CS" in pcs1["reserved"]
 
 
+# measured on an MCF54415: PAR_IRQ01 holds two bits, and 10 selects IRQ1 as 11 does (01 leaves the pad GPIO)
+TWO_BITS_WITHOUT_ALTERNATES = {"PAR_IRQ01"}
+
+
 def test_pins_without_alternates_have_one_bit_fields():
     for f in MAP["fields"]:
         if PINS[f["pin"]]["alt1"] is None and PINS[f["pin"]]["alt2"] is None:
-            assert f["width"] == 1, f
+            assert f["width"] == (2 if f["field"] in TWO_BITS_WITHOUT_ALTERNATES else 1), f
 
 
 def test_flexbus_control_fields_are_settled():

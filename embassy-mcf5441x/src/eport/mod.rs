@@ -1,19 +1,22 @@
 //! The edge port (RM ch. 18): its IRQ pads as async inputs ([`Input`]: embedded-hal-async `Wait`, embedded-hal
 //! `InputPin`).
 //!
-//! Every wait is an edge: the pin's EPPAR field is set to the edge, its flag (EPFR) cleared and its interrupt
-//! (EPIER) enabled before anything else, and the handler disables it again and wakes the waiter. A level wait
-//! (`wait_for_high`, `wait_for_low`) arms the edge that would reach the level, then reads the level and returns at
-//! once if the pin is already there, so an edge between the read and the wait is never lost. Dropping a wait
-//! disarms its pin. Level-sensitive mode is not used.
+//! A wait arms its pin: the pin's EPPAR field is set to the sense, its flag (EPFR) cleared and its interrupt (EPIER)
+//! enabled before anything else, and the handler disables it again and wakes the waiter. Dropping a wait disarms
+//! its pin. The edge waits arm their edge. `wait_for_low` arms the level-sensitive mode, whose request is the pin
+//! being low, so it fires at once on a low pin. `wait_for_high` arms the rising edge, then reads the level and
+//! returns at once if the pin is high or the edge already came.
 //!
-//! The edge port has no data register (RM Table 18-2), so the level is read from the pad's GPIO port data register
-//! (PPDSDR). guess: that register reads the pad while it is muxed to IRQn, as the RM has the port data registers read
-//! the pins whatever their function; not measured.
+//! The edge port has no data register (RM Table 18-2), and a pad muxed to IRQn reads 0 in its GPIO port's PPDSDR
+//! (measured on an MCF54415). The level is read through the interrupt controller instead: with the pin
+//! level-sensitive and its EPIER bit set, its INTC0 IPR bit is set while the pin is low, whether or not the source
+//! is masked (measured on an MCF54415). [`Input::is_high`] sets that up for the read and puts the pin's EPPAR and
+//! EPIER back, with the source masked meanwhile. A rising edge in the few instructions between that read and the
+//! rising edge's return to EPPAR is not seen, so `wait_for_high` can miss a pin that rises then and stays high.
 //!
 //! Each pad's source on INTC0 (source n for IRQn, RM Table 17-15) takes its level from its ICR, as every source
-//! does: [`Config::priority`]. The pads offered are those whose PAR field is settled (`pins.rs`): IRQ2, IRQ3 and IRQ6
-//! on the 256-pin parts; IRQ1, IRQ4 and IRQ7 wait for PAR_IRQ0H's layout.
+//! does: [`Config::priority`]. The pads offered are those whose PAR field is settled (`pins.rs`): IRQ1-IRQ7 on the
+//! 256-pin parts.
 use core::convert::Infallible;
 use core::future::poll_fn;
 use core::marker::PhantomData;
@@ -28,6 +31,7 @@ use crate::gpio::{self, Pull};
 use crate::interrupt::typelevel::{Binding, Handler, Interrupt};
 use crate::interrupt::Priority;
 use crate::pinmux;
+use crate::pac;
 
 mod pins;
 
@@ -39,10 +43,12 @@ fn base() -> usize {
     crate::pac::EPORT.as_ptr() as usize
 }
 
-/// The edge an armed pin waits for (EPPAR modes, RM Table 18-3).
+/// What an armed pin waits for (EPPAR modes, RM Table 18-3).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u16)]
 enum Edge {
+    /// Level-sensitive: the pin being low.
+    Low = 0b00,
     Rising = 0b01,
     Falling = 0b10,
     Both = 0b11,
@@ -101,6 +107,32 @@ impl<I: Interrupt> Handler<I> for InterruptHandler {
     }
 }
 
+/// The pad of pin `n`'s level, and whether its flag was set (an armed edge came). The pin is level-sensitive with
+/// its interrupt enabled for the read of its IPR bit, its source masked meanwhile; its flag is cleared, as a set flag
+/// would show in IPR too (RM 18.4.2); its EPPAR field and EPIER bit are put back.
+fn sample(n: u8) -> (bool, bool) {
+    let (mask, _) = eppar_field(n, Edge::Low);
+    critical_section::with(|_| unsafe {
+        let unmasked = pac::INTC0.imrl().read().int_mask() & 1 << n == 0;
+        pac::INTC0.simr().write(|w| w.set_simr(n));
+        let (par, ier, fr) = (base() + EPPAR, base() + EPIER, base() + EPFR);
+        let (p, e) = (coldfire::mmio::r16(par), coldfire::mmio::r8(ier));
+        let latched = coldfire::mmio::r8(fr) & 1 << n != 0;
+        coldfire::mmio::w8(fr, 1 << n);
+        coldfire::mmio::w16(par, p & !mask);
+        coldfire::mmio::w8(ier, e | 1 << n);
+        // guess: two reads back give the pad's synchronizer the bus clocks it needs; only measured over BDM
+        let _ = (coldfire::mmio::r16(par), coldfire::mmio::r8(ier));
+        let low = pac::INTC0.iprl().read().int() & 1 << n != 0;
+        coldfire::mmio::w8(ier, e);
+        coldfire::mmio::w16(par, p);
+        if unmasked {
+            pac::INTC0.cimr().write(|w| w.set_cimr(n));
+        }
+        (!low, latched)
+    })
+}
+
 /// Pin `n` waits for `edge`: its flag cleared, its mode set, then its interrupt enabled.
 fn arm(n: u8, edge: Edge) {
     FIRED[n as usize].store(false, Ordering::Release);
@@ -135,8 +167,6 @@ impl Drop for Armed {
 /// An edge port input.
 pub struct Input<'d> {
     n: u8,
-    port: u8,
-    bit: u8,
     _p: PhantomData<&'d mut ()>,
 }
 
@@ -149,33 +179,36 @@ impl<'d> Input<'d> {
         _irq: impl Binding<P::Interrupt, InterruptHandler> + 'd,
         config: Config,
     ) -> Self {
-        let (n, port, bit) = (P::IRQ, gpio::SealedPin::port(&*pin), gpio::SealedPin::bit(&*pin));
-        gpio::set_pull(port, bit, pull);
+        let n = P::IRQ;
+        gpio::set_pull(gpio::SealedPin::port(&*pin), gpio::SealedPin::bit(&*pin), pull);
         pinmux::set_function(P::PAR, P::FUNCTION);
         clocks::ungate(Gate::Eport);
         disarm(n);
         P::Interrupt::set_priority(config.priority);
         // SAFETY: the binding proves the handler is installed; the pin stays disarmed until a wait arms it
         unsafe { P::Interrupt::enable() };
-        Self { n, port, bit, _p: PhantomData }
+        Self { n, _p: PhantomData }
     }
 
-    /// The pad's level (PPDSDR).
+    /// The pad's level, read through INTC0 IPR (see the module docs).
     pub fn is_high(&self) -> bool {
-        gpio::pin_state(self.port, self.bit)
+        sample(self.n).0
     }
 
     pub fn is_low(&self) -> bool {
         !self.is_high()
     }
 
-    /// Wait for `edge`, or return at once if `level` is given and the pin is already there.
-    async fn wait(&mut self, edge: Edge, level: Option<bool>) {
+    /// Wait for `edge`; with `high`, return at once if the pin is high or the edge already came.
+    async fn wait(&mut self, edge: Edge, high: bool) {
         let n = self.n;
         arm(n, edge);
         let _armed = Armed(n);
-        if level.is_some_and(|l| self.is_high() == l) {
-            return;
+        if high {
+            let (level, latched) = sample(n);
+            if level || latched {
+                return;
+            }
         }
         poll_fn(|cx| {
             WAKERS[n as usize].register(cx.waker());
@@ -201,27 +234,27 @@ impl embedded_hal::digital::InputPin for Input<'_> {
 
 impl embedded_hal_async::digital::Wait for Input<'_> {
     async fn wait_for_high(&mut self) -> Result<(), Infallible> {
-        self.wait(Edge::Rising, Some(true)).await;
+        self.wait(Edge::Rising, true).await;
         Ok(())
     }
 
     async fn wait_for_low(&mut self) -> Result<(), Infallible> {
-        self.wait(Edge::Falling, Some(false)).await;
+        self.wait(Edge::Low, false).await;
         Ok(())
     }
 
     async fn wait_for_rising_edge(&mut self) -> Result<(), Infallible> {
-        self.wait(Edge::Rising, None).await;
+        self.wait(Edge::Rising, false).await;
         Ok(())
     }
 
     async fn wait_for_falling_edge(&mut self) -> Result<(), Infallible> {
-        self.wait(Edge::Falling, None).await;
+        self.wait(Edge::Falling, false).await;
         Ok(())
     }
 
     async fn wait_for_any_edge(&mut self) -> Result<(), Infallible> {
-        self.wait(Edge::Both, None).await;
+        self.wait(Edge::Both, false).await;
         Ok(())
     }
 }
@@ -232,7 +265,8 @@ mod tests {
 
     #[test]
     fn eppar_fields_are_two_bits_per_pin() {
-        // RM Table 18-3: 01 rising, 10 falling, 11 both
+        // RM Table 18-3: 00 level, 01 rising, 10 falling, 11 both
+        assert_eq!(eppar_field(1, Edge::Low), (0b11 << 2, 0));
         assert_eq!(eppar_field(2, Edge::Rising), (0b11 << 4, 0b01 << 4));
         assert_eq!(eppar_field(6, Edge::Falling), (0b11 << 12, 0b10 << 12));
         assert_eq!(eppar_field(7, Edge::Both), (0b11 << 14, 0b11 << 14));

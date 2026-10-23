@@ -41,7 +41,7 @@ def test_halgen_gates_pins_by_package():
     assert f"#[cfg({P256})] PB6," in out
     assert '#[cfg(feature = "mcf54410")] PH2,' in out
     assert "\n    PA7,\n" in out
-    assert f"#[cfg({P256})] impl_pin!(PB6, 1, 6, None);" in out
+    assert f"#[cfg({P256})] impl_pin!(PB6, 1, 6, Some(crate::pinmux::ParField::new(crate::pinmux::PAR_CS, 6, 2)));" in out
 
 
 def test_halgen_leaves_the_time_driver_pit_out():
@@ -79,9 +79,9 @@ def test_pins_carry_their_par_field():
     assert "impl_pin!(PI2, 8, 2, Some(crate::pinmux::ParField::new(crate::pinmux::PAR_DEBUGH0, 0, 1)));" in out
 
 
-def test_unverified_and_group_pins_get_no_par():
+def test_reserved_and_group_pins_get_no_par():
     out = render()
-    for p, port, bit in (("PC0", 2, 0), ("PB3", 1, 3), ("PC4", 2, 4), ("PD3", 3, 3), ("PJ3", 9, 3), ("PK0", 10, 0), ("PI1", 8, 1)):
+    for p, port, bit in (("PC0", 2, 0), ("PJ3", 9, 3), ("PK0", 10, 0), ("PI1", 8, 1)):
         assert re.search(rf"impl_pin!\({p}, {port}, {bit}, None\);", out), p
 
 
@@ -276,9 +276,11 @@ def test_eport_pins_output_is_committed():
 
 
 def test_eport_pins_are_the_settled_irq_pads():
-    # Table 15-2's IRQ2 PC2, IRQ3 PC3 and IRQ6 PC5 on PAR_IRQ0L; IRQ1 PC1, IRQ4 PC4 and IRQ7 PC6 are on PAR_IRQ0H,
-    # whose fields are not verified, so they are left out
+    # Table 15-2's IRQ2 PC2, IRQ3 PC3 and IRQ6 PC5 on PAR_IRQ0L, and IRQ1 PC1, IRQ4 PC4 and IRQ7 PC6 on PAR_IRQ0H
     assert set(EPORT_ROW.findall(render_eport())) == {
+        ("1", "PC1", "PAR_IRQ0H", "0", "2", "Primary"),
+        ("4", "PC4", "PAR_IRQ0H", "2", "2", "Primary"),
+        ("7", "PC6", "PAR_IRQ0H", "4", "1", "Primary"),
         ("2", "PC2", "PAR_IRQ0L", "2", "2", "Primary"),
         ("3", "PC3", "PAR_IRQ0L", "4", "2", "Primary"),
         ("6", "PC5", "PAR_IRQ0L", "6", "2", "Primary"),

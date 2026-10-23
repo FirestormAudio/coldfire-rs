@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `eport`: IRQ1 (PC1), IRQ4 (PC4) and IRQ7 (PC6), on every part. Their PAR_IRQ0H fields are measured on an MCF54415.
+- `gpio`: the pads on PAR_CS (PB3–PB6), PAR_IRQ0H (PC1, PC4, PC6) and PAR_DSPIOWL's OWDAT (PD3) are muxed to GPIO
+  when taken as GPIO; their layouts are measured on an MCF54415, so they are no longer left alone.
+
+### Fixed
+
+- `eport`: a pin's level is read through INTC0 IPR, with the pin level-sensitive for the read. GPIO PPDSDR, which
+  0.3.0 read, gives 0 for a pad muxed to IRQn, so `is_high` was always false and `wait_for_low` always returned at
+  once. `wait_for_low` now arms the level-sensitive mode.
+
 ## 0.3.0
 
 ### Breaking

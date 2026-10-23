@@ -210,9 +210,13 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   write that changes a port's direction or latch is logged (`GpioPorts::changes`).
 - **Edge port 0** (RM ch. 18): per-pin level or edge detection, EPIER and EPFR on INTC0 sources 1-7; the host drives
   pins IRQ1-IRQ7 with `Eport::set_pin` inside `Machine::with_device`, and a change asserts or drops the interrupt at
-  once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2 lists):
-  the program cannot read the pin levels. A set EPF bit requests in any mode (RM Table 18-4). While its clock gate is
-  closed no edge is latched and level-sensitive pins still request (guess, after RM 18.2's stop mode).
+  once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2 lists),
+  and the window repeats its eight bytes every 8 (measured): a program reads a level as INTC0's IPR bit of a
+  level-sensitive pin with EPIE set, which follows the pin even with the source masked (measured). A set EPF bit
+  requests in any mode (RM Table 18-4). While its clock gate is closed no edge is latched and level-sensitive pins
+  still request (guess, after RM 18.2's stop mode). The PAR fields aren't consulted: on the part the edge port sees a
+  pad only while it is muxed to IRQ*n*, and the pad's PPDSDR bit reads 0 meanwhile (measured); here it sees every pin,
+  and PPDSDR reads the level.
 - **eDMA** (RM ch. 19): 64 channels served at their peripheral's request, by START/SSRT or by a channel link; 8-bit,
   16-bit, 32-bit and 16-byte transfers (16-byte measured on an MCF54415; there is no 32-byte size), mixed source and
   destination sizes, SMOD/DMOD rings, SLAST/DLAST, INT_HALF/INT_MAJOR, D_REQ, scatter/gather and minor- and major-loop

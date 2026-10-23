@@ -19,10 +19,14 @@ const FLAGS: u32 = 0x4;
 /// - EPFR (reset 0): set by the selected edge on a pin in an edge mode, whatever EPIER holds; writing 1 clears a
 ///   bit (RM Table 18-5). Pin changes in level mode leave it alone.
 ///
-/// There is no EPDDR, EPDR or EPPDR (as RM Table 18-2 lists): +2, +4 and +5 read 0 and a write to +2 or +4 is
-/// ignored, and every byte of +0..+7 reads 0 after reset, while EPPAR and EPIER read back what was written
-/// (measured on an MCF54415). guess: a write to +5 or +7 is ignored too, and the rest of the window reads 0 and
-/// ignores writes. The pins are inputs only; the program cannot read their levels.
+/// There is no EPDDR, EPDR or EPPDR (as RM Table 18-2 lists): +2, +4, +5 and +7 read 0 and drop writes, and every
+/// byte of +0..+7 reads 0 after reset, while EPPAR and EPIER read back what was written; the rest of the window
+/// repeats those eight bytes every 8 (writes at +8 and +0x10 landed in EPPAR, +0x3FFE read EPFR's word; measured on
+/// an MCF54415). The pins are inputs only. A program reads a pin's level through the interrupt controller: with
+/// the pin level-sensitive and its EPIE bit set, its source requests while it is low.
+///
+/// On the part the edge port sees a pad only while the pad is muxed to IRQ*n* (measured on an MCF54415); the model
+/// sees every pin whatever its PAR field, which it doesn't consult.
 ///
 /// The pins IRQ1-IRQ7 are inputs the host drives with [`Eport::set_pin`], inside
 /// [`Machine::with_device`](crate::Machine::with_device); a change asserts or drops the interrupt at once (the
@@ -147,6 +151,7 @@ impl Device for Eport {
             );
             return 0;
         }
+        let offset = offset & 7;
         lane_read(self.register(offset & !3), offset, size)
     }
 
@@ -163,6 +168,7 @@ impl Device for Eport {
                 crossing("Edge port", offset, size, "write"),
             );
         }
+        let offset = offset & 7;
         let reg = offset & !3;
         let covered = lane_merge(0, offset, size, u32::MAX);
         let new = lane_merge(self.register(reg), offset, size, value);

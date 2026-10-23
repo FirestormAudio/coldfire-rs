@@ -1,8 +1,8 @@
-//! The edge port's async waits on IRQ2 (PC2) and IRQ6 (PC5), both pulled up, against the host's edges at fixed
-//! times of the emulated clock (GETTIMEOFDAY, µs since the start): IRQ2 is low from the start and rises at 10 ms;
-//! IRQ6 falls at 20 ms, rises at 30 ms, falls at 60 ms and rises at 70 ms; IRQ2 falls at 40 ms. Each wait must wake
-//! within 1 ms of its edge. A wait dropped by `select` leaves its pin disarmed (EPIER), and a later wait on that pin
-//! still works.
+//! The edge port's async waits on IRQ2 (PC2), IRQ6 (PC5) and IRQ7 (PC6), all pulled up, against the host's edges
+//! at fixed times of the emulated clock (GETTIMEOFDAY, µs since the start): IRQ2 is low from the start and rises at
+//! 10 ms; IRQ6 falls at 20 ms, rises at 30 ms, falls at 60 ms and rises at 70 ms; IRQ2 falls at 40 ms; IRQ7 falls at
+//! 80 ms. Each wait must wake within 1 ms of its edge. A wait dropped by `select` leaves its pin disarmed (EPIER),
+//! and a later wait on that pin still works. Reading a level leaves the pin's EPPAR field and EPIER bit as they were.
 #![no_std]
 #![no_main]
 
@@ -24,6 +24,7 @@ const REF_HZ: u32 = 24_000_000;
 bind_interrupts!(struct Irqs {
     EPORT_EPF2 => InterruptHandler;
     EPORT_EPF6 => InterruptHandler;
+    EPORT_EPF7 => InterruptHandler;
 });
 
 /// The wait just ended within 1 ms after the host's edge at `ms`.
@@ -34,7 +35,7 @@ fn woke(step: u32, ms: u64) {
 }
 
 #[embassy_executor::task]
-async fn main_task(mut irq2: Input<'static>, mut irq6: Input<'static>) {
+async fn main_task(mut irq2: Input<'static>, mut irq6: Input<'static>, mut irq7: Input<'static>) {
     say!("step 1");
     let _ = irq2.wait_for_low().await;
     let us = gettimeofday();
@@ -72,6 +73,14 @@ async fn main_task(mut irq2: Input<'static>, mut irq6: Input<'static>) {
     check!(irq2.is_low() && irq6.is_low(), "step 8: both pins are low");
     Timer::at(Instant::from_millis(75)).await;
     check!(irq6.is_high(), "step 8: IRQ6 rose at 70 ms");
+    check!(irq7.is_high(), "step 8: IRQ7 is high");
+    // IRQ2's last wait was both edges, IRQ6's the falling edge
+    let (eppar, epier) = (pac::EPORT.eppar().read(), pac::EPORT.epier().read().0);
+    check!(eppar == 0b11 << 4 | 0b10 << 12 && epier == 0, "step 8: the reads left EPPAR {:#x} EPIER {:#x}", eppar, epier);
+
+    say!("step 9");
+    let _ = irq7.wait_for_low().await;
+    woke(9, 80);
     pass()
 }
 
@@ -82,9 +91,10 @@ fn main() -> ! {
     let p = embassy_mcf5441x::init(embassy_mcf5441x::Config::new(REF_HZ));
     let irq2 = Input::new(p.PC2, Pull::Up, Irqs, Config::default());
     let irq6 = Input::new(p.PC5, Pull::Up, Irqs, Config::default());
+    let irq7 = Input::new(p.PC6, Pull::Up, Irqs, Config::default());
     // SAFETY: start-up done; the edge port's and the time driver's interrupts are ready
     unsafe { coldfire::interrupt::enable() };
     EXECUTOR.init(Executor::new()).run(|spawner: Spawner| {
-        spawner.spawn(main_task(irq2, irq6).unwrap());
+        spawner.spawn(main_task(irq2, irq6, irq7).unwrap());
     })
 }

@@ -96,12 +96,6 @@ pub(crate) fn set_pull(port: u8, bit: u8, pull: Pull) {
     critical_section::with(|_| unsafe { coldfire::mmio::w16(a, (coldfire::mmio::r16(a) & !mask) | v) });
 }
 
-/// Pin `bit` of `port`'s state (PPDSDR read), whatever the pad's function. guess: the RM's port data registers read
-/// the pins whatever their function; not measured for a pad muxed away from GPIO.
-pub(crate) fn pin_state(port: u8, bit: u8) -> bool {
-    unsafe { coldfire::mmio::r8(byte_reg(base(), PPDSDR, port)) & 1 << bit != 0 }
-}
-
 /// (mask, value) of a pin's PUE/PUS pair in its port's PCR.
 const fn pcr_bits(bit: u8, pull: Pull) -> (u16, u16) {
     let mask = 0b11 << (2 * bit);

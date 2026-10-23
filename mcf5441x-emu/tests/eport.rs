@@ -127,8 +127,7 @@ fn eport_flag_clears_on_write_one() {
 #[test]
 fn eport_has_no_ddr_dr_or_pdr_measured() {
     // measured on an MCF54415: writes of 0x02 to +2 and +4 read back 0 (no EPDDR, no EPDR), +5 reads 0 (no
-    // EPPDR), and EPPAR (word, 0x0030) and EPIER (0x04) read back as written. guess: writes to +5 and +7 are
-    // ignored too.
+    // EPPDR), writes to +5 and +7 are dropped, and EPPAR (word, 0x0030) and EPIER (0x04) read back as written
     let (mut m, chip) = chip();
     w(&mut m, EPORT + 2, Size::Byte, 0x02);
     w(&mut m, EPORT + 4, Size::Byte, 0x02);
@@ -143,7 +142,7 @@ fn eport_has_no_ddr_dr_or_pdr_measured() {
     assert_eq!(r(&mut m, EPPAR, Size::Word), 0x0030);
     assert_eq!(r(&mut m, EPIER, Size::Byte), 0x04);
     assert_eq!(r(&mut m, EPORT + 2, Size::Word), 0x0004);
-    // a low pin shows nowhere in the registers: the pins are inputs the program cannot read
+    // a low pin shows nowhere in the edge port's registers
     pin(&mut m, &chip, 6, false);
     assert_eq!(r(&mut m, EPORT + 4, Size::Word), 0);
     assert!(!m.device::<Eport>(chip.eport).pin(6));
@@ -154,6 +153,38 @@ fn eport_has_no_ddr_dr_or_pdr_measured() {
     );
     let d = m.take_refusal().expect("a refusal").detail;
     assert!(d.contains("longword"), "{d}");
+}
+
+#[test]
+fn eport_window_repeats_its_eight_bytes_measured() {
+    // measured on an MCF54415: after 0xFF at +8 and 0xFFFF at +0x10, EPPAR read 0xFFFF, +8 0xFF, +0x10 0xFFFF and
+    // +0x3FFE (EPFR's word) 0
+    let (mut m, _) = chip();
+    w(&mut m, EPORT + 8, Size::Byte, 0xFF);
+    assert_eq!(r(&mut m, EPPAR, Size::Word), 0xFF00);
+    w(&mut m, EPORT + 0x10, Size::Word, 0xFFFF);
+    assert_eq!(r(&mut m, EPPAR, Size::Word), 0xFFFF);
+    assert_eq!(r(&mut m, EPORT + 8, Size::Byte), 0xFF);
+    assert_eq!(r(&mut m, EPORT + 0x3FFE, Size::Word), 0);
+    w(&mut m, EPORT + 0x3FFB, Size::Byte, 0x04);
+    assert_eq!(r(&mut m, EPIER, Size::Byte), 0x04);
+}
+
+/// INTC0 IPRL (RM 17.3.1).
+const IPRL: u32 = 0xFC04_8004;
+
+#[test]
+fn eport_level_shows_in_ipr_while_masked_measured() {
+    // measured on an MCF54415: a level-sensitive pin with its EPIE bit set sets its IPR bit while low, with the
+    // source masked in IMR (the reset state)
+    let (mut m, chip) = chip();
+    w(&mut m, EPPAR, Size::Word, LEVEL);
+    w(&mut m, EPIER, Size::Byte, 1 << 3);
+    assert_eq!(r(&mut m, IPRL, Size::Long) & 1 << 3, 0);
+    pin(&mut m, &chip, 3, false);
+    assert_eq!(r(&mut m, IPRL, Size::Long) & 1 << 3, 1 << 3);
+    pin(&mut m, &chip, 3, true);
+    assert_eq!(r(&mut m, IPRL, Size::Long) & 1 << 3, 0);
 }
 
 /// PPMSR0 and PPMCR0 (RM 9.2.2, 9.2.3); the edge port is CD36 (RM Table 9-5).
