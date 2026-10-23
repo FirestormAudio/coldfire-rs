@@ -1,10 +1,10 @@
-//! eSDHC (RM ch. 25) with one eMMC behind it, read-only: a 4-bit high-speed bus, CMD18 multi-block reads that the
-//! eDMA moves from DATPORT (the controller's request is fixed to channel 59), and completion on the eSDHC
-//! interrupt. Bring-up is polled with bounded waits (the time driver's 1 kHz clock, plus a poll-count backstop);
-//! reads are async and cancel-safe.
+//! eSDHC (RM ch. 25) with one eMMC behind it: a 4-bit high-speed bus, CMD18 multi-block reads and CMD25 multi-block
+//! writes that the eDMA moves through DATPORT (the controller's request is fixed to channel 59), TRIM, and
+//! completion on the eSDHC interrupt. Bring-up is polled with bounded waits (the time driver's 1 kHz clock, plus a
+//! poll-count backstop); reads, writes and TRIM are async. Reads and writes are cancel-safe.
 //!
-//! Read-only by construction: the driver can send only the commands in `cmd::Cmd`, and none of them programs,
-//! erases or reconfigures the card.
+//! [`Esdhc::write`] and [`Esdhc::erase`] change the card; nothing else does (CMD6 switches only the volatile bus
+//! width and timing). The write side is tested on mcf5441x-emu only: it hasn't run on hardware.
 //!
 //! Data lands as the controller delivers 32-bit DATPORT words in its reset (address-invariant) endian mode:
 //! EXT_CSD byte `i` is at `i ^ 3` of the received block, which [`Esdhc::ext_csd`] undoes. The eDMA assumes the data
@@ -151,7 +151,7 @@ fn now_ms() -> u64 {
     }
 }
 
-/// A read buffer at `addr` must take 32-bit eDMA writes: an unaligned destination is an eDMA configuration error, the
+/// A buffer at `addr` must take 32-bit eDMA accesses: an unaligned one is an eDMA configuration error, the
 /// controller's buffer then never drains and the read would wait forever.
 const fn check_buffer(addr: usize) -> Result<(), Error> {
     if addr % 4 == 0 { Ok(()) } else { Err(Error::Misaligned) }
@@ -250,8 +250,29 @@ fn dma_idle(ch: &Channel<'_>) {
     compiler_fence(SeqCst);
 }
 
-/// Abandon a CMD18: stop channel 59, reset the controller's command and data sides, and send CMD12 to take the card
-/// out of its data state. CMD12's own outcome is ignored: a card that had already finished answers it as an illegal
+/// Point channel 59 at DATPORT from `src`, as [`arm`] does the other way.
+fn arm_write(ch: &mut Channel<'_>, src: &[u8]) {
+    let n = (src.len() / 16) as u16;
+    let tcd = Tcd {
+        saddr: src.as_ptr() as u32,
+        soff: 4,
+        attr: dma::attr(Size::Bits32, 0, Size::Bits32, 0),
+        nbytes: 16,
+        slast: 0,
+        daddr: R.as_ptr() as usize as u32 + 0x20, // DATPORT
+        doff: 0,
+        citer: n,
+        dlast_sga: 0,
+        biter: n,
+        csr: dma::csr::D_REQ,
+    };
+    // SAFETY: the callers keep `src` borrowed until the request is cleared (`abort`, or the end of the transfer)
+    unsafe { ch.configure(&tcd) };
+    ch.enable_request();
+}
+
+/// Abandon a CMD18 or CMD25: stop channel 59, reset the controller's command and data sides, and send CMD12 to take
+/// the card out of its data state. CMD12's own outcome is ignored: a card that had already finished answers it as an illegal
 /// command.
 fn abort() {
     set_irqsigen(0);
@@ -295,7 +316,7 @@ impl Handler<typelevel::ESDHC> for InterruptHandler {
 #[repr(C, align(4))]
 struct Block([u8; 512]);
 
-/// The eMMC, brought up and ready to read.
+/// The eMMC, brought up and ready to read and write.
 pub struct Esdhc<'d> {
     ch: Channel<'d>,
     ext: Block,
@@ -440,19 +461,7 @@ impl<'d> Esdhc<'d> {
         issue(Cmd::ReadMultiple(lba))?;
         // after issue(), which cleared IRQSTAT: the request is a level, so a TC already set still fires
         set_irqsigen(TC | ERR);
-        let s = poll_fn(|cx| {
-            let s = STATUS.load(Acquire);
-            if s != 0 {
-                return Poll::Ready(s);
-            }
-            WAKER.register(cx.waker());
-            match STATUS.load(Acquire) {
-                0 => Poll::Pending,
-                s => Poll::Ready(s),
-            }
-        })
-        .await;
-        check(s)?;
+        check(transfer_done().await)?;
         if !dma_done(&self.ch) {
             return Err(Error::Dma);
         }
@@ -461,6 +470,107 @@ impl<'d> Esdhc<'d> {
         clear_irqstat();
         self.ch.disable_request();
         Ok(())
+    }
+
+    /// Write `buf.len() / 512` sectors at `lba`, in transfers of up to 64 KiB, each a CMD25 followed by a CMD13 whose
+    /// error bits become [`Error::Card`]. A transfer that fails on the bus (CRC, timeout, DMA) is aborted (controller
+    /// reset, CMD12) and retried once; a card error is not retried. Dropping the future mid-transfer aborts it, so
+    /// the eDMA never reads a buffer whose borrow has ended; the sectors of an aborted transfer are left as the card
+    /// leaves them. A write past the end of the card is refused before anything is sent.
+    ///
+    /// `buf` must start on a 4-byte boundary (else `Error::Misaligned`, nothing sent). Panics unless `buf.len()` is a
+    /// non-zero multiple of 512.
+    pub async fn write(&mut self, lba: u32, buf: &[u8]) -> Result<(), Error> {
+        assert!(!buf.is_empty() && buf.len() % 512 == 0, "eMMC write of {} bytes", buf.len());
+        let n = (buf.len() / 512) as u32;
+        if lba.checked_add(n).is_none_or(|end| end > self.sectors) {
+            return Err(Error::OutOfRange);
+        }
+        check_buffer(buf.as_ptr() as usize)?;
+        for (i, piece) in buf.chunks(MAX_PIECE).enumerate() {
+            let at = lba + (i * MAX_PIECE / 512) as u32;
+            match self.write_piece(at, piece).await {
+                Err(Error::Crc | Error::Timeout | Error::Dma) => self.write_piece(at, piece).await?,
+                r => r?,
+            }
+        }
+        Ok(())
+    }
+
+    async fn write_piece(&mut self, lba: u32, piece: &[u8]) -> Result<(), Error> {
+        compiler_fence(SeqCst); // the buffer's contents reach memory before the eDMA reads them
+        arm_write(&mut self.ch, piece);
+        let guard = AbortOnDrop;
+        STATUS.store(0, SeqCst);
+        R.blkattr().write_value(regs::Blkattr(((piece.len() / 512) as u32) << 16 | 512));
+        issue(Cmd::WriteMultiple(lba))?;
+        set_irqsigen(TC | ERR);
+        check(transfer_done().await)?;
+        if !dma_done(&self.ch) {
+            return Err(Error::Dma);
+        }
+        core::mem::forget(guard);
+        set_irqsigen(0);
+        clear_irqstat();
+        self.ch.disable_request();
+        card_status(cmd_polled(Cmd::SendStatus, false)?)
+    }
+
+    /// TRIM `count` sectors from `lba` (CMD35, CMD36, CMD38 with the TRIM argument): they then read as the card's
+    /// erased value (EXT_CSD ERASED_MEM_CONT: 0x00, or 0xFF when it is 1). Waits for the card's busy to end, then
+    /// checks its status (CMD13) as [`write`](Self::write) does. A range past the end of the card, or of no sectors,
+    /// is refused before anything is sent.
+    ///
+    /// The busy wait is bounded by the controller's data timeout (SYSCTL DTOCV), reported as `Error::Timeout`
+    /// (guess: DTOCV covers an R1b busy, RM 25.3.12). Dropping the future leaves the card finishing its TRIM: the
+    /// drop waits (boundedly) for the card to release DAT0 before the next command.
+    pub async fn erase(&mut self, lba: u32, count: u32) -> Result<(), Error> {
+        if count == 0 || lba.checked_add(count).is_none_or(|end| end > self.sectors) {
+            return Err(Error::OutOfRange);
+        }
+        cmd_polled(Cmd::EraseStart(lba), false)?;
+        cmd_polled(Cmd::EraseEnd(lba + count - 1), false)?;
+        let guard = IdleOnDrop;
+        STATUS.store(0, SeqCst);
+        issue(Cmd::Trim)?;
+        // after issue(), which cleared IRQSTAT: TC comes when the card's busy ends
+        set_irqsigen(TC | ERR);
+        let s = transfer_done().await;
+        core::mem::forget(guard);
+        set_irqsigen(0);
+        clear_irqstat();
+        check(s)?;
+        card_status(cmd_polled(Cmd::SendStatus, false)?)
+    }
+}
+
+/// The IRQSTAT bits the interrupt reports for the transfer in progress.
+async fn transfer_done() -> u32 {
+    poll_fn(|cx| {
+        let s = STATUS.load(Acquire);
+        if s != 0 {
+            return Poll::Ready(s);
+        }
+        WAKER.register(cx.waker());
+        match STATUS.load(Acquire) {
+            0 => Poll::Pending,
+            s => Poll::Ready(s),
+        }
+    })
+    .await
+}
+
+/// How long a dropped TRIM's drop waits for the card to release DAT0.
+const TRIM_DROP_MS: u64 = 1000;
+
+/// Masks the interrupt and waits for the card to release DAT0 unless forgotten: a TRIM dropped mid-busy.
+struct IdleOnDrop;
+
+impl Drop for IdleOnDrop {
+    fn drop(&mut self) {
+        set_irqsigen(0);
+        let _ = spin(TRIM_DROP_MS, || prsstat() & DAT0 != 0);
+        clear_irqstat();
     }
 }
 

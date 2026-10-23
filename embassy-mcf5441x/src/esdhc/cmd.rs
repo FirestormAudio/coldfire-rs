@@ -57,8 +57,20 @@ pub enum Error {
     ByteAddressed,
     /// The read runs past the end of the card.
     OutOfRange,
-    /// The buffer doesn't start on a 4-byte boundary: the eDMA writes it a 32-bit word at a time.
+    /// The buffer doesn't start on a 4-byte boundary: the eDMA moves it a 32-bit word at a time.
     Misaligned,
+    /// After a write or TRIM, the card's status (CMD13) had error bits set: the R1 status word.
+    Card(u32),
+}
+
+/// The card status (R1) error flags, bits 31:19 (JESD84 Table 68): OUT_OF_RANGE, ADDRESS_MISALIGN, BLOCK_LEN_ERROR,
+/// ERASE_SEQ_ERROR, ERASE_PARAM, WP_VIOLATION, CARD_IS_LOCKED, LOCK_UNLOCK_FAILED, COM_CRC_ERROR, ILLEGAL_COMMAND,
+/// CARD_ECC_FAILED, CC_ERROR and ERROR.
+pub(crate) const R1_ERRORS: u32 = 0xFFF8_0000;
+
+/// A CMD13 status word to a result.
+pub(crate) const fn card_status(r1: u32) -> Result<(), Error> {
+    if r1 & R1_ERRORS != 0 { Err(Error::Card(r1)) } else { Ok(()) }
 }
 
 /// IRQSTAT to a result: timeouts first, then CRC, command index, DMA, and any other error bit as an end-bit error.
@@ -141,6 +153,8 @@ enum Data {
     Write,
     /// Several blocks, counted (BLKATTR), closed by an automatic CMD12.
     ReadMulti,
+    /// Several blocks to the card, counted and closed the same way.
+    WriteMulti,
 }
 
 const fn xfertyp(index: u8, resp: Resp, data: Data, abort: bool) -> u32 {
@@ -156,6 +170,7 @@ const fn xfertyp(index: u8, resp: Resp, data: Data, abort: bool) -> u32 {
         Data::Read => 1 << 21 | 1 << 4,
         Data::Write => 1 << 21,
         Data::ReadMulti => 1 << 21 | 1 << 5 | 1 << 4 | 1 << 2 | 1 << 1,
+        Data::WriteMulti => 1 << 21 | 1 << 5 | 1 << 2 | 1 << 1,
     };
     (index as u32) << 24 | (if abort { 0b11 << 22 } else { 0 }) | r | d
 }
@@ -163,8 +178,8 @@ const fn xfertyp(index: u8, resp: Resp, data: Data, abort: bool) -> u32 {
 /// RCA the driver assigns the card (CMD3) and addresses it by.
 const RCA: u32 = 2 << 16;
 
-/// The only commands the driver can send. None programs, erases or reconfigures the card: CMD6 switches only the
-/// volatile HS_TIMING and BUS_WIDTH, and CMD12 only ends a read that failed or was cancelled.
+/// The commands the driver sends. CMD6 switches only the volatile HS_TIMING and BUS_WIDTH; CMD12 ends a transfer
+/// that failed or was cancelled; CMD25 writes and CMD35/36/38 TRIM are `Esdhc::write` and `Esdhc::erase`'s only.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Cmd {
     GoIdle,
@@ -182,6 +197,11 @@ pub(crate) enum Cmd {
     SetBlockLen,
     StopTransmission,
     ReadMultiple(u32),
+    WriteMultiple(u32),
+    SendStatus,
+    EraseStart(u32),
+    EraseEnd(u32),
+    Trim,
 }
 
 impl Cmd {
@@ -205,6 +225,12 @@ impl Cmd {
             Cmd::SetBlockLen => (xfertyp(16, Resp::R1, Data::None, false), 512),
             Cmd::StopTransmission => (xfertyp(12, Resp::R1b, Data::None, true), 0),
             Cmd::ReadMultiple(lba) => (xfertyp(18, Resp::R1, Data::ReadMulti, false), lba),
+            Cmd::WriteMultiple(lba) => (xfertyp(25, Resp::R1, Data::WriteMulti, false), lba),
+            Cmd::SendStatus => (xfertyp(13, Resp::R1, Data::None, false), RCA),
+            Cmd::EraseStart(lba) => (xfertyp(35, Resp::R1, Data::None, false), lba),
+            Cmd::EraseEnd(lba) => (xfertyp(36, Resp::R1, Data::None, false), lba),
+            // CMD38 with the TRIM argument (JESD84 6.6.10): any range of write blocks, no erase-group alignment
+            Cmd::Trim => (xfertyp(38, Resp::R1b, Data::None, false), 1),
         }
     }
 }
@@ -239,6 +265,21 @@ mod tests {
     }
 
     #[test]
+    fn write_and_trim_commands_encode() {
+        // not proven on hardware: CMD25 as CMD18 with DTDSEL clear; CMD13, 35 and 36 R1; CMD38 R1b with TRIM
+        let want = [
+            (Cmd::WriteMultiple(0x1C_0000), (0x193A_0026, 0x1C_0000)),
+            (Cmd::SendStatus, (0x0D1A_0000, 2 << 16)),
+            (Cmd::EraseStart(7), (0x231A_0000, 7)),
+            (Cmd::EraseEnd(9), (0x241A_0000, 9)),
+            (Cmd::Trim, (0x261B_0000, 1)),
+        ];
+        for (c, w) in want {
+            assert_eq!(c.encode(), w, "{c:?}");
+        }
+    }
+
+    #[test]
     fn sysctl_words() {
         let ident = Divider::new(0x10, 5);
         assert_eq!(ident_sysctl(ident), 0x1058);
@@ -264,5 +305,13 @@ mod tests {
         assert_eq!(check(1 << 28), Err(Error::Dma)); // DMAE
         assert_eq!(check(1 << 22), Err(Error::DataEnd)); // DEBE
         assert_eq!(check(1 << 18), Err(Error::DataEnd)); // CEBE
+    }
+
+    #[test]
+    fn card_status_errors_are_bits_31_to_19() {
+        assert_eq!(card_status(0x900), Ok(()));
+        assert_eq!(card_status(0x900 | 1 << 26), Err(Error::Card(0x900 | 1 << 26))); // WP_VIOLATION
+        assert_eq!(card_status(1 << 19), Err(Error::Card(1 << 19))); // ERROR
+        assert_eq!(card_status(1 << 18 | 1 << 7), Ok(())); // not errors here
     }
 }
