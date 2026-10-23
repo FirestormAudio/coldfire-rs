@@ -1,0 +1,30 @@
+[package]
+name = "mcf5441x-hal-tests"
+version = "0.0.0"
+edition = "2024"
+description = "embassy-mcf5441x's drivers as programs for mcf5441x-emu's tests: build with toolchain/cargo-cf"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# standalone: ColdFire binaries, kept out of the host-buildable workspace
+[workspace]
+
+[features]
+default = ["mcf54418"]
+mcf54418 = ["embassy-mcf5441x/mcf54418"]
+
+[dependencies]
+coldfire = { path = "../coldfire" }
+coldfire-rt = { path = "../coldfire-rt" }
+embassy-mcf5441x = { path = "../embassy-mcf5441x", default-features = false, features = ["time-driver-pit0", "executor-thread", "executor-interrupt", "bootloader"] }
+embassy-executor = "0.10.0"
+embassy-time = { version = "0.5.1", features = ["tick-hz-1_000"] }
+embassy-sync = "0.8.0"
+embedded-hal = "1.0"
+embedded-io = "0.7"
+embedded-io-async = "0.7"
+static_cell = "2"
+
+[profile.release]
+opt-level = "s"
+debug = true
