@@ -3,99 +3,23 @@
 //! passes by exiting 0; a failed check prints `FAIL file:line: ...` and exits 1, a panic exits 101. The tests are
 //! skipped (with a message) when the ColdFire toolchain is not built.
 
+mod programs;
+
 use std::cell::RefCell;
 use std::io::{self, Write};
-use std::path::PathBuf;
-use std::process::Command;
 use std::rc::Rc;
-use std::sync::{Mutex, OnceLock};
 
-use mcf5441x_emu::elf::load_elf;
 use mcf5441x_emu::parts::{Emmc, EmmcConfig};
 use mcf5441x_emu::semihost::{Outcome, Semihost};
 use mcf5441x_emu::soc::{
-    Chip, ChipOptions, Dspi, Frame, Mcf5441x, PeerCx, PinChange, SerialPeer, SpiDevice, Ssi, Uart,
+    ChipOptions, Dspi, Frame, PeerCx, PinChange, SerialPeer, SpiDevice, Ssi, Uart,
 };
 use mcf5441x_emu::{Limit, Machine};
+use programs::{BUS_HZ, CHAR_TICKS, FRAME_TICKS, machine, ssi_follows, ssi_frame, start};
 
-/// DDR as hal-tests/memory.x has it: 128 MB at 0x40000000, the stack at its top.
-const DDR: (u32, u32) = (0x4000_0000, 0x0800_0000);
-const STACK_TOP: u32 = 0x4800_0000;
-/// The SRAM where the programs' RAMBAR puts it.
-const SRAM: (u32, u32) = (0x8000_0000, 0x1_0000);
-/// The bus clock the HAL finds: the chip's reset PLL (FBKDIV 9, REFDIV 0, OUTDIV2 3) from the programs' 24 MHz
-/// reference, a 240 MHz VCO over 4. One tick is one bus clock (the PIT counts one per tick).
-const BUS_HZ: u64 = 60_000_000;
-const TICKS_PER_MS: u64 = BUS_HZ / 1000;
-
-fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
-}
-
-/// The directory of the built programs, or `None` (with a message) when the ColdFire toolchain is not built.
-fn built() -> Option<PathBuf> {
-    static BUILT: OnceLock<Option<PathBuf>> = OnceLock::new();
-    static BUILD: Mutex<()> = Mutex::new(());
-    let _one = BUILD.lock().unwrap_or_else(|e| e.into_inner());
-    BUILT
-        .get_or_init(|| {
-            let root = root();
-            let rcf = std::env::var_os("RCF")
-                .map_or_else(|| root.join("build/rust-coldfire"), PathBuf::from);
-            if !rcf
-                .join("rustc_codegen_gcc/target/debug/librustc_codegen_gcc.so")
-                .exists()
-            {
-                return None;
-            }
-            let crate_dir = root.join("hal-tests");
-            let mut cmd = Command::new(root.join("toolchain/cargo-cf"));
-            // the outer cargo's settings are not the ColdFire build's
-            for (k, _) in std::env::vars_os() {
-                let k = k.to_string_lossy().into_owned();
-                if (k.starts_with("CARGO_") && k != "CARGO_HOME")
-                    || k.starts_with("RUSTC")
-                    || k.starts_with("RUSTFLAGS")
-                    || k == "RUSTDOCFLAGS"
-                    || k == "RUSTUP_TOOLCHAIN"
-                {
-                    cmd.env_remove(k);
-                }
-            }
-            // cargo-cf runs in the crate's directory: the target directory is relative to it
-            let out = cmd
-                .arg(&crate_dir)
-                .args(["--target-dir", "target/emu"])
-                .env("RCF", &rcf)
-                .output()
-                .expect("toolchain/cargo-cf runs");
-            let err = String::from_utf8_lossy(&out.stderr);
-            assert!(
-                out.status.success(),
-                "cargo-cf hal-tests failed:\n{}",
-                &err[err.len().saturating_sub(4000)..]
-            );
-            Some(crate_dir.join("target/emu/m68k-coldfire-none-elf/release"))
-        })
-        .clone()
-}
-
-/// Program `name` as ELF bytes; `None` (with a message) when the ColdFire toolchain is not built.
+/// Program `name` of `hal-tests`.
 fn elf(name: &str) -> Option<Vec<u8>> {
-    let Some(dir) = built() else {
-        eprintln!("skipped: the ColdFire toolchain is not built (toolchain/setup.sh, or set RCF)");
-        return None;
-    };
-    Some(std::fs::read(dir.join(name)).unwrap_or_else(|e| panic!("{name} built: {e}")))
-}
-
-/// A machine with the chip (`options`), DDR and SRAM.
-fn machine(options: ChipOptions) -> (Machine, Chip) {
-    let mut m = Machine::new();
-    m.mem.map_ram(DDR.0, DDR.1);
-    m.mem.map_ram(SRAM.0, SRAM.1);
-    let chip = Mcf5441x::build(&mut m, options);
-    (m, chip)
+    programs::elf("hal-tests", name)
 }
 
 /// A writer the test reads back.
@@ -128,10 +52,7 @@ struct Ran {
 /// Load `elf` as a boot stage leaves a program (supervisor mode, interrupts masked, the stack at the top of DDR)
 /// and run it under semihosting for at most `max_ms` of emulated time.
 fn run(m: &mut Machine, elf: &[u8], max_ms: u64) -> Ran {
-    m.cpu.pc = load_elf(m, elf).unwrap();
-    m.cpu.set_sr(0x2700);
-    m.cpu.a[7] = STACK_TOP;
-    m.set_time_limit(Some(m.now() + max_ms * TICKS_PER_MS));
+    start(m, elf, max_ms);
     let (out, err) = (Sink::default(), Sink::default());
     let mut host = Semihost::new(
         Box::new(io::empty()),
@@ -193,9 +114,6 @@ fn gpio_drives_reads_and_pulls() {
     // PD0 stays an input
     assert_eq!(chip.gpio(&m).output(3, 0), None);
 }
-
-/// 115,200 baud in ticks: ten bits a character.
-const CHAR_TICKS: u64 = BUS_HZ * 10 / 115_200;
 
 /// Echoes each byte UART0 sends, but answers the 11th with a framing error and the 13th twice, back to back.
 #[derive(Default)]
@@ -399,35 +317,6 @@ fn esdhc_reads_the_card() {
     let r = run(&mut m, &elf, 2_000);
     passed(&r);
 }
-
-/// The SSI0 line's frame `n`: two 16-bit slots.
-fn ssi_frame(n: u64) -> Vec<i32> {
-    let x = (n & 0x7FFF) as i32;
-    vec![x, -x]
-}
-
-/// From the first frame `capture` sends that isn't silence, each frame is the line's frame a fixed delay earlier
-/// plus `add` (16-bit), for `frames` frames; returns the delay.
-fn ssi_follows(capture: &[(u64, Vec<i32>)], add: i32, frames: usize) -> usize {
-    let first = capture
-        .iter()
-        .position(|(_, f)| f.iter().any(|&w| w != 0))
-        .expect("the stream sends something");
-    let x = (capture[first].1[0] as i16).wrapping_sub(add as i16) as i64;
-    let delay = first - x as usize;
-    for (k, (_, f)) in capture[first..first + frames].iter().enumerate() {
-        let want: Vec<i16> = ssi_frame((first + k - delay) as u64)
-            .iter()
-            .map(|&w| (w as i16).wrapping_add(add as i16))
-            .collect();
-        let got: Vec<i16> = f.iter().map(|&w| w as i16).collect();
-        assert_eq!(got, want, "frame {}", first + k);
-    }
-    delay
-}
-
-/// 48 kHz frames at the bus clock.
-const FRAME_TICKS: u64 = BUS_HZ / 48_000;
 
 #[test]
 fn ssi_streams_render_output() {
