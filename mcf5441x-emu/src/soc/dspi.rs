@@ -100,8 +100,10 @@ pub struct Frame {
 ///
 /// Registers (32-bit accesses only: a 1- or 2-byte access is refused with [`Stop::Unmodelled`], though the chip
 /// takes 8- and 16-bit PUSHR writes and POPR reads):
-/// - MCR (+0x00, reset 0x0000_4001: HALT and MDIS, RM Table 40-3): stored; CLR_TXF and CLR_RXF empty the FIFOs and
-///   read as zero (RM Table 40-4). PCSISn sets the level PCSn idles at.
+/// - MCR (+0x00, reset 0x0000_4001: HALT and MDIS, RM Table 40-3): stored; CLR_TXF and CLR_RXF read as zero (RM
+///   Table 40-4) and empty the FIFOs only in a write with HALT clear: with HALT set they do nothing, MDIS set or
+///   clear (measured on an MCF54415; guess: in a write with HALT clear and MDIS set they do nothing either, RM
+///   40.4.7.1). PCSISn sets the level PCSn idles at.
 /// - TCR (+0x08): SPI_TCNT (bits 31:16) counts frames and wraps; a write presets it, and a frame with CTCNT clears
 ///   it before it is counted (RM 40.3.2).
 /// - CTAR0-CTAR7 (+0x0C..+0x28, reset 0x7800_0000: 16-bit frames): stored, all eight, each picked by a frame's
@@ -109,8 +111,8 @@ pub struct Frame {
 ///   no time.
 /// - SR (+0x2C): TCF, EOQF and RFOF are set by the frames and cleared by writing 1 (RM Table 40-7). TXRXS is set
 ///   while the DSPI runs: HALT and EOQF clear (RM 40.4.1). TFFF is set while the TX FIFO is not full and MDIS is
-///   clear, RFDF while the RX FIFO is not empty (guess: both follow the FIFO, and writing 1 to them has no lasting
-///   effect). TXCTR, TXNXTPTR, RXCTR and POPNXTPTR count and point into the FIFOs (guess: the 4-bit counters read
+///   clear, RFDF while the RX FIFO is not empty. Writing 1 to TFFF changes nothing (measured on an MCF54415);
+///   guess: RFDF likewise follows the FIFO. TXCTR, TXNXTPTR, RXCTR and POPNXTPTR count and point into the FIFOs (guess: the 4-bit counters read
 ///   15 with 16 entries held, as the older model did; the pointers wrap at 16). TFUF (slave mode) is never set.
 /// - RSER (+0x30, reset 0): stored and read back. TFFF_RE with TFFF_DIRS drives the TX FIFO fill DMA request
 ///   while SR\[TFFF\] is set, RFDF_RE with RFDF_DIRS the RX FIFO drain DMA request while SR\[RFDF\] is set (RM
@@ -119,7 +121,9 @@ pub struct Frame {
 ///   EOQF_RE, TFUF_RE, RFOF_RE, or TFFF_RE or RFDF_RE without its DIRS), sets a reserved bit, or enables a DMA
 ///   request on a DSPI with no request lines is refused, and RSER keeps its value.
 /// - PUSHR (+0x34): pushes a command and data into the TX FIFO (a push to a full FIFO is ignored, RM 40.4.2.4.1);
-///   while the DSPI runs the FIFO drains at once, frame by frame. Reads return 0 (guess).
+///   while the DSPI runs the FIFO drains at once, frame by frame, and while it is halted the frames wait there
+///   (measured on an MCF54415: three pushes to a halted master read SR 0x0200_3000, TXFR0-TXFR2 holding them).
+///   Reads return the last word pushed (measured on an MCF54415; 0 at reset, RM Table 40-3).
 /// - POPR (+0x38): pops the RX FIFO (with MDIS set it reads the entry without popping it, RM 40.4.7.1).
 /// - TXFR0-TXFR15 (+0x3C..+0x78) and RXFR0-RXFR15 (+0x7C..+0xB8): the FIFO entries, read-only.
 ///
@@ -127,7 +131,7 @@ pub struct Frame {
 /// line before the access returns. Frames take no time, so while the DSPI runs the TX FIFO never fills and the fill
 /// request stays up: the eDMA serving it runs minor loops until its major loop ends (D_REQ clears ERQ) or an EOQ
 /// frame stops the DSPI and the FIFO fills (the push that fills it drops the request). Writing 1 to TFFF or RFDF
-/// does not lower a request (guess: both flags follow the FIFO, as above).
+/// does not lower a request (measured on an MCF54415 for TFFF; guess for RFDF, as above).
 ///
 /// The rest of the window reads 0. A write anywhere but MCR, TCR, CTARn, SR, RSER and PUSHR is refused.
 ///
@@ -146,8 +150,8 @@ pub struct Frame {
 /// eight, and which of them hold parts is the board's business.
 ///
 /// Refused with [`Stop::Unmodelled`] (the detail names the DSPI and the feature): a 1- or 2-byte access, a POPR
-/// read of an empty RX FIFO, a push while halted (MCR\[HALT\]), a push to a full TX FIFO (it fills only while EOQF
-/// stops the DSPI; the chip ignores the push, RM 40.4.2.4.1), a frame pushed or going out while disabled
+/// read of an empty RX FIFO, a push to a full TX FIFO (it fills only while HALT or EOQF stops the DSPI; the chip
+/// ignores the push, RM 40.4.2.4.1), a frame pushed or going out while disabled
 /// (MCR\[MDIS\]), in slave mode, with a DCONF other than SPI, with the modified transfer format (MCR\[MTFE\]) or
 /// with a FIFO disabled, a frame size other than 8 or 16 bits, LSB first, a frame selecting more than one attached
 /// part, an RX overflow with MCR\[ROOE\] set, the RSER writes above, and whatever an attached part reports with
@@ -163,6 +167,8 @@ pub struct Dspi {
     /// TXNXTPTR and TXCTR.
     tx_next: usize,
     tx_count: usize,
+    /// The last word pushed: what PUSHR reads.
+    pushr: u32,
     rx: [u32; FIFO],
     /// POPNXTPTR and RXCTR.
     pop_next: usize,
@@ -212,6 +218,7 @@ impl Dspi {
             ctar: [0x7800_0000; 8],
             flags: 0,
             tx: [0; FIFO],
+            pushr: 0,
             tx_next: 0,
             tx_count: 0,
             rx: [0; FIFO],
@@ -406,9 +413,6 @@ impl Dspi {
     }
 
     fn push(&mut self, v: u32, cx: &mut DeviceCx) {
-        if self.mcr & HALT != 0 {
-            return cx.refuse(Stop::Unmodelled, "DSPI: PUSHR while halted (MCR HALT)");
-        }
         if let Some(d) = self.mode() {
             return cx.refuse(Stop::Unmodelled, d);
         }
@@ -417,12 +421,18 @@ impl Dspi {
         }
         if self.tx_count == FIFO {
             // the chip ignores the push (RM 40.4.2.4.1): the frame would be lost without a trace. The FIFO only
-            // fills while the DSPI is stopped, and a push while halted is refused above, so EOQF stopped it.
+            // fills while the DSPI is stopped.
+            let why = if self.mcr & HALT != 0 {
+                "MCR HALT"
+            } else {
+                "EOQF set"
+            };
             return cx.refuse(
                 Stop::Unmodelled,
-                "DSPI: PUSHR with the TX FIFO full (stopped: EOQF set)",
+                format!("DSPI: PUSHR with the TX FIFO full (stopped: {why})"),
             );
         }
+        self.pushr = v;
         self.tx[(self.tx_next + self.tx_count) % FIFO] = v;
         self.tx_count += 1;
         self.run(cx);
@@ -561,6 +571,7 @@ impl Device for Dspi {
             CTAR0..=CTAR7 if offset % 4 == 0 => self.ctar[((offset - CTAR0) / 4) as usize],
             SR => self.sr(),
             RSER => self.rser,
+            PUSHR => self.pushr,
             POPR => {
                 if self.rx_count == 0 {
                     cx.refuse(Stop::Unmodelled, "DSPI: POPR read with the RX FIFO empty");
@@ -586,8 +597,9 @@ impl Device for Dspi {
         }
         match offset {
             MCR => {
-                // guess: the written MDIS decides whether the clears act (RM 40.4.7.1: not while disabled)
-                if value & MDIS == 0 {
+                // measured on an MCF54415: the clears act only in a write with HALT clear. guess: not with MDIS set
+                // either (RM 40.4.7.1: not while disabled)
+                if value & (HALT | MDIS) == 0 {
                     if value & CLR_TXF != 0 {
                         self.tx_count = 0;
                     }

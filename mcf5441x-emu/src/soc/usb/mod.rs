@@ -66,8 +66,8 @@ const CONSTANTS: [(u32, u32); 12] = [
 /// Reset values (RM Table 24-4).
 const USBCMD_RESET: u32 = 0x0008_0000;
 const USBSTS_RESET: u32 = 0x80;
-/// guess: RM Table 24-4 gives 0x0101 and Figure 24-26 0x0105; the memory map's value.
-const BURSTSIZE_RESET: u32 = 0x0101;
+/// Measured on an MCF54415 (RM Table 24-4 gives 0x0101 and Figure 24-26 0x0105).
+const BURSTSIZE_RESET: u32 = 0x1010;
 const PORTSC_RESET: u32 = 0xEC00_0004;
 const OTGSC_RESET: u32 = 0x0000_1020;
 const EPCR0_RESET: u32 = 0x0080_0080;
@@ -164,6 +164,8 @@ struct GpTimer {
     anchor: u64,
     /// The tick of the next expiry while counting.
     deadline: Option<u64>,
+    /// A one-shot expiry since the last RST: setting RUN again does not expire again.
+    expired: bool,
 }
 
 impl GpTimer {
@@ -199,6 +201,7 @@ impl GpTimer {
         } else {
             self.count = 0;
             self.deadline = None;
+            self.expired = true;
         }
         true
     }
@@ -303,12 +306,13 @@ pub struct UsbStats {
 /// - ID, HWGENERAL, HWHOST, HWDEVICE, HWTXBUF, HWRXBUF, HCIVERSION/CAPLENGTH, HCSPARAMS, HCCPARAMS, DCIVERSION,
 ///   DCCPARAMS, CONFIGFLAG: constant (RM Table 24-4).
 /// - USBCMD (0x0008_0000): stored. RST resets the controller (every register to its reset value; OTGSC keeps its
-///   VBUS bits) and reads 0. Setting RS is refused unless USBMODE selects device mode with ES = 1 (big-endian
+///   VBUS bits, and the timers' GPTIMERnLD and GPTIMERnCTL keep theirs, measured on an MCF54415) and reads 0. Setting RS is refused unless USBMODE selects device mode with ES = 1 (big-endian
 ///   buffers): host mode and little-endian buffers are not modelled. Clearing RS while attached detaches 100 µs
 ///   later (PORTSC1\[CCS\] clears; guess: the PHY takes a while to drop the pull-up), unless RS is set again
 ///   before then. A setup clears SUTW.
 /// - USBSTS (0x80): write 1 to clear. The model sets UI, UEI, PCI, SEI and URI.
-/// - USBINTR (0), USBMODE (0), BURSTSIZE (0x0101): stored.
+/// - USBINTR (0), USBMODE (0), BURSTSIZE (0x0000_1010, measured on an MCF54415; RM Table 24-4 gives 0x0101):
+///   stored.
 /// - DEVICEADDR (0): USBADR (31:25) only; this part has no USBADRA (RM Table 24-25), so an address takes effect at
 ///   once. The bus reset clears it.
 /// - EPLISTADDR (0): EPBASE (31:11).
@@ -332,13 +336,15 @@ pub struct UsbStats {
 /// period; setting RUN restarts the period from the count the timer holds; clearing RUN holds the count. A GPTLD
 /// write does not load the count (measured on an MCF54415). RUN set from a count of 0 expires at once (measured on
 /// an MCF54415: TI0 sets, the count reloads from GPTLD and counts down again in repeat mode; guess: exactly
-/// when, taken as 1 µs later, and a one-shot just stops at 0). The timers are event driven
-/// ([`Device::next_event`]): nothing steps per tick. guess: they are part of the controller's reset (GPTLD, CTL
-/// and TI clear). While the clock gate
-/// is closed ([`Device::gate`]) the count stops and resumes where it stopped.
+/// when, taken as 1 µs later, and a one-shot that has not expired since its last RST just stops at 0). A one-shot
+/// that has expired does not expire again when RUN is set again without RST (measured on an MCF54415: TI0 stays
+/// clear, CTL reads 0x8000_0000; guess: also when RUN was cleared in between), until RST reloads it. The timers
+/// are event driven ([`Device::next_event`]): nothing steps per tick. They are not part of the controller's reset
+/// (measured on an MCF54415: GPTIMER0LD and GPTIMER0CTL keep their values across USBCMD\[RST\]; guess: a running
+/// timer keeps counting). While the clock gate is closed ([`Device::gate`]) the count stops and resumes where it
+/// stopped.
 /// - The new GPTLD of a running timer applies at the next reload.
 /// - guess: the expiry comes GPTLD + 1 µs after the load (the count reads 0 for the last microsecond).
-/// - guess: setting RUN again after a one-shot expiry, without RST, expires again 1 µs later.
 ///
 /// Endpoints 0-3. dQH(ep, dir) is at EPLISTADDR + 64 × (2 × ep + dir) (dir 1 = IN), dTDs are 32 bytes (RM 24.5.2),
 /// as big-endian words; the setup buffer at dQH(0, OUT) + 0x28 holds the 8 bytes little-endian within each word.
@@ -649,6 +655,8 @@ impl UsbOtg {
             script: self.script.take(),
             next: self.next,
             result: self.result.take(),
+            // measured on an MCF54415: GPTIMERnLD and GPTIMERnCTL keep their values
+            timers: std::mem::take(&mut self.timers),
             ..UsbOtg::new(self.config.clone())
         };
         *self = keep;
@@ -980,6 +988,7 @@ impl UsbOtg {
         if v & GPT_RST != 0 {
             t.count = t.ld;
             t.deadline = None;
+            t.expired = false;
         }
         t.run = run;
         if !run {
@@ -992,7 +1001,10 @@ impl UsbOtg {
             // boundary (measured on an MCF54415: it expires at once, reloads LD and goes on; guess: exactly when,
             // taken as 1 µs)
             let from = if v & GPT_RST != 0 { t.count } else { was };
-            t.start(from, now, tpu);
+            // measured on an MCF54415: an expired one-shot set running again (no RST) does not expire again
+            if !(from == 0 && !t.repeat && t.expired) {
+                t.start(from, now, tpu);
+            }
         }
     }
 

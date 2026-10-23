@@ -20,9 +20,12 @@ const READ_ONLY: [u32; 5] = [CR27, 0x78, 0xB0, 0xD4, 0xDC];
 /// DDR_RCR; RST is write-only and reads 0 (RM Table 21-58).
 const RCR: u32 = 0x180;
 const RCR_RST: u32 = 1 << 30;
-/// DDR_PADCR; bit 9 is reserved and reads 1 (RM Figure 21-56).
+/// DDR_CR02: AREFMODE, BNKSPT, BIGEND and CCAPEN; its reserved bits read 0 (measured on an MCF54415).
+const CR02: u32 = 0x08;
+const CR02_BITS: u32 = 0x0101_0101;
+/// DDR_PADCR and its writable bits (measured on an MCF54415: ~0 reads 0x0F03_FF0F).
 const PADCR: u32 = 0x1AC;
-const PADCR_ONES: u32 = 1 << 9;
+const PADCR_BITS: u32 = 0x0F03_FF0F;
 
 /// Reset values of CR00..CR63 that are not 0, measured on an MCF54415 with the controller's clock on. RM Table 21-4
 /// agrees on CR13, CR20, CR21, CR23 and CR44; it lists 0 for CR03 and CR22.
@@ -35,7 +38,7 @@ const CR_RESET: [(usize, u32); 7] = [
     (23, 0x1000_0000),
     (44, 0x2040),
 ];
-/// guess: RM Figure 21-56 resets PADCR's reserved bit 9 ("must be set") to 1; Table 21-4 lists 0. Not measured.
+/// Measured on an MCF54415, as RM Figure 21-56 has it (Table 21-4 lists 0).
 const PADCR_RESET: u32 = 0x200;
 
 /// The DDR controller's registers (RM ch. 21), mapped at 0xFC0B_8000. Nothing behind them is modelled: the DDR
@@ -45,18 +48,21 @@ const PADCR_RESET: u32 = 0x200;
 /// - DDR_CR00..DDR_CR63 (+0x00..+0xFC): all 0 except CR03 0x100, CR13 0x0002_0000, CR20 0x0C00_0000, CR21 0x400,
 ///   CR22 0xD00, CR23 0x1000_0000 and CR44 0x2040 (measured on an MCF54415; RM Table 21-4 agrees except for CR03 and
 ///   CR22, which it lists as 0). Each reads back what was written, reserved bits included (guess: the RM's
-///   "must be cleared" bits are not masked), except:
+///   "must be cleared" bits are not masked; measured only for CR02), except:
+///   - CR02 keeps only AREFMODE, BNKSPT, BIGEND and CCAPEN: ~0 reads 0x0101_0101 (measured on an MCF54415);
 ///   - the read-only CR27, CR30, CR44 (VERSION, 0x2040), CR53 and CR55 (RM Table 21-4) ignore writes;
 ///   - CR27 INTSTATUS bit 3 (DRAM initialization complete) sets when a write sets CR09\[START\] while it was clear
 ///     (the controller's initialization takes no time; guess: rewriting START while set does not restart it), with
 ///     bit 8 the OR of bits 7:0 (RM Table 21-32): 0x108 after START, measured on an MCF54415. And CR25\[INTACK\] (write-only, reads 0) clears the INTSTATUS
 ///     bits it names (RM Table 21-30).
 /// - DDR_RCR (+0x180, 0): RST is write-only and reads 0 (RM Table 21-58); the rest reads back.
-/// - DDR_PADCR (+0x1AC, 0x200; guess: RM Figure 21-56's bit 9, where Table 21-4 says 0): reads back, bit 9 always
-///   1 (guess: the figure shows it read-only, "must be set").
+/// - DDR_PADCR (+0x1AC, 0x200 as RM Figure 21-56 has it, where Table 21-4 says 0): bits 27:24, 17:16, 15:8 and 3:0
+///   read back, the rest read 0 (measured on an MCF54415: a write of 0 reads 0, ~0 reads 0x0F03_FF0F; the
+///   figure's "must be set" bit 9 can be cleared).
 ///
 /// The rest of the window reads 0 and ignores writes. Narrow accesses read and write the big-endian byte lanes of a
-/// register (guess: the RM gives only 32-bit widths); one that crosses a register (from a bus master) is refused
+/// register (byte and word reads measured on an MCF54415; guess for narrow writes: the RM gives only 32-bit
+/// widths); one that crosses a register (from a bus master) is refused
 /// with [`Stop::Unmodelled`]. No interrupt is raised: CR26\[INTMASK\] is stored like the rest of CR26, but the
 /// model never asserts the controller's interrupt and it is wired to no interrupt source. Every write is recorded
 /// ([`Ddrmc::writes`]) unless [`Ddrmc::record`] turned the log off.
@@ -169,9 +175,10 @@ impl Device for Ddrmc {
                 self.int_status &= !(new >> 16 & 0xFF);
                 self.cr[(CR25 / 4) as usize] = new & !INTACK;
             }
+            CR02 => self.cr[(CR02 / 4) as usize] = new & CR02_BITS,
             0..=0xFC => self.cr[(reg / 4) as usize] = new,
             RCR => self.rcr = new & !RCR_RST,
-            PADCR => self.padcr = new | PADCR_ONES,
+            PADCR => self.padcr = new & PADCR_BITS,
             _ => {}
         }
     }

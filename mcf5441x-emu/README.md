@@ -229,7 +229,8 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   the completion (DLAST_SGA added to DADDR, no load), all measured on an MCF54415. On the built chip SERQ is taken
   only on the request lines a model drives (the table's last column) and the channels RM Table 19-6 leaves to software
   (30, 31, 42, 43, 46, 47); START and SSRT work on every channel.
-- **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character
+- **UART0-9** (RM ch. 41): a receiver with a three-deep FIFO behind its shift register (five characters left unread
+  read back as the 1st, 2nd, 3rd and 5th with OE and FFULL: measured on an MCF54415) and a transmitter with a holding and a shift register, one character
   per character time (a status read 3 ticks after a write to an idle transmitter sees TXRDY again: measured on an
   MCF54415 as 2 to 9 instructions, the model takes the shortest); RXRDY/TXRDY interrupts; overrun and framing errors;
   the receive DMA request (RXRDY) and the transmit DMA request (UISR TXRDY, RM 41.5.1.2: no UIMR mask, no enable of
@@ -241,32 +242,39 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   (through `with_device`) cuts the interrupt request, as on a board that leaves it unwired; the DMA requests stay.
 - **SSI0-1** (RM ch. 35): I2S master or network mode with transmit and receive FIFO 0, one frame per frame period,
   the watermark DMA requests; 24-bit words send bits 23:0 of a FIFO word (measured on an MCF54415); an underrun sends
-  silence and empties the FIFO (where the RM re-transmits the previous data). The host supplies the received samples
-  and reads what was sent.
+  silence and empties the FIFO (where the RM re-transmits the previous data); TX0 writes with SSI_EN clear are
+  dropped (measured on an MCF54415). The host supplies the received samples and reads what was sent.
 - **DSPI0-3** (RM ch. 40): master mode, 8- and 16-bit frames through any of CTAR0-7 (PUSHR CTAS), the FIFOs, EOQ
   and the transfer counter; the TFFF (TX FIFO fill) and RFDF (RX FIFO drain) DMA requests (RSER RE with DIRS);
-  frames take no time and are logged with their CTAS. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select;
+  frames take no time and are logged with their CTAS. Frames pushed while halted wait in the TX FIFO, PUSHR reads
+  the last word pushed, and MCR CLR_TXF/CLR_RXF act only in a write with HALT clear (measured on an MCF54415).
+  [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select;
   `SpiNor::faults` injects program failures, stuck bits, protection and WIP timing, and `SpiNor::set_status` latches
   E_ERR, P_ERR and WIP until CLSR.
 - **eSDHC** (RM ch. 25): commands, responses, block reads through DATPORT drained by eDMA channel 59 and block
   writes (CMD25) filled through it, with an [`Emmc`](parts::Emmc) behind it that also takes TRIM (CMD35/36/38) and
   answers SEND_STATUS (CMD13); the card is busy (DAT0 low) after a write and a TRIM for `with_sd_busy`'s times, then
-  TC. The reset values and the RSTA/RSTD behaviour measured on an MCF54415; the write side is a guess (not measured).
+  TC. The reset values and the RSTA/RSTD behaviour measured on an MCF54415, and BLKATTR reading BLKCNT 1 whatever
+  count was written (measured with no transfer running; transfers use the written count, a guess); the write side
+  is a guess (not measured).
 - **USB OTG** (RM ch. 24): device mode with dQHs and dTDs in memory, endpoints 0-3, and host primitives (setup, IN and
   OUT packets, bus resets, scripts on the machine's clock). A high-speed IN of more than 64 bytes from the DDR window
   (0x4000_0000-0x7FFF_FFFF) never completes (measured on an MCF54415); from SRAM it does. The two general-purpose
   timers (GPTIMER0/1LD and CTL) count down in microseconds, set USBSTS[TI0/TI1] at zero and interrupt with
   USBINTR[TIE0/TIE1] (an LD write does not load the count, RST does, and RUN from a count of 0 expires at once and
-  reloads: measured on an MCF54415); they are event driven and stop with the clock gate (guess: not measured).
+  reloads; an expired one-shot set running again without RST does not expire again; USBCMD RST leaves them as they
+  are: measured on an MCF54415); they are event driven and stop with the clock gate (guess: not measured). BURSTSIZE
+  resets to 0x1010 (measured on an MCF54415).
 - **DDR controller** (RM ch. 21): the registers, with the reset values and the INTSTATUS after START measured on an
-  MCF54415; the DDR itself is RAM. `Ddrmc::set_init_completes(false)` models a DRAM that never finishes initializing.
+  MCF54415, as are PADCR's and CR02's writable bits; the DDR itself is RAM. `Ddrmc::set_init_completes(false)` models a DRAM that never finishes initializing.
 - **PLL** (RM ch. 8): PLL_CR and PLL_DR from the options, locked unless the host says otherwise
   (`Pll::set_locked(false)` drops LOCK and LOCKS, and sets LOLF when PLL_CR enables it; LOCKS stays clear when the
   lock returns, as RM 8.3.4 has it). With LOLEN in PLL_CR clear the loss is not detected and LOCK stays set (RM Table
   8-5). A loss with LOLEN and LOLRE or LOLIRQ set stops the next run with `Stop::Unmodelled`: the loss-of-lock reset
   and interrupt request are not modelled.
 - **NFC** (RM ch. 22): page reads into the buffer from a [`NandArray`](soc::NandArray), with the ECC status byte
-  as the RM describes it; the reset values measured on an MCF54415.
+  as the RM describes it; the reset values measured on an MCF54415. The four buffers are +0x000, +0x1000, +0x2000
+  and +0x3000, 0x900 bytes each (RM Figure 22-17); the gaps after them are not storage (measured on an MCF54415).
 
 ### What refuses
 
@@ -325,6 +333,7 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 - DMA requests nothing drives: the request lines of a block that is not modelled, or whose model does not request DMA
   (the DMA timers', the I2C modules', the external DREQ pins), are never asserted. On the built chip, SERQ on such a
   channel is refused, naming the channel; a software start (START, SSRT) works on any channel.
+- The NFC's buffer gaps read 0 and drop writes; on the chip they read changing values (measured on an MCF54415).
 - Bus masters' accesses are not split: a misaligned access from the eDMA or USB reaches a device whole. The chip's
   models refuse one that crosses a register.
 

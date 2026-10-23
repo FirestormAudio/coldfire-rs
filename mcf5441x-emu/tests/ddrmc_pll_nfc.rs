@@ -170,7 +170,7 @@ fn ddrmc_reset_values_follow_the_measurement() {
         assert_eq!(r.read(DDR + off, Size::Long), want, "CR{cr:02}");
     }
     assert_eq!(r.read(DDR + RCR, Size::Long), 0, "RCR (RM Table 21-4)");
-    // guess: RM Figure 21-56 has PADCR's reserved bit 9 reset to 1 where Table 21-4 lists 0.
+    // measured on an MCF54415: PADCR resets to 0x200, as RM Figure 21-56 has it (Table 21-4 lists 0).
     assert_eq!(r.read(DDR + PADCR, Size::Long), 0x200, "PADCR");
     assert!(r.m.device::<Ddrmc>(r.ddr).writes().is_empty());
 }
@@ -229,12 +229,27 @@ fn ddr_writes_are_recorded_in_order() {
     // landing in its byte lanes.
     assert_eq!(r.read(DDR + RCR, Size::Long), 0);
     assert_eq!(r.read(DDR + PADCR, Size::Long), 0x0001_0201);
-    // guess: PADCR bit 9 reads 1 and cannot be cleared (RM Figure 21-56 shows it read-only).
-    r.write(DDR + PADCR, Size::Long, 0x0003_0001);
-    assert_eq!(r.read(DDR + PADCR, Size::Long), 0x0003_0201);
-    assert_eq!(r.read(DDR + 0x08, Size::Long), 0x0102_0007);
-    assert_eq!(r.read(DDR + 0x0A, Size::Word), 0x0007);
-    assert_eq!(r.read(DDR + 0x09, Size::Byte), 0x02);
+    assert_eq!(r.read(DDR + 0x08, Size::Long), 0x0100_0001, "CR02's bits");
+    assert_eq!(r.read(DDR + 0x0A, Size::Word), 0x0001);
+    assert_eq!(r.read(DDR + 0x08, Size::Byte), 0x01);
+}
+
+#[test]
+fn ddr_padcr_and_cr02_keep_their_bits_measured() {
+    // measured on an MCF54415 (the controller's clock on, not initialised): PADCR written 0 reads 0 (bit 9 is
+    // not fixed) and ~0 reads 0x0F03_FF0F; CR02 written ~0 reads 0x0101_0101 (reserved bits read 0); byte and
+    // word reads give the register's lanes
+    let mut r = rig();
+    r.write(DDR + PADCR, Size::Long, 0);
+    assert_eq!(r.read(DDR + PADCR, Size::Long), 0);
+    r.write(DDR + PADCR, Size::Long, !0);
+    assert_eq!(r.read(DDR + PADCR, Size::Long), 0x0F03_FF0F);
+    r.write(DDR + 0x08, Size::Long, !0);
+    assert_eq!(r.read(DDR + 0x08, Size::Long), 0x0101_0101);
+    r.write(DDR + 0x10, Size::Long, 0x1234_5678);
+    assert_eq!(r.read(DDR + 0x10, Size::Byte), 0x12);
+    assert_eq!(r.read(DDR + 0x13, Size::Byte), 0x78);
+    assert_eq!(r.read(DDR + 0x12, Size::Word), 0x5678);
 }
 
 #[test]
@@ -499,6 +514,36 @@ fn nfc_buffer_accepts_any_size() {
     assert_eq!(r.read(NFC + 0x102, Size::Word), 0x3344);
     assert_eq!(r.read(NFC + 0x104, Size::Long), 0x5566_7700);
     assert_eq!(r.read(NFC + 0x3EFC, Size::Long), 0);
+}
+
+#[test]
+fn nfc_buffers_and_their_gaps_measured() {
+    // measured on an MCF54415: the buffers are +0x000-0x8FF, +0x1000-0x18FF, +0x2000-0x28FF and +0x3000-0x38FF
+    // (RM Figure 22-17); +0, +0x840, +0x1000, +0x1080, +0x2000 and +0x3000 hold a written longword. The gaps
+    // (+0x900.., +0x3900..) are not storage: reads return changing values and a write is not held. The model reads
+    // the gaps as 0.
+    let mut r = rig();
+    for (n, off) in [
+        0, 0x840, 0x8FC, 0x1000, 0x1080, 0x18FC, 0x2000, 0x3000, 0x38FC,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        r.write(NFC + off, Size::Long, 0xA5A5_0000 | n as u32);
+        assert_eq!(
+            r.read(NFC + off, Size::Long),
+            0xA5A5_0000 | n as u32,
+            "+{off:#x}"
+        );
+    }
+    for off in [0x900, 0xFFC, 0x1900, 0x2900, 0x3900, 0x3EFC] {
+        r.write(NFC + off, Size::Long, 0x1234_5678);
+        assert_eq!(r.read(NFC + off, Size::Long), 0, "+{off:#x}");
+    }
+    // a longword from the end of buffer 0 into its gap keeps only the buffer's bytes
+    r.write(NFC + 0x8FE, Size::Long, 0x1122_3344);
+    assert_eq!(r.read(NFC + 0x8FE, Size::Long), 0x1122_0000);
+    assert_eq!(r.read(NFC + 0x8FC, Size::Long), 0xA5A5_1122);
 }
 
 #[test]

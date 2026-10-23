@@ -302,6 +302,8 @@ fn cmd18_moves_sectors_through_channel_59() {
     b.w(IRQSIGEN, TC);
     b.arm(0x4010_2000, 1024);
     b.w(BLKATTR, 2 << 16 | 512);
+    assert_eq!(b.r(BLKATTR), 1 << 16 | 512, "BLKCNT reads 1");
+    // guess: the written count is the one the transfer uses
     let (st, _) = b.cmd(CMD18, 5, true);
     assert_eq!(b.ram(0x4010_2000, 1024), &image[5 * 512..7 * 512]);
     assert_eq!(st & (CC | TC), CC | TC);
@@ -566,8 +568,9 @@ fn reset_values_follow_the_rm() {
     for (off, v) in reset {
         assert_eq!(b.r(off), v, "+{off:#x}");
     }
-    // guess: RSTA puts every register back to its reset value (RM Table 25-13: "affects the entire host
-    // controller"); measured on an MCF54415 for SYSCTL (the rest of the written value is dropped), PROCTL and WML
+    // measured on an MCF54415: an empty DATPORT reads 0; RSTA puts DSADDR, BLKATTR, CMDARG, PROCTL, IRQSTATEN,
+    // IRQSIGEN, WML, ADMASAR, VENDOR and SYSCTL (the rest of the written value is dropped) back to their reset
+    // values. guess: the rest too (RM Table 25-13: "affects the entire host controller")
     for (off, v) in [
         (DSADDR, 0x4010_0000),
         (BLKATTR, 3 << 16 | 512),
@@ -611,6 +614,23 @@ fn irqstaten_gates_status_bits() {
         "clearing the enable clears the status bit"
     );
     assert!(!b.source());
+}
+
+#[test]
+fn blkattr_reads_blkcnt_1_and_wml_its_levels_measured() {
+    // measured on an MCF54415, no transfer running: BLKATTR writes of BLKCNT 2, 3, 0x20 and 0x40 read back BLKCNT
+    // 1 while BLKSIZE takes (0x0020_0200 read 0x0001_0200); WML reads 0x0800_0800 with the written levels
+    let mut b = board(&[]);
+    for count in [2, 3, 0x20, 0x40] {
+        b.w(BLKATTR, count << 16 | 0x200);
+        assert_eq!(b.r(BLKATTR), 0x0001_0200, "BLKCNT {count:#x}");
+    }
+    b.w(BLKATTR, 3 << 16 | 4);
+    assert_eq!(b.r(BLKATTR), 0x0001_0004);
+    b.w(WML, 0x0010_0010);
+    assert_eq!(b.r(WML), 0x0810_0810);
+    b.w(WML, 0x0004_0020);
+    assert_eq!(b.r(WML), 0x0804_0820);
 }
 
 #[test]
