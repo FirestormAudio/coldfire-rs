@@ -12,7 +12,7 @@ from pathlib import Path
 PARTS = ["mcf54410", "mcf54415", "mcf54416", "mcf54417", "mcf54418"]
 PACKAGE = {"mcf54410": "196", "mcf54415": "256", "mcf54416": "256", "mcf54417": "256", "mcf54418": "256"}
 # token → PAC register block (module::Type); DMA channels share EDMA and have none
-BLOCKS = {**{f"PIT{i}": "pit0::Pit0" for i in range(4)}, **{f"UART{i}": "uart0::Uart0" for i in range(10)},
+BLOCKS = {**{f"PIT{i}": "pit0::Pit0" for i in range(4)}, **{f"DTIM{i}": "dtim0::Dtim0" for i in range(4)}, **{f"UART{i}": "uart0::Uart0" for i in range(10)},
           **{f"DSPI{i}": "dspi0::Dspi0" for i in range(4)}, **{f"I2C{i}": "i2c0::I2c0" for i in range(6)},
           **{f"SSI{i}": "ssi0::Ssi0" for i in range(2)}, "ESDHC": "esdhc::Esdhc", "USBOTG": "usbotg::Usbotg"}
 

@@ -4,6 +4,10 @@ embassy_hal_internal::peripherals! {
     #[cfg(not(feature = "time-driver-pit1"))] PIT1,
     #[cfg(not(feature = "time-driver-pit2"))] PIT2,
     #[cfg(not(feature = "time-driver-pit3"))] PIT3,
+    DTIM0,
+    DTIM1,
+    DTIM2,
+    DTIM3,
     UART0,
     UART1,
     #[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] UART2,
@@ -185,6 +189,10 @@ embassy_hal_internal::peripherals! {
 #[cfg(not(feature = "time-driver-pit1"))] impl_regs!(PIT1, pit0::Pit0);
 #[cfg(not(feature = "time-driver-pit2"))] impl_regs!(PIT2, pit0::Pit0);
 #[cfg(not(feature = "time-driver-pit3"))] impl_regs!(PIT3, pit0::Pit0);
+impl_regs!(DTIM0, dtim0::Dtim0);
+impl_regs!(DTIM1, dtim0::Dtim0);
+impl_regs!(DTIM2, dtim0::Dtim0);
+impl_regs!(DTIM3, dtim0::Dtim0);
 impl_regs!(UART0, uart0::Uart0);
 impl_regs!(UART1, uart0::Uart0);
 #[cfg(any(feature = "mcf54415", feature = "mcf54416", feature = "mcf54417", feature = "mcf54418"))] impl_regs!(UART2, uart0::Uart0);
