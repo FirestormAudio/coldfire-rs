@@ -36,12 +36,11 @@ chip (see [hal-tests/README.md](hal-tests/README.md)).
 | DMA timers | `Timestamp`: a free-running 32-bit counter at the bus clock or bus/16, through a prescaler. Emulation-tested only. |
 | UART | Blocking `Uart`/`UartTx`/`UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
 | DSPI | Blocking SPI: `SpiBus` and `SpiDevice` with hardware chip selects (`embedded-hal` 1.0). |
-| eSDHC | eMMC block reads (read-only) through eDMA, async. |
+| eSDHC | eMMC block reads, writes and TRIM through eDMA, async. Writes and TRIM are emulation-tested only. |
 | SSI | I2S or network-mode audio: full-duplex eDMA rings, a `render(input, output)` callback in a software interrupt at the level you pick. SSI1 runs on hardware; SSI0 is emulation-tested only. |
 | USB OTG | Device mode at high speed through a ULPI PHY (`embassy-usb-driver`). MCF54415–MCF54418 only. |
 
-Not there yet: eSDHC writes, EPORT, DMA timers, I2C, RTC, PWM, ADC/DAC, FlexCAN, Ethernet, NAND flash and
-USB host.
+Not there yet: a DMA-timer time driver, I2C, RTC, PWM, ADC/DAC, FlexCAN, Ethernet, NAND flash and USB host.
 [TODO.md](TODO.md) has the list.
 
 ## Quick start

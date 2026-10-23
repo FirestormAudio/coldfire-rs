@@ -11,6 +11,7 @@ the emulated chip. It isn't published, and it stays out of the workspace as `exa
 | `spi` | DSPI transactions and transfers, wide reads through CTAR1, the bare bus with a GPIO select. |
 | `dma` | eDMA copies at each size, a source ring, SLAST/DLAST, the major-loop interrupt, a channel link. |
 | `esdhc` | eMMC bring-up, the sector count and EXT_CSD, multi-block reads. |
+| `esdhc-write` | eMMC writes read back (one over two 64 KiB pieces), a TRIM read back as erased, the refusals, and a write retried after a CRC fault. |
 | `ssi` | An I2S stream whose render adds 1 to each sample, with no block late or skipped. |
 | `time` | embassy-time timers and a ticker, against `Instant` and the host's clock. |
 | `eport` | The edge port's waits on IRQ2 and IRQ6: edges and levels within 1 ms of the host's, a dropped wait leaving its pin disarmed. |

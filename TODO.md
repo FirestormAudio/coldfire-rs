@@ -4,10 +4,9 @@
 
 Peripherals a known board uses come first; the rest wait for hardware to test them on.
 
-1. eSDHC writes and erase (CMD24/25, CMD35/36/38): see "Existing drivers" below.
-2. A time driver on a DMA timer (DTIM0–3): one-shot alarms at the reference compare, for a tick rate above 1 kHz
+1. A time driver on a DMA timer (DTIM0–3): one-shot alarms at the reference compare, for a tick rate above 1 kHz
    (`dtim::Timestamp` is the free-running counter).
-3. Waiting for a board to test on: I2C (I2C0–I2C5); RTC; PWM (MCPWM); ADC and DAC; FlexCAN (FLEXCAN0/1);
+2. Waiting for a board to test on: I2C (I2C0–I2C5); RTC; PWM (MCPWM); ADC and DAC; FlexCAN (FLEXCAN0/1);
    Ethernet (MACNET0/1 and the switch, through embassy-net); a NAND flash driver (the cold-boot part only reads
    boot-format pages); USB host mode.
 
@@ -32,7 +31,10 @@ Peripherals a known board uses come first; the rest wait for hardware to test th
   eDMA requests: RX/TX 12/13, 14/15, 28/29, 44/45. Also `Operation::DelayNs` in `PcsDevice` transactions (refused today:
   the blocking driver holds no clock reference, so it stays usable without a runtime).
 - DSPI: frame sizes other than 8 (plus 16-bit reads), and several hardware-CS devices sharing one bus.
-- eSDHC: writes (CMD24/25, CMD23 reliable write), erase, SD cards (CMD8/ACMD41, 3.3 V checks), card detect, 1-bit
+- eSDHC: writes and TRIM run on hardware (so far emulation-tested only);
+  CMD23 reliable write, erase-group ERASE, secure erase and trim, discard, sanitize, write protection and RPMB; a TRIM
+  busy bounded by EXT_CSD TRIM_MULT rather than the controller's data timeout.
+- eSDHC: SD cards (CMD8/ACMD41, 3.3 V checks), card detect, 1-bit
   and 8-bit buses, the controller's own DMA/ADMA, an SD clock computed from the clock tree (PLL OUTDIV3,
   MISCCR SDHCSRC) instead of fixed dividers, and the RM's divider-change sequence (SDCLKEN off, wait SDSTB).
 - eSDHC: bound the bring-up waits without a time driver (an attempt cap on the CMD1 loop); today only the time driver's

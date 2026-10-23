@@ -18,7 +18,7 @@ An [Embassy](https://embassy.dev) HAL for the NXP MCF5441x (ColdFire V4e: MCF544
 | `uart` | Blocking `Uart`, `UartTx` and `UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
 | `spi` | DSPI: `SpiBus` and `SpiDevice` with hardware chip selects (`embedded-hal` 1.0, blocking). |
 | `ssi` | SSI0/SSI1: I2S or network mode, full-duplex eDMA rings, `render(input, output)` in a software interrupt at a level you choose; a clocks-only start for codec bring-up. |
-| `esdhc` | eMMC block reads (read-only) through eDMA, async. |
+| `esdhc` | eMMC block reads, writes (CMD25) and TRIM through eDMA, async, with the card's status checked after each change. |
 | `usb` | USB OTG in device mode at high speed through a ULPI PHY (`embassy-usb-driver`); MCF54415–MCF54418. |
 
 ## Example
