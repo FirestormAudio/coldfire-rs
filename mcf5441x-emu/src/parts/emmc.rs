@@ -1,5 +1,5 @@
-//! An eMMC card: the read-only subset of the MMC command set a boot loader and a block driver use (JEDEC eMMC,
-//! JESD84), behind the eSDHC ([`Esdhc`](crate::soc::Esdhc)).
+//! An eMMC card: the subset of the MMC command set a boot loader and a block driver use (JEDEC eMMC, JESD84): reads,
+//! multiple-block writes and TRIM, behind the eSDHC ([`Esdhc`](crate::soc::Esdhc)).
 
 use std::fmt;
 
@@ -9,12 +9,21 @@ const BUS_WIDTH: usize = 183;
 const HS_TIMING: usize = 185;
 /// EXT_CSD SEC_COUNT, bytes 212-215, little-endian.
 const SEC_COUNT: usize = 212;
+/// EXT_CSD ERASED_MEM_CONT: 1 when erased memory reads 0xFF, else 0x00.
+const ERASED_MEM_CONT: usize = 181;
+/// CMD38's TRIM argument (JESD84 6.6.10).
+const TRIM: u32 = 1;
+/// Card status ADDRESS_OUT_OF_RANGE and ERASE_PARAM (JESD84 Table 68).
+const OUT_OF_RANGE: u32 = 1 << 31;
+const ERASE_PARAM: u32 = 1 << 27;
 
 /// The R1 card status the card answers with: CURRENT_STATE tran (4 << 9) and READY_FOR_DATA (bit 8).
 const R1: u32 = 0x900;
 
-/// The commands modelled: no writes, erases or locks.
-const MODELLED: [u8; 14] = [0, 1, 2, 3, 6, 7, 8, 9, 10, 12, 14, 16, 18, 19];
+/// The commands modelled: no reliable writes, erase-group erases, locks or write protection.
+const MODELLED: [u8; 19] = [
+    0, 1, 2, 3, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 19, 25, 35, 36, 38,
+];
 
 /// What the board decides about its card.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,15 +55,18 @@ pub(crate) enum Response {
 pub(crate) enum Transfer {
     /// Blocks from the card (CMD8, CMD18).
     Blocks,
+    /// Blocks to the card (CMD25).
+    BlocksWrite,
     /// The bus-test pattern from the card (CMD14).
     BusTestRead,
     /// The bus-test pattern to the card (CMD19).
     BusTestWrite,
 }
 
-/// An eMMC with sector addressing and 512-byte blocks, read-only, behind an eSDHC.
+/// An eMMC with sector addressing and 512-byte blocks behind an eSDHC.
 ///
 /// Its contents are `image`: sector `n` is bytes `512 n .. 512 n + 512`, and reads past the end of the image are 0.
+/// Writes and TRIM change it ([`Emmc::image`]), growing it as needed up to SEC_COUNT sectors.
 /// The card answers:
 /// - CMD0 (GO_IDLE): back to a 1-bit bus; CMD1 (SEND_OP_COND): the OCR; CMD2 and CMD10: the CID; CMD9: the CSD;
 ///   every other command R1 with the card in the transfer state, ready for data. The card has no state machine
@@ -66,13 +78,24 @@ pub(crate) enum Transfer {
 ///   `i ^ 3`).
 /// - CMD18 (READ_MULTIPLE_BLOCK): the blocks from the sector in its argument.
 /// - CMD19 (BUS_TEST_W) takes a word, CMD14 (BUS_TEST_R) returns it inverted.
+/// - CMD25 (WRITE_MULTIPLE_BLOCK): the blocks the controller sends land at the sector in its argument. One starting
+///   or running past SEC_COUNT writes nothing and sets ADDRESS_OUT_OF_RANGE in the status.
+/// - CMD35 and CMD36 (ERASE_GROUP_START and END) take the first and last sectors of a range; CMD38 (ERASE) with the
+///   TRIM argument fills it with the erased value (0xFF when EXT_CSD ERASED_MEM_CONT, byte 181, is 1, else 0x00). A
+///   range ending before its start or past SEC_COUNT trims nothing and sets ERASE_PARAM. Any other CMD38 argument
+///   (erase-group ERASE, secure erase or trim, discard) is not modelled. The controller holds DAT0 low after CMD38.
+/// - CMD13 (SEND_STATUS): R1 with the error bits set since the last CMD13, which it clears.
 /// - CMD3, CMD7, CMD12 and CMD16: R1. CMD12 ends the stuck-sending state.
+///
+/// guess: none of the write side is measured (the unit's card is not written); timings are the controller's
+/// ([`EsdhcConfig`](crate::soc::EsdhcConfig)).
 ///
 /// Any other command, and any other CMD6, is not modelled: the controller refuses the XFERTYP write that would
 /// send it.
 ///
 /// Faults ([`Emmc::faults`]): each CMD18 while the count is above 0 takes one off, fails its CRC and leaves the
-/// card sending: until CMD12 it answers no command but CMD12 (the controller sees a command timeout).
+/// card sending: until CMD12 it answers no command but CMD12 (the controller sees a command timeout). Each CMD25
+/// while it is above 0 takes one off and fails its data's CRC: nothing is written (the controller sees DCE).
 pub struct Emmc {
     image: Vec<u8>,
     ocr: u32,
@@ -85,6 +108,12 @@ pub struct Emmc {
     bus_test: u32,
     commands: Vec<(u8, u32)>,
     record: bool,
+    /// The error bits for the next CMD13.
+    status: u32,
+    /// CMD35's and CMD36's sectors.
+    erase_range: (u32, u32),
+    written: Vec<(u32, u32)>,
+    trimmed: Vec<(u32, u32)>,
 }
 
 impl fmt::Debug for Emmc {
@@ -120,10 +149,52 @@ impl Emmc {
             bus_test: 0,
             commands: Vec::new(),
             record: true,
+            status: 0,
+            erase_range: (0, 0),
+            written: Vec::new(),
+            trimmed: Vec::new(),
         }
     }
 
-    /// The number of CMD18s still to fail: each fails its CRC and leaves the card sending until CMD12.
+    /// The card's contents: sector `n` at bytes `512 n ..`, anything past the end reading 0.
+    pub fn image(&self) -> &[u8] {
+        &self.image
+    }
+
+    /// Every CMD25 that wrote, (first sector, sectors), in order.
+    pub fn written(&self) -> &[(u32, u32)] {
+        &self.written
+    }
+
+    /// Every CMD25 that wrote so far, emptying the log.
+    pub fn take_written(&mut self) -> Vec<(u32, u32)> {
+        std::mem::take(&mut self.written)
+    }
+
+    /// Every TRIM that trimmed, (first sector, last sector), in order.
+    pub fn trimmed(&self) -> &[(u32, u32)] {
+        &self.trimmed
+    }
+
+    /// Every TRIM that trimmed so far, emptying the log.
+    pub fn take_trimmed(&mut self) -> Vec<(u32, u32)> {
+        std::mem::take(&mut self.trimmed)
+    }
+
+    fn sectors(&self) -> u32 {
+        u32::from_le_bytes(self.ext_csd[SEC_COUNT..SEC_COUNT + 4].try_into().unwrap())
+    }
+
+    /// Bytes `start..start + len` of the image, growing it with zeros to cover them.
+    fn span(&mut self, start: usize, len: usize) -> &mut [u8] {
+        if self.image.len() < start + len {
+            self.image.resize(start + len, 0);
+        }
+        &mut self.image[start..start + len]
+    }
+
+    /// The number of CMD18s and CMD25s still to fail: a CMD18 fails its CRC and leaves the card sending until CMD12;
+    /// a CMD25's data fails its CRC and nothing is written.
     pub fn faults(&mut self) -> &mut u32 {
         &mut self.faults
     }
@@ -147,7 +218,12 @@ impl Emmc {
     pub(crate) fn unmodelled(&self, cmd: u8, arg: u32) -> Option<String> {
         if !MODELLED.contains(&cmd) {
             return Some(format!(
-                "eMMC: CMD{cmd} is not modelled (read-only command set)"
+                "eMMC: CMD{cmd} is not modelled (outside the card's command set)"
+            ));
+        }
+        if cmd == 38 && arg != TRIM {
+            return Some(format!(
+                "eMMC: CMD38 {arg:#010x} is not modelled (only TRIM, argument 1)"
             ));
         }
         if cmd == 6 {
@@ -172,6 +248,7 @@ impl Emmc {
     pub(crate) fn transfer(cmd: u8) -> Option<Transfer> {
         match cmd {
             8 | 18 => Some(Transfer::Blocks),
+            25 => Some(Transfer::BlocksWrite),
             14 => Some(Transfer::BusTestRead),
             19 => Some(Transfer::BusTestWrite),
             _ => None,
@@ -204,6 +281,19 @@ impl Emmc {
             }
             12 => {
                 self.sending = false;
+                Response::Short(R1)
+            }
+            13 => Response::Short(R1 | std::mem::take(&mut self.status)),
+            35 => {
+                self.erase_range.0 = arg;
+                Response::Short(R1)
+            }
+            36 => {
+                self.erase_range.1 = arg;
+                Response::Short(R1)
+            }
+            38 => {
+                self.trim();
                 Response::Short(R1)
             }
             _ => Response::Short(R1),
@@ -242,6 +332,48 @@ impl Emmc {
                 .copy_from_slice(&self.image[start as usize..end as usize]);
         }
         Some(out)
+    }
+
+    /// CMD38 TRIM over CMD35..=CMD36's sectors.
+    fn trim(&mut self) {
+        let (start, end) = self.erase_range;
+        if end < start || end >= self.sectors() {
+            self.status |= ERASE_PARAM;
+            return;
+        }
+        let erased = if self.ext_csd[ERASED_MEM_CONT] & 1 != 0 {
+            0xFF
+        } else {
+            0
+        };
+        let (from, len) = (start as usize * 512, (end - start + 1) as usize * 512);
+        self.span(from, len).fill(erased);
+        if self.record {
+            self.trimmed.push((start, end));
+        }
+    }
+
+    /// CMD25 with `arg`: `data` (the blocks as the controller's DATPORT words carried them, big-endian) lands at its
+    /// sector. `false` when an injected fault fails its CRC; nothing is written then.
+    pub(crate) fn write_blocks(&mut self, arg: u32, data: &[u8]) -> bool {
+        if self.faults > 0 {
+            self.faults -= 1;
+            return false;
+        }
+        let blocks = (data.len() / 512) as u32;
+        if arg
+            .checked_add(blocks)
+            .is_none_or(|end| end > self.sectors())
+        {
+            self.status |= OUT_OF_RANGE;
+            return true;
+        }
+        self.span(arg as usize * 512, data.len())
+            .copy_from_slice(data);
+        if self.record {
+            self.written.push((arg, blocks));
+        }
+        true
     }
 
     /// CMD19's word, written by the host.

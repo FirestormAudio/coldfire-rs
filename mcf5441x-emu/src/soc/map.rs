@@ -232,6 +232,10 @@ pub struct ChipOptions {
     pub sd_data_latency: u64,
     /// How long the card holds DAT0 busy after a CMD6 ([`EsdhcConfig::cmd6_busy`]).
     pub sd_cmd6_busy: u64,
+    /// How long the card is busy after a write's last block ([`EsdhcConfig::write_busy`]).
+    pub sd_write_busy: u64,
+    /// How long the card is busy after a CMD38 ([`EsdhcConfig::erase_busy`]).
+    pub sd_erase_busy: u64,
     /// The clock gates at the start ([`Gates`]).
     pub gates: Gates,
     /// Each DMA timer's DT*n*IN pin: ticks between its falling edges, or `None` when it never toggles (see
@@ -256,6 +260,8 @@ impl Default for ChipOptions {
             usb_ticks_per_us: 1,
             sd_data_latency: 1,
             sd_cmd6_busy: 1,
+            sd_write_busy: 1,
+            sd_erase_busy: 1,
             gates: Gates::Open,
             dtin: [None; 4],
         }
@@ -302,6 +308,13 @@ impl ChipOptions {
     /// Set the USB controller's time scale.
     pub fn with_usb_ticks_per_us(mut self, ticks_per_us: u64) -> ChipOptions {
         self.usb_ticks_per_us = ticks_per_us;
+        self
+    }
+
+    /// Set the card's busy times after a write's last block and after a CMD38, in ticks.
+    pub fn with_sd_busy(mut self, write: u64, erase: u64) -> ChipOptions {
+        self.sd_write_busy = write;
+        self.sd_erase_busy = erase;
         self
     }
 
@@ -566,6 +579,8 @@ impl Mcf5441x {
                     dma: ESDHC_DMA,
                     data_latency: options.sd_data_latency,
                     cmd6_busy: options.sd_cmd6_busy,
+                    write_busy: options.sd_write_busy,
+                    erase_busy: options.sd_erase_busy,
                 },
                 options.card,
             )),

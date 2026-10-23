@@ -135,6 +135,8 @@ fn options() -> ChipOptions {
         usb_ticks_per_us: US,
         sd_data_latency: SD_LATENCY,
         sd_cmd6_busy: SD_BUSY,
+        sd_write_busy: SD_BUSY,
+        sd_erase_busy: SD_BUSY,
         gates: Gates::Open,
         dtin: [None; 4],
     }

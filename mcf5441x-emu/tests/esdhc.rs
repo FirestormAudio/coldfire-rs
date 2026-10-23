@@ -63,6 +63,17 @@ const CMD14: u32 = 0x0E3A_0010;
 const CMD16: u32 = 0x101A_0000;
 const CMD18: u32 = 0x123A_0036;
 const CMD19: u32 = 0x133A_0000;
+const CMD13: u32 = 0x0D1A_0000;
+/// CMD25 with DPSEL, MSBSEL, AC12EN and BCEN, DTDSEL clear (a write).
+const CMD25: u32 = 0x193A_0026;
+const CMD35: u32 = 0x231A_0000;
+const CMD36: u32 = 0x241A_0000;
+/// CMD38, R1b.
+const CMD38: u32 = 0x261B_0000;
+/// CMD38's TRIM argument, and the card status bits (JESD84 Table 68).
+const TRIM: u32 = 1;
+const OUT_OF_RANGE: u32 = 1 << 31;
+const ERASE_PARAM: u32 = 1 << 27;
 /// CMD6 SWITCH write-byte BUS_WIDTH (EXT_CSD 183) = 1: a 4-bit bus.
 const BUS_WIDTH_4: u32 = 0x03B7_0100;
 /// PROCTL with DTW 4-bit (EMODE address-invariant).
@@ -73,6 +84,8 @@ const SOURCE: u8 = 31;
 const CH: u32 = 59;
 const LATENCY: u64 = 1000;
 const BUSY: u64 = 2000;
+const WRITE_BUSY: u64 = 3000;
+const ERASE_BUSY: u64 = 5000;
 /// The card's size in sectors: a test value.
 const SECTORS: u32 = 0x0076_8000;
 const OCR: u32 = 0xC0FF_8080;
@@ -115,6 +128,8 @@ fn board_with(card: Option<Emmc>) -> Board {
                 dma: CH as u8,
                 data_latency: LATENCY,
                 cmd6_busy: BUSY,
+                write_busy: WRITE_BUSY,
+                erase_busy: ERASE_BUSY,
             },
             card,
         )),
@@ -186,6 +201,38 @@ impl Board {
             self.m.access(t + off, size, Some(v)).unwrap();
         }
         self.m.access(EDMA + 0x18, Size::Byte, Some(CH)).unwrap();
+    }
+
+    /// Point channel 59 at DATPORT from `src` for `nbytes`: 32-bit words, 16 bytes a request; then SERQ.
+    fn arm_write(&mut self, src: u32, nbytes: u32) {
+        let t = EDMA + 0x1000 + 32 * CH;
+        for (off, size, v) in [
+            (0x00, Size::Long, src),
+            (0x04, Size::Word, 0x0202),
+            (0x06, Size::Word, 4),
+            (0x08, Size::Long, 16),
+            (0x0C, Size::Long, 0),
+            (0x10, Size::Long, SD + DATPORT),
+            (0x16, Size::Word, 0),
+            (0x14, Size::Word, nbytes / 16),
+            (0x1C, Size::Word, nbytes / 16),
+            (0x18, Size::Long, 0),
+            (0x1E, Size::Word, 0),
+        ] {
+            self.m.access(t + off, size, Some(v)).unwrap();
+        }
+        self.m.access(EDMA + 0x18, Size::Byte, Some(CH)).unwrap();
+    }
+
+    /// Idle through every event the eSDHC has pending.
+    fn settle(&mut self) {
+        while let Some(t) = self.esdhc().next_event() {
+            self.idle(t);
+        }
+    }
+
+    fn card(&self) -> &Emmc {
+        self.esdhc().card().unwrap()
     }
 
     fn tcd_csr(&mut self) -> u32 {
@@ -406,8 +453,9 @@ fn a_failed_read_needs_rstd_and_cmd12() {
 }
 
 #[test]
-fn write_commands_halt() {
-    for cmd in [13, 23, 24, 25, 35, 36, 38] {
+fn unmodelled_write_commands_halt() {
+    // CMD23 (SET_BLOCK_COUNT, reliable write) and CMD24 (WRITE_BLOCK); CMD38 other than TRIM has its own test
+    for cmd in [23, 24] {
         let mut b = board(&[]);
         b.w(CMDARG, 0);
         let d = b.refused(XFERTYP, cmd << 24);
@@ -759,4 +807,124 @@ fn take_writes_and_take_commands_drain_and_record_off_logs_nothing() {
     assert_eq!(rsp, CID[0], "the card still answers");
     assert!(b.esdhc().writes().is_empty());
     assert!(b.esdhc().card().unwrap().commands().is_empty());
+}
+
+#[test]
+fn cmd25_writes_sectors_from_channel_59_and_busies_the_card() {
+    let mut b = board(&[]);
+    let data: Vec<u8> = (0..1024u32).map(|i| (i * 7) as u8).collect();
+    b.m.mem.load(0x4010_2000, &data).unwrap();
+    b.arm_write(0x4010_2000, 1024);
+    b.w(BLKATTR, 2 << 16 | 512);
+    let (st, _) = b.cmd(CMD25, 9, false);
+    assert_eq!(st & CC, CC);
+    let now = b.m.now();
+    b.idle(now + LATENCY);
+    // the eDMA filled the controller in the data phase's tick; the card is busy, then TC
+    assert_eq!(b.card().written(), [(9, 2)]);
+    assert_eq!(&b.card().image()[9 * 512..11 * 512], data.as_slice());
+    assert_eq!(b.r(PRSSTAT) & DAT0, 0, "busy after the last block");
+    assert_eq!(b.r(IRQSTAT) & TC, 0);
+    b.idle(now + LATENCY + WRITE_BUSY);
+    assert_eq!(b.r(IRQSTAT) & TC, TC);
+    assert_eq!(
+        b.r(PRSSTAT) & (DAT0 | CDIHB | DLA),
+        DAT0,
+        "the data line is free"
+    );
+    assert!(!b.dma_line());
+    let (_, r1) = b.cmd(CMD13, 0x0002_0000, true);
+    assert_eq!(r1, 0x900, "no error");
+}
+
+#[test]
+fn a_write_past_the_end_is_reported_by_cmd13_once() {
+    let mut b = board(&[]);
+    b.arm_write(0x4010_2000, 1024);
+    b.w(BLKATTR, 2 << 16 | 512);
+    b.cmd(CMD25, SECTORS - 1, false);
+    b.settle();
+    assert_eq!(b.r(IRQSTAT) & TC, TC);
+    assert!(b.card().written().is_empty());
+    let (_, r1) = b.cmd(CMD13, 0x0002_0000, true);
+    assert_eq!(r1, 0x900 | OUT_OF_RANGE);
+    let (_, r1) = b.cmd(CMD13, 0x0002_0000, true);
+    assert_eq!(r1, 0x900, "cleared by the read");
+}
+
+#[test]
+fn an_injected_fault_fails_a_write_with_dce_and_writes_nothing() {
+    let mut b = board(&[]);
+    *b.m.device_mut::<Esdhc>(b.sd).card_mut().unwrap().faults() = 1;
+    b.arm_write(0x4010_2000, 512);
+    b.w(BLKATTR, 1 << 16 | 512);
+    b.cmd(CMD25, 3, false);
+    b.settle();
+    assert_eq!(b.r(IRQSTAT) & (TC | DCE), DCE);
+    assert!(b.card().written().is_empty());
+}
+
+#[test]
+fn a_write_the_dma_never_feeds_times_out() {
+    let mut b = board(&[]);
+    b.w(BLKATTR, 1 << 16 | 512);
+    b.cmd(CMD25, 3, false);
+    b.settle();
+    assert_eq!(b.r(IRQSTAT) & (TC | DTOE), DTOE);
+    assert!(b.card().written().is_empty());
+}
+
+fn trim(b: &mut Board, start: u32, end: u32) {
+    b.cmd(CMD35, start, true);
+    b.cmd(CMD36, end, true);
+    let now = b.m.now();
+    let (st, _) = b.cmd(CMD38, TRIM, false);
+    assert_eq!(st & (CC | TC), CC);
+    assert_eq!(b.r(PRSSTAT) & DAT0, 0, "busy");
+    b.idle(now + ERASE_BUSY);
+    assert_eq!(b.r(IRQSTAT) & TC, TC, "TC when the busy ends");
+}
+
+#[test]
+fn trim_fills_with_the_erased_value() {
+    let image = vec![0x5A; 8 * 512];
+    for (erased, byte) in [(1, 0xFF), (0, 0x00)] {
+        let card = Emmc::new(
+            image.clone(),
+            EmmcConfig {
+                sec_count: SECTORS,
+                cid: CID,
+                csd: CSD,
+                ext_csd: vec![(181, erased)],
+                ocr: OCR,
+            },
+        );
+        let mut b = board_with(Some(card));
+        trim(&mut b, 2, 4);
+        let img = b.card().image();
+        assert!(img[2 * 512..5 * 512].iter().all(|&x| x == byte));
+        assert!(
+            img[..2 * 512]
+                .iter()
+                .chain(&img[5 * 512..])
+                .all(|&x| x == 0x5A)
+        );
+        assert_eq!(b.card().trimmed(), [(2, 4)]);
+    }
+}
+
+#[test]
+fn a_trim_ending_before_its_start_is_an_erase_param_error() {
+    let mut b = board(&[]);
+    trim(&mut b, 5, 4);
+    assert!(b.card().trimmed().is_empty());
+    let (_, r1) = b.cmd(CMD13, 0x0002_0000, true);
+    assert_eq!(r1, 0x900 | ERASE_PARAM);
+}
+
+#[test]
+fn only_trim_is_modelled_of_cmd38() {
+    let mut b = board(&[]);
+    b.w(CMDARG, 0);
+    assert!(b.refused(XFERTYP, CMD38).contains("only TRIM"));
 }

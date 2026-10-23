@@ -98,8 +98,8 @@ latency and CMD6 busy time), the clock gates at the start, and the rate of each 
 models assumes a clock frequency. `ChipOptions::default()` is the chip with nothing on it (no parts, the PLL values of
 the default reset configuration, UARTs with no character time (0 ticks: sending and receiving are instant), one tick per
 frame and microsecond, every clock gate open, no DT*n*IN pin toggling); the `with_nor`, `with_card`, `with_nand`,
-`with_pll`, `with_uart_ticks`, `with_ssi_ticks`, `with_usb_ticks_per_us`, `with_sd_timing`, `with_gates` and `with_dtin`
-builders change one part of it. `Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
+`with_pll`, `with_uart_ticks`, `with_ssi_ticks`, `with_usb_ticks_per_us`, `with_sd_timing`, `with_sd_busy`, `with_gates`
+and `with_dtin` builders change one part of it. `Chip::nor`, `nor_mut`, `card` and `card_mut` give the parts back from the machine.
 
 ```
 use mcf5441x_emu::Machine;
@@ -119,6 +119,8 @@ let chip = Mcf5441x::build(
         usb_ticks_per_us: 100,
         sd_data_latency: 1000,
         sd_cmd6_busy: 2000,
+        sd_write_busy: 3000,
+        sd_erase_busy: 5000,
         gates: Gates::Open,
         dtin: [None; 4],
     },
@@ -242,8 +244,10 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   frames take no time and are logged with their CTAS. [`SpiNor`](parts::SpiNor) is a serial NOR flash for a chip select;
   `SpiNor::faults` injects program failures, stuck bits, protection and WIP timing, and `SpiNor::set_status` latches
   E_ERR, P_ERR and WIP until CLSR.
-- **eSDHC** (RM ch. 25): commands, responses and block reads through DATPORT, drained by eDMA channel 59, with an
-  [`Emmc`](parts::Emmc) (read-only) behind it; the reset values and the RSTA/RSTD behaviour measured on an MCF54415.
+- **eSDHC** (RM ch. 25): commands, responses, block reads through DATPORT drained by eDMA channel 59 and block
+  writes (CMD25) filled through it, with an [`Emmc`](parts::Emmc) behind it that also takes TRIM (CMD35/36/38) and
+  answers SEND_STATUS (CMD13); the card is busy (DAT0 low) after a write and a TRIM for `with_sd_busy`'s times, then
+  TC. The reset values and the RSTA/RSTD behaviour measured on an MCF54415; the write side is a guess (not measured).
 - **USB OTG** (RM ch. 24): device mode with dQHs and dTDs in memory, endpoints 0-3, and host primitives (setup, IN and
   OUT packets, bus resets, scripts on the machine's clock). A high-speed IN of more than 64 bytes from the DDR window
   (0x4000_0000-0x7FFF_FFFF) never completes (measured on an MCF54415); from SRAM it does. The two general-purpose
@@ -267,7 +271,7 @@ instruction does not complete, PC stays on it) and the run stops with `Stop::Unm
 and the feature. Among them: eDMA CR HALT, CLM, EMLM, HOE, CX/ECX and group priorities, error interrupts and SERQ on a
 channel nothing drives; UART FIFO-full receive requests, multidrop and loopback modes; SSI configurations outside I2S
 master or network mode with FIFO 0, and its own interrupts; DSPI slave mode, interrupt requests, a push to a full
-FIFO; eSDHC write commands, its internal DMA and a clock divider change with the clock on; USB host mode,
+FIFO; eSDHC single-block and reliable writes (CMD24, CMD23), erase-group ERASE and secure erase, its internal DMA and a clock divider change with the clock on; USB host mode,
 little-endian buffers and full-speed bulk packets over 64 bytes; NFC commands other than page reads, and its
 interrupt; access sizes a register does not take. A tripwire reached by a device on its own (an eDMA request that
 never drops, a USB DMA access that fails) halts the run with the same kind after the instruction. Each model's

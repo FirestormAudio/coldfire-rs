@@ -93,6 +93,10 @@ pub struct EsdhcConfig {
     pub data_latency: u64,
     /// Ticks the card holds DAT0 low (busy) after a CMD6.
     pub cmd6_busy: u64,
+    /// Ticks the card holds DAT0 low (busy) after a CMD25's last block, before TC (guess: not measured).
+    pub write_busy: u64,
+    /// Ticks the card holds DAT0 low (busy) after a CMD38, before TC (guess: not measured).
+    pub erase_busy: u64,
 }
 
 /// A data phase to come.
@@ -195,6 +199,12 @@ pub struct Esdhc {
     drain_by: Option<u64>,
     /// DAT0 is low until this tick.
     busy_until: u64,
+    /// A CMD25's words still to come through DATPORT, and those that have.
+    want: u32,
+    incoming: Vec<u8>,
+    write_arg: u32,
+    /// The tick a busy that ends with TC (after CMD25's data or CMD38) ends.
+    tc_at: Option<u64>,
     /// SDCLKEN was set by a SYSCTL write since the last reset (it then guards the divider).
     clock_written: bool,
     writes: Vec<(u32, u32)>,
@@ -227,6 +237,10 @@ impl Esdhc {
             buffer: VecDeque::new(),
             drain_by: None,
             busy_until: 0,
+            want: 0,
+            incoming: Vec::new(),
+            write_arg: 0,
+            tc_at: None,
             clock_written: false,
             writes: Vec::new(),
             record: true,
@@ -265,7 +279,7 @@ impl Esdhc {
     }
 
     fn request(&self, cx: &mut DeviceCx) {
-        let on = self.vendor & 1 != 0 && !self.buffer.is_empty();
+        let on = self.vendor & 1 != 0 && (!self.buffer.is_empty() || self.want > 0);
         cx.dma.set(self.config.dma, on);
     }
 
@@ -289,6 +303,9 @@ impl Esdhc {
         self.pending = None;
         self.buffer.clear();
         self.drain_by = None;
+        self.want = 0;
+        self.incoming.clear();
+        self.tc_at = None;
         self.prs &= !(CDIHB | DLA | BREN | BWEN);
     }
 
@@ -353,9 +370,7 @@ impl Esdhc {
             ));
         }
         if cx.now < self.busy_until {
-            return Err(format!(
-                "eSDHC: CMD{cmd} while the card is busy after CMD6 (DAT0 low)"
-            ));
+            return Err(format!("eSDHC: CMD{cmd} while the card is busy (DAT0 low)"));
         }
         if x & DPSEL == 0 {
             return Ok(None);
@@ -368,7 +383,7 @@ impl Esdhc {
                 "eSDHC: CMD{cmd} with DPSEL: the card has no data phase for it"
             ));
         };
-        if transfer != Transfer::Blocks {
+        if !matches!(transfer, Transfer::Blocks | Transfer::BlocksWrite) {
             return Ok(Some((transfer, 0)));
         }
         let (count, size) = (self.blkattr >> 16, self.blkattr & 0x1FFF);
@@ -412,6 +427,11 @@ impl Esdhc {
         if cmd == 6 {
             self.busy_until = cx.now + self.config.cmd6_busy;
         }
+        if cmd == 38 {
+            // guess: an R1b command's busy ends with TC (RM 25.3.12), the busy time the board's
+            self.busy_until = cx.now + self.config.erase_busy;
+            self.tc_at = Some(self.busy_until);
+        }
         if let Some((transfer, blocks)) = data {
             self.prs |= CDIHB | DLA;
             self.pending = Some(Pending {
@@ -447,6 +467,14 @@ impl Esdhc {
                     self.request(cx);
                 }
             },
+            Transfer::BlocksWrite => {
+                self.want = p.blocks * 128;
+                self.incoming.clear();
+                self.write_arg = p.arg;
+                // guess: one tick for the DMA to fill it, as for a read
+                self.drain_by = Some(now + 1);
+                self.request(cx);
+            }
             Transfer::BusTestRead => {
                 self.buffer.push_back(card.bus_test_read());
                 self.prs |= BREN;
@@ -468,6 +496,25 @@ impl Esdhc {
     }
 
     fn write_datport(&mut self, v: u32, cx: &mut DeviceCx) {
+        if self.want > 0 {
+            self.incoming.extend_from_slice(&v.to_be_bytes());
+            self.want -= 1;
+            if self.want == 0 {
+                self.drain_by = None;
+                self.request(cx);
+                let data = std::mem::take(&mut self.incoming);
+                let ok = self
+                    .card
+                    .as_mut()
+                    .is_some_and(|c| c.write_blocks(self.write_arg, &data));
+                if !ok {
+                    return self.done(DCE, cx);
+                }
+                self.busy_until = cx.now + self.config.write_busy;
+                self.tc_at = Some(self.busy_until);
+            }
+            return;
+        }
         if self.prs & BWEN == 0 {
             return; // written before BWEN: lost
         }
@@ -573,10 +620,10 @@ impl Device for Esdhc {
     }
 
     fn next_event(&self) -> Option<u64> {
-        match (self.pending.map(|p| p.at), self.drain_by) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        [self.pending.map(|p| p.at), self.drain_by, self.tc_at]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     fn advance(&mut self, now: u64, cx: &mut DeviceCx) {
@@ -590,11 +637,19 @@ impl Device for Esdhc {
             && now >= t
         {
             self.drain_by = None;
-            if !self.buffer.is_empty() {
+            if !self.buffer.is_empty() || self.want > 0 {
                 self.buffer.clear();
+                self.want = 0;
+                self.incoming.clear();
                 self.request(cx);
                 self.done(DTOE, cx);
             }
+        }
+        if let Some(t) = self.tc_at
+            && now >= t
+        {
+            self.tc_at = None;
+            self.done(TC, cx);
         }
     }
 
@@ -613,6 +668,7 @@ impl Device for Esdhc {
                 p.at += d;
             }
             self.drain_by = self.drain_by.map(|t| t + d);
+            self.tc_at = self.tc_at.map(|t| t + d);
             if self.busy_until > at {
                 self.busy_until += d;
             }
