@@ -23,6 +23,7 @@ pub use coldfire_rt as rt;
 pub mod boot;
 pub mod clocks;
 pub mod dma;
+pub mod dtim;
 pub mod eport;
 pub mod esdhc;
 #[cfg(all(target_arch = "m68k", any(feature = "executor-thread", feature = "executor-interrupt")))]
