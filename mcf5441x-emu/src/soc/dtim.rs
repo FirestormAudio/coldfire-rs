@@ -40,24 +40,24 @@ const INV_65537: u32 = 0xFFFF_0001;
 /// each prescaler output increments DTCN by 1, or by 65 537 with DTXMR MODE16 (RM Table 39-3).
 ///
 /// - DTMR (reset 0): RST, CLK, FRR, ORRI and PS. The counter runs while RST is set and CLK is not 0 (RM Table
-///   39-2), and holds its value otherwise. guess: a change of CLK, PS or MODE16, a write to DTCN, or a start drops
-///   the prescaler's partial count; the divide-by-16 runs freely from tick 0 (RM Table 39-2: it is not synchronized
-///   with the timer), and so does the DT*n*IN edge grid; the two to three bus clocks of DT*n*IN synchronization (RM
-///   39.3.1) are not modelled.
-/// - RST from 1 to 0 "resets register values" (RM Table 39-2). guess: it clears DTCN and DTER; DTRR, DTCR and
-///   DTXMR keep their values.
-/// - RM Table 39-2: "Avoid setting CLK when RST is already set. Doing so causes CLK to zero". guess: a write that
-///   changes CLK to a non-zero value while RST stays set leaves CLK 0 (the count stops); a write that keeps CLK
-///   keeps counting.
+///   39-2), and holds its value otherwise. A write to DTCN drops the prescaler's partial count (measured on an
+///   MCF54415). guess: so does a change of CLK, PS or MODE16, or a start; the divide-by-16 runs freely from tick 0
+///   (RM Table 39-2: it is not synchronized with the timer), and so does the DT*n*IN edge grid; the two to three
+///   bus clocks of DT*n*IN synchronization (RM 39.3.1) are not modelled.
+/// - RST from 1 to 0 resets the timer (RM Table 39-2): DTMR reads 0 in all its fields, DTER 0, DTRR 0xFFFF_FFFF
+///   and DTCN 0 (measured on an MCF54415). guess: DTXMR keeps its value.
+/// - RM Table 39-2: "Avoid setting CLK when RST is already set. Doing so causes CLK to zero". Not so on the part:
+///   setting CLK with RST already set counts normally (measured on an MCF54415).
 /// - DTXMR (reset 0): MODE16 and HALTED are stored (HALTED has no effect: the core is never halted while it
 ///   runs). DMAEN (no DMA request line is modelled), EN1588 (no 1588 timebase) and EPD are refused with
 ///   [`Stop::Unmodelled`], as are DTMR CE (capture mode) and OM set (toggle output, RM 39.3.4).
 /// - DTER (reset 0): REF is set when the prescaler output would increment DTCN past DTRR, that is after DTRR + 1
 ///   increments from 0 (RM 39.2.4, Eqn. 39-1); with FRR set the count restarts at 0 there, otherwise it goes on
 ///   (RM 39.3.3). Writing 1 clears REF and CAP (RM 39.2.3). CAP is never set.
-/// - DTRR (reset 0xFFFF_FFFF): the reference. DTCR (reset 0): read-only (RM Figure 39-6; guess: a write is
-///   ignored, although RM Table 39-1 lists it read/write). DTCN (reset 0): any write clears it (RM Table 39-7;
-///   guess: at any size, all 32 bits).
+/// - DTRR (reset 0xFFFF_FFFF): the reference; a word write at +6 sets its low half (measured on an MCF54415).
+///   DTCR (reset 0): a write is ignored (measured on an MCF54415; RM Figure 39-6 shows it read-only, RM Table 39-1
+///   read/write). DTCN (reset 0): any write clears it, a byte write too (RM Table 39-7; measured on an MCF54415).
+///   The reset values are measured on an MCF54415.
 ///
 /// Byte, word and longword accesses address their lanes of the registers (a long access at +0 is DTMR, DTXMR and
 /// DTER together). The rest of the window reads 0 and ignores writes.
@@ -65,8 +65,9 @@ const INV_65537: u32 = 0xFFFF_0001;
 /// The timer drives source `source` of interrupt controller `controller` with REF and ORRI (RM Table 39-4).
 ///
 /// While its clock gate is closed ([`Device::gate`]) the counter stops and no reference event happens; opening the
-/// gate continues the count where it stopped. guess: not measured (a module without its clock is taken not to
-/// count); the prescaler's partial count is dropped when the gate opens.
+/// gate continues the count where it stopped (measured on an MCF54415, DMA timer 1 at the bus clock / 16; it
+/// reads all ones meanwhile, as every gated module). guess: the prescaler's partial count is dropped when the gate
+/// opens.
 #[derive(Debug)]
 pub struct Dtim {
     n: u8,
@@ -207,11 +208,16 @@ impl Dtim {
         );
     }
 
-    fn write_dtmr(&mut self, mut value: u16, now: u64) {
+    fn write_dtmr(&mut self, value: u16, now: u64) {
         let was = self.dtmr;
-        // guess: changing CLK to a running clock while RST stays set stops the count (RM Table 39-2).
-        if was & RST != 0 && value & RST != 0 && value & CLK != was & CLK && value & CLK != 0 {
-            value &= !CLK;
+        if was & RST != 0 && value & RST == 0 {
+            // Measured on an MCF54415: the software reset resets the whole timer, whatever else is written.
+            self.dtmr = 0;
+            self.dter = 0;
+            self.dtrr = u32::MAX;
+            self.base = 0;
+            self.next = None;
+            return;
         }
         let how = |r: u16| (r & (RST | CLK), r >> 8);
         if how(value) == how(was) {
@@ -220,11 +226,6 @@ impl Dtim {
             return;
         }
         self.hold(now);
-        if was & RST != 0 && value & RST == 0 {
-            // guess: the software reset clears the counter and the events.
-            self.base = 0;
-            self.dter = 0;
-        }
         self.dtmr = value;
         self.start(now);
     }
@@ -342,7 +343,7 @@ impl Device for Dtim {
         false
     }
 
-    // guess: a gated timer stops counting and resumes where it stopped (not measured).
+    // Measured on an MCF54415: a gated timer stops counting and resumes where it stopped.
     fn gate(&mut self, closed: bool, now: u64) {
         if closed {
             self.hold(now);

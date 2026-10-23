@@ -182,10 +182,10 @@ module's gate is closed:
 
 - a read of it returns all ones at every size, for the core and for bus masters alike (measured on an MCF54415);
 - a write to it is dropped (measured on an MCF54415);
-- its events are held: it is not advanced or serviced, and it lists no wake sources; the PIT, the DMA timers, the
-  USB OTG's general-purpose timers, the SSI and the eSDHC stop their clocks and continue where they stopped when
-  the gate opens, while the other models with events (the UARTs, the USB host script and detach) catch up when it
-  opens (guess: not measured);
+- its events are held: it is not advanced or serviced, and it lists no wake sources; the PIT and the DMA timers
+  stop their counts and continue where they stopped when the gate opens (measured on an MCF54415); the USB OTG's
+  general-purpose timers, the SSI and the eSDHC stop their clocks the same way, while the other models with events
+  (the UARTs, the USB host script and detach) catch up when it opens (guess: not measured);
 - its interrupt and DMA request lines stay as it left them (guess: not measured), and an interrupt controller's
   requests still reach the core.
 
@@ -205,7 +205,8 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   accesses read all ones and write nothing (measured on an MCF54415).
 - **DMA timers 0-3** (RM ch. 39): the bus clock (one per tick, as the PIT's; DMA timer 0 counts the bus clock, measured
   on an MCF54415), the bus clock / 16 or the DT*n*IN pin (`ChipOptions::with_dtin`; by default it never toggles), the
-  prescaler, MODE16, the reference with REF, ORRI and free-run or restart, and DTCN cleared by any write. Capture mode,
+  prescaler, MODE16, the reference with REF, ORRI and free-run or restart, and DTCN cleared by any write; RST from 1
+  to 0 resets the timer, and setting CLK with RST already set counts (both measured on an MCF54415). Capture mode,
   the output modes, DMA requests (DMAEN), the 1588 timebase and programmable delay stop the run with `Stop::Unmodelled`.
 - **GPIO ports A-K** (RM ch. 16), inside the GPIO stub ([`Chip::gpio`](soc::Chip::gpio)): PODR and PDDR read back;
   a PPDSDR write sets the PODR bits written as 1 and a PCLRR write clears those written as 0 (PCLRR reads 0); PPDSDR
@@ -229,10 +230,12 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   channel linking (linked starts run in the same call, bounded); CR is stored (EDBG, ERCA and ERGA change nothing).
   ERQH/ERQL, INTH/INTL and ERRH/ERRL read back (32-bit; also `Edma::erq`, `Edma::int` and `Edma::err`); the commands
   set and clear their bits, and writing them directly is refused.
-  Misaligned addresses and reserved sizes (011 and 101 measured, 110 and 111 a guess) are configuration errors with ES
-  as measured on an MCF54415; a scatter/gather load comes after the major-loop link (overwriting a START it gave the
-  channel itself) and DONE is set onto the loaded CSR, and a misaligned scatter/gather address is the SGE error after
-  the completion (DLAST_SGA added to DADDR, no load), all measured on an MCF54415. On the built chip SERQ is taken
+  Misaligned addresses and reserved sizes (011, 101, 110 and 111 on both sides, 011 as SSIZE alone) are
+  configuration errors with ES as measured on an MCF54415 (SAE and SOE for SSIZE, DAE and DOE for DSIZE, NCE with a
+  4-byte NBYTES); a scatter/gather load comes after the major-loop link (overwriting a START it gave the channel
+  itself) and DONE is set onto the loaded CSR, and a misaligned scatter/gather address is the SGE error after the
+  completion (INT_MAJOR, D_REQ and the major-loop link still act, DLAST_SGA is added to DADDR, no load), all
+  measured on an MCF54415. On the built chip SERQ is taken
   only on the request lines a model drives (the table's last column) and the channels RM Table 19-6 leaves to software
   (30, 31, 42, 43, 46, 47); START and SSRT work on every channel.
 - **UART0-9** (RM ch. 41): a one-deep receiver and a transmitter with a holding and a shift register, one character

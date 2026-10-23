@@ -1,6 +1,7 @@
 //! The clock gates (RM 9.2.2-9.2.4): PPMSR0/1, PPMCR0/1, PPMHR0/1 and PPMLR0/1 in the SCM, and what a gated module
 //! does. A gated module reading all ones at every size, dropping writes, and the reset values are measured on an
-//! MCF54415; a gated module holding its events and keeping its lines are guesses.
+//! MCF54415, and so are a gated PIT and DMA timer stopping and continuing where they stopped; a gated module's
+//! other held events and the lines it keeps are guesses.
 
 use mcf5441x_emu::soc::{Chip, ChipOptions, Gates, Mcf5441x, Pit, StubBlock};
 use mcf5441x_emu::{Limit, Machine, Size, Stop};
@@ -114,9 +115,9 @@ fn writes_to_a_gated_module_are_dropped() {
 }
 
 #[test]
-fn a_gated_pit_does_not_count_guess() {
-    // guess: a gated module's events are held, and it continues where it stopped when the gate opens (not
-    // measured)
+fn a_gated_pit_does_not_count_measured() {
+    // measured on an MCF54415 (PIT1): a closed gate stops the count, and it continues where it stopped when the
+    // gate opens
     let (mut m, chip) = chip(Gates::Reset);
     // PIT0 is gated after reset
     assert_eq!(r(&mut m, PCNTR, Size::Word), 0xFFFF);

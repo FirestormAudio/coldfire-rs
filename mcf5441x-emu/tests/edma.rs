@@ -574,9 +574,9 @@ fn start_sized(m: &mut Machine, attr: u32, nbytes: u32) {
 }
 
 /// The configuration error of a reserved transfer size on channel 1: nothing moved, START cleared, DONE not set,
-/// ES with VLD, ERRCHN 1 and SAE, SOE, DAE and DOE; then CERR.
-fn assert_size_error(m: &mut Machine, what: &str) {
-    assert_eq!(r(m, ES, Size::Long), 0x8000_01F0, "{what}");
+/// ES with VLD, ERRCHN 1 and `bits`; then CERR.
+fn assert_size_error(m: &mut Machine, bits: u32, what: &str) {
+    assert_eq!(r(m, ES, Size::Long), 0x8000_0100 | bits, "{what}");
     assert_eq!(r(m, ERRL, Size::Long), 1 << 1, "{what}");
     assert_eq!(get(m, 1, CSR), 0, "{what}");
     assert_eq!(get(m, 1, SADDR), 0x4030_0000, "{what}");
@@ -584,7 +584,7 @@ fn assert_size_error(m: &mut Machine, what: &str) {
     assert_eq!(get(m, 1, CITER), 1, "{what}");
     assert_eq!(m.mem.peek(0x4030_0100, 32).unwrap(), [0; 32], "{what}");
     w(m, CERR, Size::Byte, 1);
-    assert_eq!(r(m, ES, Size::Long), 0x0000_01F0, "{what}");
+    assert_eq!(r(m, ES, Size::Long), 0x0000_0100 | bits, "{what}");
 }
 
 #[test]
@@ -593,7 +593,7 @@ fn reserved_size_101_is_a_configuration_error_measured() {
     // error, not a 32-byte transfer: nothing moves, ES 0x800001F0, ERRL bit 1, CSR 0, SADDR/DADDR unchanged
     let (mut m, _, _) = board(1);
     start_sized(&mut m, 0x0505, 32);
-    assert_size_error(&mut m, "101");
+    assert_size_error(&mut m, 0xF0, "101");
     no_halt(&mut m);
 }
 
@@ -602,17 +602,26 @@ fn reserved_size_011_is_a_configuration_error_measured() {
     // measured on an MCF54415: ATTR 0x0303 (011) gives exactly what 101 gives
     let (mut m, _, _) = board(1);
     start_sized(&mut m, 0x0303, 32);
-    assert_size_error(&mut m, "011");
+    assert_size_error(&mut m, 0xF0, "011");
     no_halt(&mut m);
 }
 
 #[test]
-fn reserved_sizes_110_111_and_one_sided_are_configuration_errors() {
-    // guess: 110 and 111, and a reserved size on one side only, give what 011 and 101 give (not measured)
-    for attr in [0x0606, 0x0707, 0x0602, 0x0005] {
+fn reserved_sizes_110_111_and_one_sided_are_configuration_errors_measured() {
+    // measured on an MCF54415, NBYTES 4: ATTR 0x0606 (110) and 0x0707 (111) give ES 0x800001F8 (VLD, ERRCHN 1,
+    // SAE, SOE, DAE, DOE and NCE); 0x0302 (SSIZE 011 alone) gives 0x800001C8 (SAE, SOE and NCE); nothing moves,
+    // CSR 0
+    for (attr, bits) in [(0x0606, 0xF8), (0x0707, 0xF8), (0x0302, 0xC8)] {
         let (mut m, _, _) = board(1);
-        start_sized(&mut m, attr, 32);
-        assert_size_error(&mut m, &format!("{attr:#06x}"));
+        start_sized(&mut m, attr, 4);
+        assert_size_error(&mut m, bits, &format!("{attr:#06x}"));
+        no_halt(&mut m);
+    }
+    // guess: a reserved DSIZE alone gives DAE and DOE, and NCE comes only when NBYTES is not a multiple of 32
+    for (attr, nbytes, bits) in [(0x0203, 4, 0x38), (0x0005, 32, 0x30), (0x0602, 32, 0xC0)] {
+        let (mut m, _, _) = board(1);
+        start_sized(&mut m, attr, nbytes);
+        assert_size_error(&mut m, bits, &format!("{attr:#06x}, NBYTES {nbytes}"));
         no_halt(&mut m);
     }
     // served at a request: the error ends the serving, the request stays asserted, nothing halts
@@ -1006,6 +1015,29 @@ fn software_start_with_a_misaligned_address_is_a_configuration_error() {
 }
 
 #[test]
+fn a_start_with_done_set_and_a_misaligned_address_leaves_csr_0_measured() {
+    // measured on an MCF54415: channel 1 completes a transfer (DONE set), then DADDR is made misaligned and CSR
+    // written with START: CSR reads 0 afterwards. Here the write's DONE of 0 clears DONE before the error.
+    let (mut m, _, _) = board(1);
+    start_channel(&mut m, 0x4030_0000, 0x4030_0100);
+    assert_eq!(get(&mut m, 1, CSR), DONE);
+    w(&mut m, tcd_addr(1, DADDR), Size::Long, 0x4030_0102);
+    w(&mut m, tcd_addr(1, CSR), Size::Word, START);
+    assert_eq!(r(&mut m, ES, Size::Long), 0x8000_0120, "VLD, ERRCHN 1, DAE");
+    assert_eq!(get(&mut m, 1, CSR), 0);
+    w(&mut m, CERR, Size::Byte, 1);
+    // guess: a start that does not write CSR keeps the earlier DONE through the error
+    tcd(&mut m, 1, &[(DADDR, 0x4030_0100)]);
+    w(&mut m, tcd_addr(1, CSR), Size::Word, START);
+    assert_eq!(get(&mut m, 1, CSR), DONE);
+    w(&mut m, tcd_addr(1, DADDR), Size::Long, 0x4030_0102);
+    w(&mut m, SSRT, Size::Byte, 1);
+    assert_eq!(r(&mut m, ES, Size::Long), 0x8000_0120);
+    assert_eq!(get(&mut m, 1, CSR), DONE);
+    no_halt(&mut m);
+}
+
+#[test]
 fn a_bus_error_halts() {
     // RM 19.4.2's bus errors (SBE/DBE) are not modelled
     let (mut m, _, _) = board(1);
@@ -1319,13 +1351,39 @@ fn misaligned_dlast_sga_moves_the_data_sets_done_and_adds_it_to_daddr_measured()
     assert_eq!(m.mem.peek(0x4043_0000, 4).unwrap(), [0; 4]);
     w(&mut m, CERR, Size::Byte, 1);
     assert_eq!(r(&mut m, ES, Size::Long), 0x0000_0104);
-    // guess: INT_MAJOR still raises the interrupt, which comes before scatter/gather in RM's order
-    w(&mut m, CDNE, Size::Byte, 1); // with DONE set, E_SG would be written as 0
+    no_halt(&mut m);
+}
+
+#[test]
+fn misaligned_dlast_sga_still_interrupts_drops_erq_and_links_measured() {
+    // measured on an MCF54415: channel 1 with ERQ set, CSR INT_MAJOR | D_REQ | E_SG | MAJOR_E_LINK to channel 2
+    // and a misaligned DLAST_SGA, then START: INTL bit 1 set, ERQL bit 1 cleared, channel 2 ran (DONE, data
+    // moved), CSR1 0x02BA (DONE), DADDR = the advanced DADDR + DLAST_SGA
+    let (mut m, _, _) = board(1);
+    let (src, dst, src2, dst2) = (0x4041_0000, 0x4042_0000, 0x4041_0010, 0x4042_0010);
+    let sga = 0x4040_1004;
+    m.mem.load(src, &[1, 2, 3, 4]).unwrap();
+    m.mem.load(src2, &[5, 6, 7, 8]).unwrap();
+    let mut a = copy4(src2, dst2);
+    a.push((CSR, 0));
+    tcd(&mut m, 2, &a);
     let mut a = copy4(src, dst);
-    a.extend([(DLAST, sga), (CSR, START | ESG | INTMAJOR)]);
+    a.extend([(DLAST, sga), (CSR, 0)]);
     tcd(&mut m, 1, &a);
-    assert_eq!(r(&mut m, ES, Size::Long), 0x8000_0104);
+    w(&mut m, SERQ, Size::Byte, 1);
+    assert_eq!(r(&mut m, ERQL, Size::Long), 1 << 1);
+    let csr = 2 << 8 | MAJORELINK | ESG | DREQ | INTMAJOR;
+    w(&mut m, tcd_addr(1, CSR), Size::Word, csr);
+    w(&mut m, tcd_addr(1, CSR), Size::Word, csr | START);
+    assert_eq!(r(&mut m, ES, Size::Long), 0x8000_0104, "VLD, ERRCHN 1, SGE");
+    assert_eq!(r(&mut m, INTL, Size::Long), 1 << 1);
     assert!(source(&m, 0, 9), "channel 1 -> INTC0 source 9");
+    assert_eq!(r(&mut m, ERQL, Size::Long), 0, "D_REQ cleared ERQ");
+    assert_eq!(get(&mut m, 1, CSR), 0x02BA);
+    assert_eq!(get(&mut m, 1, DADDR), (dst + 4).wrapping_add(sga));
+    assert_eq!(m.mem.peek(dst, 4).unwrap(), [1, 2, 3, 4]);
+    assert_eq!(m.mem.peek(dst2, 4).unwrap(), [5, 6, 7, 8], "channel 2 ran");
+    assert_eq!(get(&mut m, 2, CSR), DONE);
     no_halt(&mut m);
 }
 
