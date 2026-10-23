@@ -115,11 +115,13 @@ struct Pending {
 /// Registers (32-bit accesses only, RM Table 25-2; anything else is refused with [`Stop::Unmodelled`]), with their
 /// reset values (RM Table 25-2, all measured on an MCF54415):
 /// - DSADDR (0), BLKATTR (0x0001_0000), CMDARG (0), PROCTL (0x20), ADMASAR (0), VENDOR (1): stored. BLKATTR's block
-///   size and count are used by block reads; PROCTL's EMODE and DTW are checked; VENDOR\[EXT_DMA_EN\] gates the DMA
-///   request.
+///   size and count are used by block reads and writes; PROCTL's EMODE and DTW are checked; VENDOR\[EXT_DMA_EN\]
+///   gates the DMA request. BLKATTR reads BLKCNT 1 whatever count was written (measured on an MCF54415 with no
+///   transfer running, for counts of 2, 3, 0x20 and 0x40; the block size reads back); guess: the written count is
+///   kept and is the one a transfer uses, and a transfer under way reads 1 as well.
 /// - XFERTYP (0): a write sends the command (below).
 /// - CMDRSP0-CMDRSP3: the response; a 48-bit one goes to CMDRSP0 alone, a 136-bit one to all four (RM Table 25-9).
-/// - DATPORT: reads pop the buffer (an empty buffer reads 0, guess: what the RM leaves open); a write is the
+/// - DATPORT: reads pop the buffer (an empty buffer reads 0, measured on an MCF54415); a write is the
 ///   bus-test word while PRSSTAT\[BWEN\] is set, and is lost otherwise.
 /// - PRSSTAT: CDIHB and DLA while a data phase is pending or running (and after a data error, until RSTD or RSTA),
 ///   BREN and BWEN for the bus test; the rest reads as at reset (0xFF88_00F8: the lines high, SDSTB, the clocks
@@ -135,7 +137,8 @@ struct Pending {
 /// - IRQSTATEN (0x117F_013F): reserved bits read 0; clearing a bit clears its status bit (RM 25.3.11).
 /// - IRQSIGEN (0): a write setting a reserved bit is refused. The interrupt request is asserted while IRQSTAT and
 ///   IRQSIGEN share a bit.
-/// - WML (0x0810_0810): the two levels are stored (bits 27 and 11 read 1, RM Figure 25-17); not used.
+/// - WML (0x0810_0810): the two levels are stored and read back with bits 27 and 11 set (RM Figure 25-17;
+///   measured on an MCF54415: 0x0800_0800 with the levels written); not used.
 /// - FEVT: a write sets the IRQSTAT bits it names that IRQSTATEN enables (RM 25.3.16); reads 0.
 /// - HOSTCAPBLT (0x07F3_0000), HOSTVER (0x1201): constant. AUTOC12ERR and ADMAESR read 0; the rest of the window reads
 ///   0 and ignores writes.
@@ -143,8 +146,8 @@ struct Pending {
 /// Resets (SYSCTL): RSTD cancels the data phase, empties the buffer, clears PRSSTAT's CDIHB, DLA, BREN and BWEN and
 /// IRQSTAT's BRR, BWR, DINT, BGE and TC (RM Table 25-13), and puts PROCTL back to 0x20 and WML to 0x0810_0810
 /// (measured on an MCF54415, not in the RM's list). RSTC clears IRQSTAT\[CC\]. RSTA does both and puts every register
-/// back to its reset value (measured on an MCF54415 for SYSCTL, PROCTL and WML; guess for the rest: RM Table 25-13
-/// has it reset the whole controller). The card is not reset: a card left at 4 bits by a reset host fails every read (below).
+/// back to its reset value (measured on an MCF54415 for SYSCTL, DSADDR, BLKATTR, CMDARG, PROCTL, IRQSTATEN, IRQSIGEN,
+/// WML, ADMASAR and VENDOR; guess for the rest: RM Table 25-13 has it reset the whole controller). The card is not reset: a card left at 4 bits by a reset host fails every read (below).
 ///
 /// A command (a write of XFERTYP) is checked in this order; each failing check refuses the write with
 /// [`Stop::Unmodelled`], the detail naming the eSDHC or the eMMC and the feature:
@@ -321,8 +324,9 @@ impl Esdhc {
             );
         }
         if v & RSTA != 0 {
-            // guess: every register back to its reset value; measured on an MCF54415 for SYSCTL (the rest of the
-            // written value is dropped), PROCTL and WML
+            // every register back to its reset value: measured on an MCF54415 for SYSCTL (the rest of the written
+            // value is dropped), DSADDR, BLKATTR, CMDARG, PROCTL, IRQSTATEN, IRQSIGEN, WML, ADMASAR and VENDOR;
+            // guess for the rest
             *self = Esdhc {
                 card: self.card.take(),
                 busy_until: self.busy_until,
@@ -486,7 +490,7 @@ impl Esdhc {
 
     fn read_datport(&mut self, cx: &mut DeviceCx) -> u32 {
         let Some(v) = self.buffer.pop_front() else {
-            return 0; // guess: an empty buffer reads 0
+            return 0; // measured on an MCF54415: an empty buffer reads 0
         };
         if self.buffer.is_empty() {
             self.done(TC, cx);
@@ -541,7 +545,8 @@ impl Device for Esdhc {
         }
         match offset {
             DSADDR => self.dsaddr,
-            BLKATTR => self.blkattr,
+            // measured on an MCF54415: BLKCNT reads 1 (guess: the written count is kept for the transfer)
+            BLKATTR => self.blkattr & 0x1FFF | 1 << 16,
             CMDARG => self.cmdarg,
             XFERTYP => self.xfertyp,
             CMDRSP0..=CMDRSP3 => self.cmdrsp[((offset - CMDRSP0) / 4) as usize],

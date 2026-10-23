@@ -8,8 +8,9 @@ use crate::stop::Stop;
 
 /// The registers' offset in the window: the buffer is 0xFC0F_C000.., the registers 0xFC0F_FF00.. (RM Table 22-3).
 const REGS: u32 = 0x3F00;
-/// One buffer's size (RM 22.4.1).
+/// One buffer's size (RM 22.4.1); the four buffers start every 0x1000 bytes (RM Figure 22-17).
 const BUFFER_BYTES: usize = 0x900;
+const BUFFER_STRIDE: usize = 0x1000;
 
 const CMD1: u32 = 0x00;
 const CMD2: u32 = 0x04;
@@ -80,13 +81,15 @@ pub struct NandArray {
     pub payload: usize,
 }
 
-/// The NFC (RM ch. 22), mapped at 0xFC0F_C000 (0x4000 bytes): the buffer at +0..+0x3EFF and the registers at
+/// The NFC (RM ch. 22), mapped at 0xFC0F_C000 (0x4000 bytes): the buffers in +0..+0x3EFF and the registers at
 /// +0x3F00, with a [`NandArray`] behind it. Page reads only; the NFC's own DMA, interrupt and boot mode are not
 /// modelled.
 ///
-/// The buffer is one byte array taking accesses of any size, big-endian (RM 22.4.1: the CPU sees each buffer at
-/// a contiguous address outside boot mode; guess: the gaps between the buffers read and write like the rest). An
-/// access that runs from the buffer into the registers (only a bus master's can, the core splits misaligned
+/// The four 0x900-byte buffers are at +0x0000, +0x1000, +0x2000 and +0x3000 (RM Figure 22-17), each a byte array
+/// taking accesses of any size, big-endian (RM 22.4.1: the CPU sees each buffer at a contiguous address outside
+/// boot mode). The gaps after them (+0x900..+0xFFF, +0x1900.., +0x2900.., +0x3900..+0x3EFF) are not storage
+/// (measured on an MCF54415: reads return changing values and a write is not held); the model reads them as 0 and
+/// drops writes, byte by byte for an access that runs from a buffer into a gap. An access that runs from the buffer into the registers (only a bus master's can, the core splits misaligned
 /// accesses) is refused with [`Stop::Unmodelled`].
 ///
 /// Registers (32-bit accesses only; anything else is refused with [`Stop::Unmodelled`]), with their reset values
@@ -323,6 +326,11 @@ fn crossing(offset: u32, size: Size, what: &str) -> String {
     )
 }
 
+/// Whether buffer byte `at` is storage: inside one of the four buffers, not in a gap after one.
+fn stored(at: usize) -> bool {
+    at % BUFFER_STRIDE < BUFFER_BYTES
+}
+
 impl Device for Nfc {
     fn read(&mut self, offset: u32, size: Size, cx: &mut DeviceCx) -> u32 {
         if crosses(offset, size) {
@@ -331,8 +339,14 @@ impl Device for Nfc {
         }
         if offset < REGS {
             let at = offset as usize;
-            let bytes = &self.buffer[at..at + size.bytes() as usize];
-            return bytes.iter().fold(0, |v, &b| v << 8 | b as u32);
+            return (at..at + size.bytes() as usize).fold(0, |v, i| {
+                v << 8
+                    | if stored(i) {
+                        u32::from(self.buffer[i])
+                    } else {
+                        0
+                    }
+            });
         }
         if size != Size::Long {
             cx.refuse(
@@ -370,8 +384,10 @@ impl Device for Nfc {
         if offset < REGS {
             let at = offset as usize;
             let n = size.bytes() as usize;
-            for (i, b) in self.buffer[at..at + n].iter_mut().enumerate() {
-                *b = (value >> (8 * (n - 1 - i))) as u8;
+            for i in 0..n {
+                if stored(at + i) {
+                    self.buffer[at + i] = (value >> (8 * (n - 1 - i))) as u8;
+                }
             }
             return;
         }

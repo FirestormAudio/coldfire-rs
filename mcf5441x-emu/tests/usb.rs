@@ -208,7 +208,7 @@ fn hardware_parameters_follow_the_rm() {
         (USBINTR, 0),
         (DEVICEADDR, 0),
         (EPLISTADDR, 0),
-        (BURSTSIZE, 0x0101),
+        (BURSTSIZE, 0x1010), // measured on an MCF54415 (RM Table 24-4: 0x0101)
         (OTGSC, 0x1020),
         (USBMODE, 0),
         (EPSETUPSR, 0),
@@ -865,10 +865,47 @@ fn gptimer_reset_reloads() {
     assert_eq!(t.r(GPTIMER0CTL), RUN_REPEAT | 100);
     t.at_us(1_601);
     assert_eq!(t.r(USBSTS) & TI0, TI0);
-    // guess: a controller reset clears the timers
+}
+
+#[test]
+fn gptimers_keep_their_values_across_a_controller_reset_measured() {
+    // measured on an MCF54415: GPTIMER0LD and GPTIMER0CTL keep their values across USBCMD RST
+    let mut t = rig();
+    t.w(GPTIMER0LD, 1_000);
+    t.w(GPTIMER0CTL, 1 << 24 | 1 << 30); // repeat mode, RST: loads 1000, stopped
     t.w(USBCMD, 2);
-    assert_eq!(t.r(GPTIMER0LD), 0);
-    assert_eq!(t.r(GPTIMER0CTL), 0);
+    assert_eq!(t.r(GPTIMER0LD), 1_000);
+    assert_eq!(t.r(GPTIMER0CTL), 1 << 24 | 1_000);
+    // guess: a running timer keeps counting through the reset
+    t.w(GPTIMER0CTL, RUN_REPEAT);
+    t.at_us(100);
+    t.w(USBCMD, 2);
+    assert_eq!(t.r(GPTIMER0CTL), RUN_REPEAT | 900);
+}
+
+#[test]
+fn an_expired_one_shot_set_running_again_does_not_expire_measured() {
+    // measured on an MCF54415: a one-shot timer set running again (RUN, no RST) after it expired does not expire
+    // again: TI0 stays clear and CTL reads 0x8000_0000
+    let mut t = rig();
+    t.w(GPTIMER0LD, 99);
+    t.w(GPTIMER0CTL, 0x8000_0000 | 1 << 30);
+    t.at_us(100);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
+    t.w(USBSTS, TI0);
+    t.w(GPTIMER0CTL, 0x8000_0000);
+    t.at_us(1_000);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    assert_eq!(t.r(GPTIMER0CTL), 0x8000_0000);
+    // guess: likewise with RUN cleared in between
+    t.w(GPTIMER0CTL, 0);
+    t.w(GPTIMER0CTL, 0x8000_0000);
+    t.at_us(2_000);
+    assert_eq!(t.r(USBSTS) & TI0, 0);
+    // RST reloads it, and it runs and expires again
+    t.w(GPTIMER0CTL, 0x8000_0000 | 1 << 30);
+    t.at_us(2_100);
+    assert_eq!(t.r(USBSTS) & TI0, TI0);
 }
 
 #[test]

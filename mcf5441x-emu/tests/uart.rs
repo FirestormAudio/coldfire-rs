@@ -22,6 +22,7 @@ const UISR: u32 = UART9 + 0x14;
 const UIP: u32 = UART9 + 0x34;
 
 const RXRDY: u32 = 0x01;
+const FFULL: u32 = 0x02;
 const TXRDY: u32 = 0x04;
 const TXEMP: u32 = 0x08;
 const OE: u32 = 0x10;
@@ -168,19 +169,43 @@ fn rx_byte_lands_after_its_frame_and_is_read_once() {
     assert_ne!(r(&mut m, USR) & RXRDY, 0);
     assert_eq!(r(&mut m, URB), 0x90);
     assert_eq!(r(&mut m, USR) & RXRDY, 0);
-    // guess: an empty URB reads the last character again (RM Table 41-3 gives only its reset value, 0xFF)
+    // measured on an MCF54415: an empty URB reads the last character again (RM Table 41-3 gives only its reset
+    // value, 0xFF)
     assert_eq!(r(&mut m, URB), 0x90);
 }
 
 #[test]
-fn second_byte_before_read_sets_oe_and_ucr_0x40_clears_it() {
+fn five_bytes_unread_overrun_the_fifo_measured() {
+    // measured on an MCF54415 (local loopback): five characters left unread give USR 0x1F (OE, FFULL, RXRDY,
+    // TXRDY, TXEMP) and read back 31 32 33 35: the three-deep FIFO holds the first three, the 4th waits in the
+    // shift register and is lost when the 5th arrives. A UMR1 write does not clear OE.
     let (mut m, id) = board(false);
-    w(&mut m, UCR, 0x01);
-    receive(&mut m, id, &[(0, Some(1)), (100, Some(2))]);
-    idle(&mut m, 200);
-    assert_ne!(r(&mut m, USR) & OE, 0);
-    assert_eq!(uart(&m, id).lost(), 1, "byte 2 lost");
-    assert_eq!(r(&mut m, URB), 1);
+    w(&mut m, UCR, 0x05);
+    let bytes: Vec<_> = (0..4).map(|i| (100 * i, Some(0x31 + i as u8))).collect();
+    receive(&mut m, id, &bytes);
+    idle(&mut m, 300);
+    assert_eq!(r(&mut m, USR), 0x0F, "three held: FFULL");
+    idle(&mut m, 400);
+    assert_eq!(r(&mut m, USR), 0x0F, "the 4th waits in the shift register");
+    assert_eq!(uart(&m, id).lost(), 0);
+    receive(&mut m, id, &[(400, Some(0x35))]);
+    idle(&mut m, 500);
+    assert_eq!(r(&mut m, USR), 0x1F);
+    assert_eq!(uart(&m, id).lost(), 1, "the 4th lost");
+    w(&mut m, UMR, 0x00); // UMR1
+    assert_ne!(r(&mut m, USR) & OE, 0, "a UMR1 write leaves OE");
+    assert_eq!(r(&mut m, URB), 0x31);
+    assert_eq!(
+        r(&mut m, USR) & (FFULL | RXRDY),
+        FFULL | RXRDY,
+        "the 5th moves in"
+    );
+    assert_eq!(r(&mut m, URB), 0x32);
+    assert_eq!(r(&mut m, URB), 0x33);
+    assert_eq!(r(&mut m, USR) & (FFULL | RXRDY), RXRDY);
+    assert_eq!(r(&mut m, URB), 0x35);
+    assert_eq!(r(&mut m, USR) & (FFULL | RXRDY | OE), OE);
+    assert_eq!(r(&mut m, URB), 0x35, "empty: the last character again");
     assert_ne!(r(&mut m, USR) & OE, 0, "OE stays until RESET ERROR STATUS");
     w(&mut m, UCR, 0x40); // reset error status
     assert_eq!(r(&mut m, USR) & OE, 0);
@@ -366,29 +391,48 @@ fn framing_error_belongs_to_its_character() {
 
 #[test]
 fn framing_errors_of_lost_characters_are_lost() {
-    // RM 41.3.5 RECEIVER DISABLE: a character arriving with the receiver off is lost, so is its FE; RM 41.3.3
-    // OE: an overrunning character's framing error is lost with it.
+    // RM 41.3.5 RECEIVER DISABLE: a character arriving with the receiver off is lost, so is its FE; RM Table 41-6
+    // OE: the character waiting in the shift register is lost with its framing error.
     let (mut m, id) = board(false);
     receive(&mut m, id, &[(0, None)]);
     idle(&mut m, 100);
     assert_eq!(r(&mut m, USR) & FE, 0);
     assert_eq!(uart(&m, id).lost(), 1);
     w(&mut m, UCR, 0x01);
-    receive(&mut m, id, &[(100, Some(3)), (200, None)]);
-    idle(&mut m, 300);
+    w(&mut m, UMR, 0x20); // UMR1: ERR, block mode
+    receive(
+        &mut m,
+        id,
+        &[
+            (100, Some(1)),
+            (200, Some(2)),
+            (300, Some(3)),
+            (400, None),
+            (500, Some(5)),
+        ],
+    );
+    idle(&mut m, 600);
     assert_eq!(r(&mut m, USR) & (FE | OE | RXRDY), OE | RXRDY);
-    assert_eq!(r(&mut m, URB), 3);
     assert_eq!(uart(&m, id).lost(), 2);
+    for b in [1, 2, 3, 5] {
+        assert_eq!(r(&mut m, URB), b);
+    }
+    assert_eq!(r(&mut m, USR) & FE, 0, "block mode saw no framing error");
 }
 
 #[test]
-fn transmitter_is_off_until_enabled_and_after_reset() {
+fn transmitter_is_off_until_enabled_and_after_reset_measured() {
+    // measured on an MCF54415: with the transmitter disabled USR reads 0x00 (TXRDY and TXEMP clear) and a
+    // character written to UTB is dropped: nothing is sent once the transmitter is enabled.
     let (mut m, id) = board(false);
-    assert_eq!(r(&mut m, USR) & (TXRDY | TXEMP), 0, "off at reset");
+    assert_eq!(r(&mut m, USR), 0, "off at reset");
     w(&mut m, URB, 0x41); // a byte written while off goes nowhere
     assert!(uart(&m, id).sent().is_empty());
     w(&mut m, UCR, 0x04); // transmitter enable
     assert_eq!(r(&mut m, USR) & (TXRDY | TXEMP), TXRDY | TXEMP);
+    idle(&mut m, 1000);
+    assert!(uart(&m, id).sent().is_empty(), "not sent after enabling");
+    assert_eq!(uart(&m, id).dropped(), 1);
     w(&mut m, UCR, 0x30); // reset transmitter: off again
     assert_eq!(r(&mut m, USR) & (TXRDY | TXEMP), 0);
     w(&mut m, UCR, 0x04);

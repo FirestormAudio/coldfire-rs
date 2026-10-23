@@ -138,7 +138,8 @@ fn gpio_drives_reads_and_pulls() {
     assert_eq!(chip.gpio(&m).output(3, 0), None);
 }
 
-/// Echoes each byte UART0 sends, but answers the 11th with a framing error and the 13th twice, back to back.
+/// Echoes each byte UART0 sends, but answers the 11th with a framing error and the 13th five times, back to back:
+/// enough to overrun the three-deep receiver FIFO and the character waiting behind it.
 #[derive(Default)]
 struct Loopback {
     sent: Vec<u8>,
@@ -150,8 +151,9 @@ impl SerialPeer for Loopback {
         match self.sent.len() {
             11 => cx.send(cx.now, None),
             13 => {
-                cx.send(cx.now, Some(byte));
-                cx.send(cx.now + CHAR_TICKS, Some(byte));
+                for i in 0..5 {
+                    cx.send(cx.now + i * CHAR_TICKS, Some(byte));
+                }
             }
             _ => cx.send(cx.now, Some(byte)),
         }

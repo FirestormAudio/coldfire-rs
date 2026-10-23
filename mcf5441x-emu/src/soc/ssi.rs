@@ -107,8 +107,8 @@ pub struct SsiCounters {
 ///
 /// Clearing TE with SSI_EN kept stops the frames at once and sets ISR\[TFRC\] at the end of the frame in progress
 /// (RM Table 35-8); setting TE again starts a frame period afresh and clears TFRC. Clearing SSI_EN resets the status
-/// and empties both FIFOs (RM 35.3.7). guess: words written while SSI_EN is clear are kept (the RM says the FIFOs
-/// are cleared when the SSI is disabled, not that writes are ignored).
+/// and empties both FIFOs (RM 35.3.7). Words written to TX0 while SSI_EN is clear are dropped (measured on an
+/// MCF54415: three writes leave FCSR\[TFCNT0\] 0 and ISR 0x3003).
 ///
 /// DMA requests are levels (RM Table 35-9): the transmit request (line [`SsiConfig::tx_dma`]) is IER\[TDMAE\] with
 /// at least FCSR\[TFWM0\] free words in transmit FIFO 0, the receive request (line [`SsiConfig::rx_dma`])
@@ -118,7 +118,7 @@ pub struct SsiCounters {
 ///
 /// Registers (32-bit; another access size is refused with [`Stop::Unmodelled`]). Reset values are the RM's (RM
 /// Table 35-4; measured equal on an MCF54415):
-/// - TX0 (+0x00 write): appends a word to transmit FIFO 0, or drops it when the FIFO is full.
+/// - TX0 (+0x00 write): appends a word to transmit FIFO 0, or drops it when the FIFO is full or SSI_EN is clear.
 /// - RX0 (+0x08 read): pops receive FIFO 0 (0 when empty).
 /// - CR, IER, TCR, RCR, CCR (+0x10, +0x18 - +0x24) are stored; FCSR (+0x2C) stores its watermarks and reads TFCNT0
 ///   and RFCNT0 (the counts of FIFO 1 read 0).
@@ -389,6 +389,9 @@ impl Ssi {
     }
 
     fn send(&mut self, w: u32) {
+        if self.cr & SSI_EN == 0 {
+            return;
+        }
         if self.starved && self.next.is_some() {
             self.counters.unaligned_refills += 1;
             self.starved = false;

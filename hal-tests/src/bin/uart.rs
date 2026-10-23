@@ -1,6 +1,6 @@
 //! The blocking UART on UART0 (TX PF3, RX PF4) at 115,200 baud, against a host peer that echoes each byte: a byte at
 //! a time in and out, then a framing error (the peer's answer to the 11th byte), reported before its character is
-//! read, and an overrun (its answer to the 13th byte, sent twice back to back while nothing reads).
+//! read, and an overrun (its answer to the 13th byte, sent five times back to back while nothing reads).
 #![no_std]
 #![no_main]
 
@@ -39,7 +39,8 @@ fn main() -> ! {
 
     say!("overrun");
     uart.blocking_write(b"Z");
-    // three character times and more with nothing reading: the second answer overruns the first
+    // six character times and more with nothing reading: the fifth answer overruns the fourth, which waits behind
+    // the three in the receiver FIFO
     for i in 0..40_000u32 {
         core::hint::black_box(i);
     }

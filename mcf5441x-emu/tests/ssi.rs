@@ -538,6 +538,21 @@ fn clearing_ssi_en_empties_the_fifos() {
 }
 
 #[test]
+fn tx0_writes_with_ssi_en_clear_are_dropped_measured() {
+    // measured on an MCF54415: with SSI_EN clear three TX0 writes are dropped: FCSR TFCNT0 stays 0 and ISR reads
+    // 0x3003 (reset FCSR 0x0081_0081)
+    let mut b = board();
+    for _ in 0..3 {
+        b.w(TX0, 0x1234);
+    }
+    assert_eq!(b.r(FCSR), 0x0081_0081);
+    assert_eq!(b.r(ISR), 0x3003);
+    b.w(CR, 0x31); // SSI_EN: now they are kept
+    b.w(TX0, 0x1234);
+    assert_eq!(b.r(FCSR) >> 8 & 0xF, 1);
+}
+
+#[test]
 fn unmodelled_registers_are_refused() {
     let mut b = board();
     for (off, value, what) in [

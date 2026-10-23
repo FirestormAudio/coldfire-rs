@@ -251,10 +251,41 @@ fn status_register_reads_idle() {
 }
 
 #[test]
-fn push_while_halted_halts() {
-    let mut b = bare(&[], JEDEC_64K); // MCR at reset: HALT
+fn pushes_while_halted_wait_in_the_fifo_measured() {
+    // measured on an MCF54415: three PUSHR writes to a halted master read SR 0x0200_3000 (TFFF, TXCTR 3,
+    // TXNXTPTR 0), TXFR0-TXFR2 hold the words and PUSHR reads the last word pushed. Writing 1 to TFFF changes
+    // nothing. MCR CLR_TXF in a write with HALT set does not empty the FIFO, MDIS set or clear; with HALT clear it
+    // does, and nothing is sent (TCR 0).
+    let mut b = bare(&[], JEDEC_64K);
+    b.w(CTAR0, CTAR_8);
+    b.w(MCR, 0x8003_0001); // master, halted
+    let words = [0x0001_0031, 0x0001_0032, 0x0001_0033];
+    for v in words {
+        b.w(PUSHR, v);
+    }
+    assert_eq!(b.r(SR), 0x0200_3000);
+    for (n, v) in words.into_iter().enumerate() {
+        assert_eq!(b.r(TXFR0 + 4 * n as u32), v, "TXFR{n}");
+    }
+    assert_eq!(b.r(PUSHR), 0x0001_0033);
+    b.w(SR, TFFF);
+    assert_eq!(b.r(SR), 0x0200_3000);
+    for mcr in [0x8003_0801, 0x8003_4801] {
+        b.w(MCR, mcr); // CLR_TXF with HALT, MDIS clear then set
+        assert_eq!(b.r(SR) >> 12 & 0xF, 3, "MCR {mcr:#x}: TXCTR");
+    }
+    b.w(MCR, 0x8003_0800); // CLR_TXF, HALT clear: runs with the FIFO emptied
+    assert_eq!(b.r(SR) >> 12 & 0xF, 0);
+    assert_eq!(b.r(TCR), 0, "nothing sent");
+    assert!(b.dspi().frames().is_empty());
+    assert_eq!(b.r(PUSHR), 0x0001_0033);
+}
+
+#[test]
+fn push_while_disabled_is_refused() {
+    let mut b = bare(&[], JEDEC_64K); // MCR at reset: HALT and MDIS
     let d = b.refused(PUSHR, Size::Long, Some(PCS1 | EOQ | 0x9F));
-    assert!(d.contains("DSPI") && d.contains("halted"), "{d}");
+    assert!(d.contains("DSPI") && d.contains("MDIS"), "{d}");
     assert!(b.dspi().frames().is_empty());
 }
 
@@ -678,7 +709,7 @@ fn dspi_tfff_dma_fills_the_tx_fifo() {
     b.w(RSER, TFFF_DMA);
     assert_eq!(b.r(RSER), TFFF_DMA);
     assert!(b.line(TX_CH), "TFFF requests");
-    // guess: TFFF follows the FIFO, so writing 1 to it (RM Table 40-7: w1c) does not lower the request
+    // measured on an MCF54415: writing 1 to TFFF (RM Table 40-7: w1c) changes nothing, so the request stays
     b.w(SR, TFFF);
     assert!(b.line(TX_CH), "still requests");
     b.serq(TX_CH);
