@@ -49,6 +49,17 @@ def test_cache_push_passes(tmp_path):
     assert r.ok, r.rejected
 
 
+def test_a_semihosting_sentinel_after_its_trap_passes(tmp_path):
+    r = check(_obj(tmp_path, ".balignw 4,0x4e71\n nop\n halt\n .long 0x4e7bf000\n rts\n", "54418"))
+    assert r.ok, r.rejected
+
+
+def test_the_sentinel_without_its_trap_fails(tmp_path):
+    # no HALT before it, and a NOP off the 4-byte boundary: an ordinary (invalid) MOVEC either way
+    assert not check(_obj(tmp_path, ".balignw 4,0x4e71\n nop\n nop\n .long 0x4e7bf000\n rts\n", "54418")).ok
+    assert not check(_obj(tmp_path, ".balignw 4,0x4e71\n nop\n nop\n halt\n .long 0x4e7bf000\n rts\n", "54418")).ok
+
+
 def test_fpu_instruction_fails(tmp_path):
     assert not check(_obj(tmp_path, "fmove.d %fp0,%fp1\n nop\n", "5475")).ok
 

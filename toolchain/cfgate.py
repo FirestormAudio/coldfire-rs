@@ -110,10 +110,25 @@ def _code_rows(elf: Path) -> list[tuple[int, str]]:
         rows = [r for r in rows if r[0] < table] + _disassemble(elf, start=end)
 
 
+# libgloss m68k semihosting: a NOP at a 4-byte boundary, HALT, then the sentinel longword 0x4E7BF000, which objdump
+# decodes as `movec %sp,%sfc`. The host resumes after the sentinel, so it is data, never executed.
+_SENTINEL = "movec %sp,%sfc"
+
+
+def _semihosting_sentinels(rows: list[tuple[int, str]]) -> set[int]:
+    """The addresses of the sentinels that follow a semihosting trap's NOP and HALT."""
+    return {a for (n, nop), (h, halt), (a, t) in zip(rows, rows[1:], rows[2:])
+            if t == _SENTINEL and halt == "halt" and nop == "nop" and n % 4 == 0 and h == n + 2 and a == n + 4}
+
+
 def check(elf: Path) -> GateResult:
     res, lines = GateResult(), []
-    for a, text in _code_rows(elf):
+    rows = _code_rows(elf)
+    sentinels = _semihosting_sentinels(rows)
+    for a, text in rows:
         addr = f"{a:x}"
+        if a in sentinels:
+            continue
         if text.startswith(".short"):
             res.undecodable.append(f"{addr}: {text}")
             continue
