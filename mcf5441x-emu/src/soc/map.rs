@@ -387,6 +387,21 @@ impl Chip {
         scm::registers(m.clock_gates())
     }
 
+    /// Drive the pad of edge port pin IRQ`n` at `level`, for the edge port ([`Eport::set_pin`]) and as its GPIO
+    /// port C pin ([`GpioPorts::drive`]), as the one pad it is: IRQ1 PC1, IRQ2 PC2, IRQ3 PC3, IRQ4 PC4, IRQ6 PC5 and
+    /// IRQ7 PC6 (RM Table 15-2's primary functions). guess: the GPIO data register reads the pad while it is muxed
+    /// to IRQ`n`, as the RM's port data registers read the pins whatever their function (not measured). Panics for
+    /// IRQ0 and IRQ5, which have no pad here.
+    pub fn drive_irq(&self, m: &mut Machine, n: u8, level: bool) {
+        let bit = match n {
+            1..=4 => n,
+            6 | 7 => n - 1,
+            _ => panic!("no IRQ{n} pad: IRQ1-IRQ4, IRQ6 and IRQ7"),
+        };
+        m.with_device(self.eport, |e: &mut Eport, cx| e.set_pin(n, level, cx));
+        self.gpio_mut(m).drive(2, bit, Some(level));
+    }
+
     /// The GPIO ports ([`GpioPorts`]) inside the GPIO stub block.
     pub fn gpio<'m>(&self, m: &'m Machine) -> &'m GpioPorts {
         m.device::<StubBlock>(self.stub("GPIO"))

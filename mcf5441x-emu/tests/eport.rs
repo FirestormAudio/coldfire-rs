@@ -214,3 +214,24 @@ fn gated_eport_level_pins_still_request_guess() {
     assert!(line(&m, 7), "still low after the gate opens");
     assert_eq!(r(&mut m, EPFR, Size::Byte), 0);
 }
+
+#[test]
+fn drive_irq_drives_the_edge_port_and_the_pads_gpio_pin() {
+    let (mut m, chip) = chip();
+    // IRQ2 falling edge (EPPAR pin 2 = 10), IRQ6 rising
+    w(&mut m, EPPAR, Size::Word, 2 << 4 | RISING << 12);
+    chip.drive_irq(&mut m, 2, false);
+    chip.drive_irq(&mut m, 6, false);
+    chip.drive_irq(&mut m, 6, true);
+    assert_eq!(r(&mut m, EPFR, Size::Byte), 1 << 2 | 1 << 6);
+    // PPDSDR_C: PC2 low, PC5 high, the rest undriven (no pull: 1)
+    assert_eq!(r(&mut m, 0xEC09_4000 + 0x18 + 2, Size::Byte), 0xFB);
+    assert!(!chip.gpio(&m).level(2, 2) && chip.gpio(&m).level(2, 5));
+}
+
+#[test]
+#[should_panic(expected = "no IRQ5 pad")]
+fn drive_irq_has_no_irq5() {
+    let (mut m, chip) = chip();
+    chip.drive_irq(&mut m, 5, true);
+}
