@@ -6,9 +6,12 @@ repository has:
 - **a toolchain** that builds Rust for ColdFire;
 - **core support and a runtime**;
 - **a peripheral access crate (PAC)** generated from an SVD;
-- **an [Embassy](https://embassy.dev) HAL** with async drivers.
+- **an [Embassy](https://embassy.dev) HAL** with async drivers;
+- **an emulator** of the MCF5441x, the core and its peripherals, for testing on the host, with a semihosting runner.
 
-The drivers run on hardware, on an MCF54415 board (SSI as SSI1 only: no board here wires SSI0). The API is young and may still change before 1.0.
+Most drivers run on hardware, on an MCF54415 board. The driver table below marks those tested on the emulator only
+(SSI0, which no board here wires; EPORT; the DMA-timer counter; eSDHC writes and TRIM). The API is young and may still
+change before 1.0.
 
 ## Crates
 
@@ -18,9 +21,10 @@ The drivers run on hardware, on an MCF54415 board (SSI as SSI1 only: no board he
 | [`coldfire-rt`](coldfire-rt) | Runtime: reset, the stack and `.bss`, a RAM vector table, exception trampolines, and the linker script. |
 | [`coldfire-rt-macros`](coldfire-rt-macros) | The `#[entry]`, `#[exception]` and `#[interrupt]` attributes. Use them through `coldfire-rt`. |
 | [`mcf5441x-pac`](mcf5441x-pac) | The MCF5441x PAC: register blocks, typed fields and the `Interrupt` enum, generated from an SVD with chiptool. |
-| [`embassy-mcf5441x`](embassy-mcf5441x) | The Embassy HAL: `init`, clocks, interrupts and executors, an embassy-time driver, GPIO and pin mux, and drivers for eDMA, UART, DSPI, SSI, eSDHC and USB. |
+| [`embassy-mcf5441x`](embassy-mcf5441x) | The Embassy HAL: `init`, clocks, interrupts and executors, an embassy-time driver, GPIO and pin mux, and drivers for EPORT, eDMA, the DMA timers, UART, DSPI, SSI, eSDHC and USB. |
+| [`mcf5441x-emu`](mcf5441x-emu) | An exact MCF5441x emulator, the core and the chip's peripherals, for host-side tests; `mcf5441x-run` runs a bare ELF with semihosting. |
 
-`examples/` has three small programs to start a board from (see [examples/README.md](examples/README.md)).
+`examples/` has four small programs to start a board from (see [examples/README.md](examples/README.md)).
 `hal-tests/` holds the HAL's test programs, one per driver area, which `mcf5441x-emu`'s tests run on the emulated
 chip (see [hal-tests/README.md](hal-tests/README.md)).
 
@@ -76,7 +80,7 @@ Depend on the HAL and the runtime, and pick your part:
 
 ```toml
 [dependencies]
-embassy-mcf5441x = { version = "0.2", features = ["mcf54415", "bootloader", "executor-thread"] }   # or a cold boot feature
+embassy-mcf5441x = { version = "0.3", features = ["mcf54415", "bootloader", "executor-thread"] }   # or a cold boot feature
 coldfire-rt = "0.1"
 ```
 

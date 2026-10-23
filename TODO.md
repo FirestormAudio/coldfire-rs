@@ -24,7 +24,6 @@ Peripherals a known board uses come first; the rest wait for hardware to test th
 
 - EPORT: IRQ1, IRQ4 and IRQ7 once PAR_IRQ0H's layout is verified (they are the MCF54410's only IRQ pads); run on
   hardware, including whether GPIO PPDSDR reads a pad muxed to IRQn, which the driver's levels rely on.
-
 - Settle the PAR layouts pinmux.json marks unverified: PAR_CS, PAR_IRQ0H and PAR_DSPIOWL's OWDAT by the reserved-bit
   readback on hardware.
 - DSPI: an interrupt/eDMA-driven async driver when something needs one. Vectors: DSPI0_SR 95, DSPI1–3_SR 182–184.
