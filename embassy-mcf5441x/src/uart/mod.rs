@@ -323,13 +323,15 @@ impl embedded_io::Read for UartRx<'_> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         let mut n = 0;
         while n < buf.len() {
-            if self.r.usr().read().0 & USR_ERRORS != 0 {
+            // one USR read for both: a character's error is seen with its RXRDY, never after the character is taken
+            let usr = self.r.usr().read();
+            if usr.0 & USR_ERRORS != 0 {
                 if n > 0 {
                     break;
                 }
                 return Err(take_error(self.r).unwrap_or(Error::Status(0)));
             }
-            if self.r.usr().read().rxrdy() {
+            if usr.rxrdy() {
                 buf[n] = self.r.urb().read().rb();
                 n += 1;
             } else if n > 0 {
@@ -346,10 +348,12 @@ impl<'d> UartRx<'d> {
     pub fn blocking_read(&mut self, buf: &mut [u8]) -> Result<(), Error> {
         for b in buf {
             loop {
-                if let Some(e) = take_error(self.r) {
-                    return Err(e);
+                // one USR read for both, as in `read`
+                let usr = self.r.usr().read();
+                if usr.0 & USR_ERRORS != 0 {
+                    return Err(take_error(self.r).unwrap_or(Error::Status(0)));
                 }
-                if self.r.usr().read().rxrdy() {
+                if usr.rxrdy() {
                     break;
                 }
             }
