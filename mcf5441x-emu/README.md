@@ -418,7 +418,7 @@ semihosting, with libgloss's m68k protocol, the one QEMU serves. A test harness 
 `qemu-system-m68k` can run them here instead.
 
 ```text
-cargo install --path mcf5441x-emu     # from a checkout
+cargo install mcf5441x-emu            # or, from a checkout: cargo install --path mcf5441x-emu
 mcf5441x-run [--max-ms N] [--max-instructions N] [--clock-hz N] [--epoch S] program.elf
 ```
 

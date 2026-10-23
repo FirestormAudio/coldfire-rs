@@ -2,9 +2,11 @@
 name = "mcf5441x-emu"
 version = "0.1.0"
 edition = "2024"
-description = "An exact MCF5441x (ColdFire V4e) instruction-set emulator for host-side testing"
+description = "An exact MCF5441x (ColdFire V4e) emulator, the core and the chip's peripherals, for host-side testing; with mcf5441x-run, a semihosting runner"
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
 keywords = ["coldfire", "m68k", "mcf5441x", "interpreter", "simulator"]
 categories = ["emulators", "development-tools::testing"]
+# these build ColdFire programs from the coldfire-rs checkout around the crate (hal-tests, examples, toolchain/cargo-cf)
+exclude = ["tests/hal.rs", "tests/examples.rs", "tests/programs", "tests/usb_host.rs", "tests/boot.rs"]
