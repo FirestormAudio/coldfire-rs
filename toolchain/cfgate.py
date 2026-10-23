@@ -49,10 +49,12 @@ class GateResult:
 _TABLEJUMP = re.compile(r"^jmp %pc@\(([0-9a-f]+)\s*(?:<[^>]*>)?,")
 
 
-def _disassemble(elf: Path, start: int | None = None) -> list[tuple[int, str, str]]:
+def _disassemble(elf: Path, start: int | None = None, stop: int | None = None) -> list[tuple[int, str, str]]:
     cmd = ["m68k-elf-objdump", "-d", "-m", _objdump_arch(), str(elf)]
     if start is not None:
         cmd.append(f"--start-address={start:#x}")
+    if stop is not None:
+        cmd.append(f"--stop-address={stop:#x}")
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
     rows = []
     for l in out.splitlines():
@@ -74,15 +76,31 @@ def _functions(elf: Path) -> list[tuple[int, int]]:
     return fns
 
 
+def _sections(elf: Path) -> list[tuple[int, int]]:
+    """(start, end) of every executable section with an address (none in a relocatable object, whose sections all
+    start at 0: there one section is taken to be the whole file)."""
+    out = subprocess.run(["m68k-elf-readelf", "-SW", str(elf)], check=True, capture_output=True, text=True).stdout
+    secs = []
+    for l in out.splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s+\S+\s+\S+\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)\s+\S+\s+(\S*X\S*)", l)
+        if m and int(m.group(1), 16):
+            start = int(m.group(1), 16)
+            secs.append((start, start + int(m.group(2), 16)))
+    return secs
+
+
 def _code_rows(elf: Path) -> list[tuple[int, str]]:
     """Disassembly with GCC's inline jump tables (`jmp %pc@(T,Xn)` + 16-bit offsets at T) removed.
     A table ends at the lowest forward target T + offset, or at the first word that can't be an entry: its
     target falls outside the enclosing function (when its symbol has a size), or it points backwards at
     something that isn't an instruction start. A table whose cases all come before it has no forward
     target. Disassembly restarts at the end, since objdump may have decoded table words as
-    instructions and lost alignment."""
+    instructions and lost alignment. It restarts within the table's own section only: objdump's start address covers
+    every section above it, and one of those may have had its own table removed already (a cold image lists its
+    high-address boot section before the app's .text)."""
     rows, done = _disassemble(elf), set()
     fns = _functions(elf)
+    secs = _sections(elf)
     while True:
         byte_at = {}
         for a, raw, _ in rows:
@@ -107,7 +125,12 @@ def _code_rows(elf: Path) -> list[tuple[int, str]]:
             p += 2
         if end is None:
             return [(a, t) for a, _, t in rows]
-        rows = [r for r in rows if r[0] < table] + _disassemble(elf, start=end)
+        sec = next(((a, b) for a, b in secs if a <= table < b), None)
+        if sec is None:
+            rows = [r for r in rows if r[0] < table] + _disassemble(elf, start=end)
+        else:
+            rows = ([r for r in rows if r[0] < table or r[0] >= sec[1]]
+                    + _disassemble(elf, start=end, stop=sec[1]))
 
 
 # libgloss m68k semihosting: a NOP at a 4-byte boundary, HALT, then the sentinel longword 0x4E7BF000, which objdump

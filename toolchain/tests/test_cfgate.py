@@ -155,3 +155,27 @@ def test_the_cpu_and_decoder_are_configurable(tmp_path, monkeypatch):
     monkeypatch.setenv("CF_OBJDUMP_ARCH", "m68k:isa-c")
     monkeypatch.setenv("CF_CPU", "5208")
     assert not check(o).ok
+
+
+def test_jump_tables_in_two_sections_listed_out_of_address_order_pass(tmp_path):
+    # a cold image: the boot section (high addresses) comes first in the file and objdump's listing, the app's .text
+    # (low addresses) after it, each with a jump table; handling the .text table must not bring the boot section's
+    # table back as code
+    s, o, e, ld = tmp_path / "two.s", tmp_path / "two.o", tmp_path / "two.elf", tmp_path / "two.ld"
+    body = (
+        "    .globl {f}\n    .type {f},@function\n"
+        "{f}: bra.s 1f\n"
+        "{f}0: moveq #0,%d0\n    rts\n"
+        "{f}1: moveq #1,%d0\n    rts\n"
+        "1:  move.w ({f}T,%pc,%d0.l*2),%d0\n    ext.l %d0\n    jmp ({f}T,%pc,%d0.l)\n"
+        "{f}T: .word {f}0-{f}T, {f}1-{f}T, {f}0-{f}T\n"
+        "    tst.b %d0\n    bne.s {f}0\n    rts\n"
+        "    .size {f}, .-{f}\n")
+    s.write_text("    .section .boot,\"ax\"\n" + body.format(f="b") + "    .text\n" + body.format(f="a"))
+    ld.write_text("SECTIONS { .boot 0x80000000 : { *(.boot) } .text 0x40000000 : { *(.text) } }\n")
+    subprocess.run(["m68k-elf-as", "-mcpu=54418", str(s), "-o", str(o)], check=True)
+    subprocess.run(["m68k-elf-ld", "-T", str(ld), str(o), "-o", str(e)], check=True)
+    dis = subprocess.run(["m68k-elf-objdump", "-d", "-m", "m68k:isa-c:emac", str(e)], capture_output=True, text=True).stdout
+    assert dis.index("<b>:") < dis.index("<a>:")           # the high section is listed first
+    r = check(e)
+    assert r.ok, (r.undecodable, r.rejected)
