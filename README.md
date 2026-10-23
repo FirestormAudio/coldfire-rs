@@ -33,6 +33,7 @@ chip (see [hal-tests/README.md](hal-tests/README.md)).
 | INTC | Interrupt levels, `bind_interrupts!`, software pends, and thread and interrupt executors. |
 | EPORT | The IRQ pads as async inputs: `Wait` for edges and levels, `InputPin` (`embedded-hal-async`). IRQ2, IRQ3 and IRQ6 on MCF54415–MCF54418; emulation-tested only. |
 | eDMA | Channels and transfer descriptors, as used by the drivers. |
+| DMA timers | `Timestamp`: a free-running 32-bit counter at the bus clock or bus/16, through a prescaler. Emulation-tested only. |
 | UART | Blocking `Uart`/`UartTx`/`UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
 | DSPI | Blocking SPI: `SpiBus` and `SpiDevice` with hardware chip selects (`embedded-hal` 1.0). |
 | eSDHC | eMMC block reads (read-only) through eDMA, async. |

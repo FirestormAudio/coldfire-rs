@@ -14,6 +14,7 @@ An [Embassy](https://embassy.dev) HAL for the NXP MCF5441x (ColdFire V4e: MCF544
 | `gpio`, `pinmux` | `Output`, `Input` and `Flex` pins, pad slew rates. Each driver muxes its own pads. |
 | `eport` | The edge port's IRQ pads as async inputs: `Input` with `embedded-hal-async`'s `Wait` (edges and levels) and `InputPin`; IRQ2, IRQ3 and IRQ6 on MCF54415–MCF54418. |
 | `dma` | eDMA channels and transfer descriptors. |
+| `dtim` | DMA timers as free-running 32-bit timestamp counters (`Timestamp`) at the bus clock or bus/16, through a prescaler. |
 | `uart` | Blocking `Uart`, `UartTx` and `UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
 | `spi` | DSPI: `SpiBus` and `SpiDevice` with hardware chip selects (`embedded-hal` 1.0, blocking). |
 | `ssi` | SSI0/SSI1: I2S or network mode, full-duplex eDMA rings, `render(input, output)` in a software interrupt at a level you choose; a clocks-only start for codec bring-up. |
