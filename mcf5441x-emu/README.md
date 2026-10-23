@@ -398,6 +398,15 @@ assert!(chip.nor(&m).is_some()); // the flash stays on DSPI0 PCS1
 # use mcf5441x_emu::Machine;
 ```
 
+## HAL tests
+
+`tests/hal.rs` runs the programs of coldfire-rs's `hal-tests` crate, one per `embassy-mcf5441x` driver area. Each
+runs on the built chip with the peers it needs (a [`SerialPeer`](soc::SerialPeer), an
+[`SpiDevice`](soc::SpiDevice), an [`Emmc`](parts::Emmc), SSI samples, GPIO levels) under [`semihost`]. A program
+passes by exiting 0. `tests/examples.rs` runs the `uart-echo`, `ticker` and `ssi-loop` examples, checked by what their
+peers see; `tests/usb_host.rs` runs `usb-cdc`. All of them build their programs with `toolchain/cargo-cf`, and skip
+with a message when the ColdFire toolchain is not built.
+
 ## Running programs: `mcf5441x-run`
 
 `mcf5441x-run` runs a bare ColdFire ELF on the emulated chip. The program's console and exit status go through

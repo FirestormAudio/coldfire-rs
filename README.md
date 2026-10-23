@@ -21,6 +21,8 @@ The drivers run on hardware, on an MCF54415 board (SSI as SSI1 only: no board he
 | [`embassy-mcf5441x`](embassy-mcf5441x) | The Embassy HAL: `init`, clocks, interrupts and executors, an embassy-time driver, GPIO and pin mux, and drivers for eDMA, UART, DSPI, SSI, eSDHC and USB. |
 
 `examples/` has three small programs to start a board from (see [examples/README.md](examples/README.md)).
+`hal-tests/` holds the HAL's test programs, one per driver area, which `mcf5441x-emu`'s tests run on the emulated
+chip (see [hal-tests/README.md](hal-tests/README.md)).
 
 ### HAL drivers
 
@@ -189,6 +191,11 @@ has the details.
 - **A ColdFire build of the HAL:**
 
       toolchain/cargo-cf embassy-mcf5441x --features mcf54415,bootloader,executor-thread,executor-interrupt
+
+- **The HAL on the emulator:** `hal-tests/` and the examples, built with `toolchain/cargo-cf` and run on
+  `mcf5441x-emu` against emulated peers (they skip without the ColdFire toolchain):
+
+      cargo test -p mcf5441x-emu --test hal --test examples
 
 The PAC needs a part feature, so a plain `cargo build` or `cargo test` leaves it out (`default-members`). Workspace
 commands take `--features mcf5441x-pac/<part>`.

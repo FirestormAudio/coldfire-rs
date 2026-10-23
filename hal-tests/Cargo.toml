@@ -21,7 +21,6 @@ embassy-executor = "0.10.0"
 embassy-time = { version = "0.5.1", features = ["tick-hz-1_000"] }
 embassy-sync = "0.8.0"
 embedded-hal = "1.0"
-embedded-io = "0.7"
 embedded-io-async = "0.7"
 static_cell = "2"
 
