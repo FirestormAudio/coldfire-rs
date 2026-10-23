@@ -18,8 +18,8 @@ pub fn mov3q(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault
     Ok(Flow::Next)
 }
 
-// guess: the SATS page has no condition-code box. "The condition codes are set according to the result" is read
-// as N and Z from the result, V and C cleared and X unchanged, as for MOVE.
+// Measured on an MCF54415: N and Z from the result, V and C cleared and X unchanged, as for MOVE (the SATS page
+// has no condition-code box).
 /// SATS.L Dx: with V set, an operand that reads positive becomes 0x80000000 and one that reads negative becomes
 /// 0x7FFFFFFF (the sign bit is the wrong way round after an overflow); with V clear it is left alone.
 pub fn sats(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {

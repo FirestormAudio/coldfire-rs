@@ -205,8 +205,8 @@ impl Emac {
         self.ext[2 * pair] = v as u16;
     }
 
-    // guess: "N: set if the msb of the result is set" is read as ACC[47], as RM 5.3.5 sets N for MAC; an unsigned
-    // load (extension cleared) therefore never sets N.
+    // Measured on an MCF54415: N is ACC[47], as RM 5.3.5 sets it for MAC, so an unsigned load (extension cleared)
+    // never sets N; MOVE.L #0x80000000 gives MACSR 0x40 and ACCext01 0 unsigned, N and 0xFFFF signed.
     /// MOVE to ACC (CFPRM ch. 6): the extension is the sign of `v` in signed integer mode, zero in unsigned
     /// integer mode, and in fractional mode the sign in the upper byte and zero in the lower. PAVn, V and EV are
     /// cleared; N and Z come from the result.

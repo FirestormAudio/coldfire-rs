@@ -116,9 +116,8 @@ pub fn tst(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> 
     Ok(Flow::Next)
 }
 
-// guess: for EXT.W the manual says only "the result"; N and Z are taken from the 16-bit result (the operation's
-// size), not from the whole register, whose upper word is untouched.
-/// EXT.W (byte to word, upper word kept) and EXT.L (word to longword).
+/// EXT.W (byte to word, upper word kept) and EXT.L (word to longword). For EXT.W, N and Z come from the 16-bit
+/// result, not from the whole register (measured on an MCF54415; the manual says only "the result").
 pub fn ext(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
     let r = d.operands[1] as usize & 7;
     let v = cpu.d[r];

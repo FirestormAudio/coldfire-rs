@@ -30,11 +30,14 @@ fn set_reg(cpu: &mut Cpu, n: u32, v: u32) {
     }
 }
 
-/// `MAC.sz / MSAC.sz Ry,Rx{<<|>>},ACCx`.
+/// `MAC.sz / MSAC.sz Ry,Rx{<<|>>},ACCx`. Extension bits 1-0, which select the EMAC_B dual-accumulate forms (CFPRM
+/// ch. 6 MAAAC, MASAC, MSAAC, MSSAC) that RM ch. 5 does not list for this core, are ignored by MAC.L: 01, 10 and 11
+/// take no exception and accumulate into ACCx alone, the other accumulators and MACSR untouched (measured on an
+/// MCF54415).
 pub fn mac(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
-    // guess: extension bits 1-0 select the EMAC_B dual-accumulate forms (CFPRM ch. 6 MAAAC, MASAC, MSAAC,
-    // MSSAC), which RM ch. 5 does not list for this core; such an encoding takes the illegal-instruction exception.
-    if d.operands[3] & 3 != 0 {
+    // guess: MAC.W and MSAC (not measured) with bits 1-0 nonzero take the illegal-instruction exception.
+    let ext = d.operands[3];
+    if ext & 3 != 0 && ext & 0x0900 != 0x0800 {
         return Ok(Flow::Exception(ILLEGAL));
     }
     let (rx, ry) = (cpu.reg(d.operands[0] as u8), cpu.reg(d.operands[1] as u8));
@@ -71,8 +74,8 @@ pub fn mac_load(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fa
         cpu.a[r] = a;
     }
     cpu.emac.mac(mac_op(d), ry, rx);
-    // guess: neither manual says which wins when Rw is the address register (Ay)+ or -(Ay) steps; as for a 68K
-    // MOVE.L (A0)+,A0, the loaded value does.
+    // Measured on an MCF54415 for (Ay)+: when Rw is the address register stepped, the loaded value wins, as for a
+    // 68K MOVE.L (A0)+,A0. guess: -(Ay) does the same (not measured).
     set_reg(cpu, ext >> 12, v);
     Ok(Flow::Next)
 }

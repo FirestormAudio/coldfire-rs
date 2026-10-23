@@ -15,9 +15,15 @@ a small device interface and decides what a stop means.
   address-error frames (0100 for an odd JMP, BRA, BSR, JSR or RTS target or an odd PC
   in the frame an RTE would load, 1100 for a bad index extension word) and what each leaves on the stack (JSR pushes
   its return address first, BSR pushes nothing, RTS and RTE pop nothing); a MOVEC to 0xC04, which changes nothing;
-  a WDEBUG write of 0x00020000 to CSR, which runs on; the ACCext01 and ACCext23 layouts; and the EMAC's overflow
-  behaviour (a product overflow without OMC adds the product's low 40 bits, signed or unsigned; fractional -1 * -1 is
-  no product overflow; PAVn is recomputed by each MAC without OMC; with OMC a set PAVn freezes the accumulator).
+  a WDEBUG write of 0x00020000 to CSR, which runs on; the condition codes of EXT.W (from the 16-bit result) and SATS;
+  LINK A7 (it pushes A7 as it was before the push) and UNLK A7 (the popped longword wins); STRLDSR in user mode (an
+  illegal instruction, not a privilege violation) and FSAVE in user mode (line F); an RTE with a bad format and an odd
+  PC (the format error); misaligned word and longword accesses to memory (no exception, big-endian across the
+  boundary); the ACCext01 and ACCext23 layouts; MOVE to ACC's N (ACC\[47\], never set in unsigned mode); MAC.L
+  ignoring extension bits 1-0 (the dual-accumulate selector); a MAC with load into its own (Ay)+ register (the
+  loaded value wins); and the EMAC's overflow behaviour (a product overflow without OMC adds the product's low 40
+  bits, signed or unsigned; fractional -1 * -1 is no product overflow; PAVn is recomputed by each MAC without OMC;
+  with OMC a set PAVn freezes the accumulator).
 - Exceptions are vectored through VBR with ColdFire stack frames (CFPRM ch. 11). An [`ExceptionPolicy`] decides which
   vectors end the run instead of being taken; the default stops on every vector except TRAP #0-15 and interrupts.
 - Interrupts are sampled at instruction boundaries, so a request raised by a device write is taken before the next

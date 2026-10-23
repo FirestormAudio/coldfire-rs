@@ -886,8 +886,8 @@ fn mac_with_load_moves_and_masks_address() {
     let m = go("mac.l %d0,%d1,(%a0),%d1,%acc0", MEM);
     assert_eq!((m.cpu.d[1], m.cpu.emac.acc[0]), (0x1111_1111, 42));
 
-    // guess: the manuals do not say which wins when Rw is the address register stepped by (Ay)+; as for a 68K
-    // MOVE.L (A0)+,A0, the loaded value does.
+    // measured on an MCF54415: when Rw is the address register stepped by (Ay)+, the loaded value wins, as for a
+    // 68K MOVE.L (A0)+,A0.
     let m = go("mac.l %d0,%d1,(%a0)+,%a0,%acc0", MEM);
     assert_eq!(m.cpu.a[0], 0x1111_1111);
 
@@ -1015,8 +1015,8 @@ fn accext_low_halves_are_acc0_and_acc2() {
 fn move_to_acc_extends_by_mode() {
     // CFPRM ch. 6 MOVE to ACC: signed integer sign-extends into all 16 extension bits, unsigned clears them,
     // fractional sign-extends into the upper byte and clears the lower; PAVx, V and EV are cleared.
-    // guess: "N set if the msb of the result is set" is read as ACC[47], as for MAC (RM 5.3.5), so an unsigned load
-    // never sets N.
+    // measured on an MCF54415: N is ACC[47], as for MAC (RM 5.3.5), so an unsigned load never sets N: 0x80000000
+    // gives MACSR 0x40 (S/U only) and ACCext01 0 unsigned, N and an extension of 0xFFFF signed.
     let go = |macsr: u32, v: u32| {
         let m = run(
             "move.l %d2,%macsr\nmove.l %d3,%acc0",
@@ -1084,10 +1084,28 @@ fn macsr_to_ccr() {
 }
 
 #[test]
-fn dual_accumulate_encodings_are_illegal() {
-    // guess: extension bits 1-0 select the EMAC_B dual-accumulate forms (CFPRM ch. 6 MAAAC...), which RM ch. 5 does
-    // not list for this core; they take the illegal-instruction exception.
-    let (m, r) = common::run(".short 0xa200,0x0801", |m| m.cpu.d[0] = 6);
-    assert_eq!((r.kind, r.pc), (Stop::Illegal, BASE), "{r:?}");
-    assert_eq!(m.cpu.emac.acc[0], 0);
+fn mac_l_ignores_the_dual_accumulate_bits_measured() {
+    // measured on an MCF54415: `mac.l %d1,%d2,%acc0` (0xA401) with extension 0x0801, 0x0802 and 0x0803 (bits 1-0,
+    // the EMAC_B dual-accumulate selector of CFPRM ch. 6 MAAAC...) takes no exception and acts as the plain MAC:
+    // D1 = 3, D2 = 4 and ACC0-3 = 0x100, 0x200, 0x300, 0x400 give ACC0 = 0x10C, ACC1-3 untouched and MACSR 0.
+    for ext in [0x0801, 0x0802, 0x0803] {
+        let src = format!(
+            "move.l #0x100,%acc0\nmove.l #0x200,%acc1\nmove.l #0x300,%acc2\nmove.l #0x400,%acc3\n\
+             .short 0xa401,{ext:#06x}"
+        );
+        let m = run(&src, [0, 3, 4, 0, 0, 0, 0, 0]);
+        assert_eq!(m.cpu.emac.acc, [0x10C, 0x200, 0x300, 0x400], "{ext:#06x}");
+        assert_eq!(m.cpu.emac.macsr, 0, "{ext:#06x}");
+    }
+}
+
+#[test]
+fn dual_accumulate_encodings_of_mac_w_and_msac_are_illegal() {
+    // guess: MAC.W and MSAC with extension bits 1-0 nonzero were not measured; they take the illegal-instruction
+    // exception.
+    for ext in ["0x0001", "0x0901"] {
+        let (m, r) = common::run(&format!(".short 0xa200,{ext}"), |m| m.cpu.d[0] = 6);
+        assert_eq!((r.kind, r.pc), (Stop::Illegal, BASE), "{ext}: {r:?}");
+        assert_eq!(m.cpu.emac.acc[0], 0, "{ext}");
+    }
 }

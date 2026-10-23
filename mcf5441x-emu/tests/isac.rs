@@ -57,8 +57,8 @@ fn one(insn: &str, d0: u32, ccr: u8) -> (u32, u8) {
 fn sats_only_when_v_set() {
     // With V set the register saturates by its (wrong) sign: positive -> 0x80000000 is wrong-signed, so a
     // register that reads positive becomes the most negative value and a negative one the most positive.
-    // guess: the manual page gives no condition-code box; "set according to the result" is read as N and Z from
-    // the result, V and C cleared, X unchanged, as for MOVE.
+    // measured on an MCF54415: N and Z from the result, V and C cleared, X unchanged, as for MOVE (the manual page
+    // gives no condition-code box).
     let rows: [(u32, u8, u32, u8); 8] = [
         (0x8000_0000, V, 0x7FFF_FFFF, 0),
         (0xFFFF_FFFF, V | C, 0x7FFF_FFFF, 0),

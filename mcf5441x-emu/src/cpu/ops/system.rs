@@ -95,12 +95,14 @@ pub fn movec(cpu: &mut Cpu, _: &mut Memory, d: &Decoded) -> Result<Flow, Fault> 
     Ok(Flow::Next)
 }
 
-// guess (STRLDSR in user mode): CFPRM ch. 8 gives the operation as "Else TRAP" with no vector; this takes the
-// privilege violation of the other supervisor instructions.
-/// STRLDSR #imm: push the zero-filled SR, then load the immediate. An immediate with S clear is a privilege
-/// violation, taken before the push.
+/// STRLDSR #imm: push the zero-filled SR, then load the immediate. In user mode it is an illegal instruction with
+/// the STRLDSR as the stacked PC, not the privilege violation of the other supervisor instructions (measured on an
+/// MCF54415; CFPRM ch. 8 gives the operation as "Else TRAP" with no vector). An immediate with S clear is a
+/// privilege violation, taken before the push.
 pub fn strldsr(cpu: &mut Cpu, mem: &mut Memory, d: &Decoded) -> Result<Flow, Fault> {
-    supervisor!(cpu);
+    if !cpu.supervisor() {
+        return Ok(Flow::Exception(vector::ILLEGAL));
+    }
     let imm = d.operands[3] as u16;
     if imm & SR_S == 0 {
         return Ok(Flow::Exception(vector::PRIVILEGE_VIOLATION));
@@ -125,8 +127,8 @@ pub fn illegal(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> 
 
 // Measured on an MCF54415: an odd PC in the frame makes the RTE itself take the address error (FS 0100, the RTE
 // as the stacked PC); its frame is not popped and the new frame is written below it, as for an odd RTS.
-// guess (a bad format and an odd PC together): not measured; the format is checked first (RM 3.3.4.10), so the
-// format error wins.
+// Measured on an MCF54415: with a bad format and an odd PC together the format error wins; the format is checked
+// first (RM 3.3.4.10).
 /// RTE: check the frame's format (4-7, else a format error with the frame left alone, RM 3.3.4.10) and its PC (odd:
 /// an address error with the frame left alone), load SR and PC from it, and pop 8 bytes plus the format's
 /// alignment adjustment.
@@ -266,8 +268,8 @@ pub fn cache_hint(cpu: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fa
     Ok(Flow::Next)
 }
 
-// guess (FSAVE, FRESTORE in user mode): with no FPU the opword is unimplemented, so they take line F before any
-// privilege check.
+// FSAVE takes line F in user mode too, not a privilege violation: with no FPU the opword is unimplemented
+// (measured on an MCF54415). guess: FRESTORE, not measured, does the same.
 /// An FPU instruction: the chip has no FPU (RM Table 3-9, D0\[FPU\] = 0), so it is an unimplemented line-F opcode.
 pub fn line_f(_: &mut Cpu, _: &mut Memory, _: &Decoded) -> Result<Flow, Fault> {
     Ok(Flow::Exception(vector::LINE_F))

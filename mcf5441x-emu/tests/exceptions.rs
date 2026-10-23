@@ -249,9 +249,6 @@ fn privilege_violation_in_user_mode() {
         "halt",
         "cpushl %bc,(%a0)",
         "intouch %a0",
-        // guess: CFPRM ch. 8 gives STRLDSR's user-mode operation as "Else TRAP" without a vector; this core takes
-        // the privilege violation every other supervisor instruction takes.
-        ".short 0x40e7,0x46fc,0x2700",
         // Measured on an MCF54415: WDEBUG in user mode is a privilege violation with the WDEBUG as the stacked PC.
         "wdebug.l (%a0)",
     ];
@@ -492,6 +489,31 @@ fn strldsr_pushes_sr_and_loads_the_immediate() {
     let r = m.run(until(l[0]));
     assert_eq!((r.kind, r.pc), (Stop::Exception(8), BASE), "{r:?}");
     assert_eq!((m.cpu.a[7], m.cpu.sr()), (STACK, 0x2700));
+}
+
+#[test]
+fn strldsr_in_user_mode_is_illegal_measured() {
+    // measured on an MCF54415: STRLDSR #0x2700 from SR 0x0700 takes the illegal-instruction exception (vector 4)
+    // with the STRLDSR as the stacked PC, not the privilege violation of the other supervisor instructions.
+    let (mut m, l) = prepare(
+        "moveq #1,%d5\n.short 0x40e7,0x46fc,0x2700\nend: nop\nhandler: nop",
+        &["handler"],
+    );
+    set_vector(&mut m, 4, l[0]);
+    m.policy.stop_on[4] = false;
+    m.cpu.set_sr(0x0700);
+    let r = m.run(until(l[0]));
+    assert_eq!(r.kind, Stop::UntilPc, "{r:?}");
+    assert_eq!(long(&mut m, STACK - 8), fv(4, 4, 0x0700));
+    assert_eq!(long(&mut m, STACK - 4), BASE + 2);
+    assert_eq!(m.cpu.sr(), 0x2700);
+
+    // Stopped on by the default policy, nothing pushed.
+    let (mut m, l) = prepare(".short 0x40e7,0x46fc,0x2700\nend:", &["end"]);
+    m.cpu.set_sr(0x0000);
+    let r = m.run(until(l[0]));
+    assert_eq!((r.kind, r.pc), (Stop::Illegal, BASE), "{r:?}");
+    assert_eq!((m.cpu.a[7], m.cpu.sr()), (STACK, 0x0000));
 }
 
 #[test]
@@ -739,8 +761,8 @@ fn odd_rte_leaves_its_frame_and_faults() {
     assert_eq!((r.kind, r.pc), (Stop::Exception(3), BASE), "{r:?}");
     assert_eq!((m.cpu.a[7], m.cpu.sr()), (STACK - 8, 0x2700));
 
-    // guess: a bad format with an odd PC was not measured; the format is checked first (RM 3.3.4.10), so it is a
-    // format error.
+    // measured on an MCF54415: a bad format (3) with an odd PC is a format error (vector 14); the format is checked
+    // first (RM 3.3.4.10).
     let (mut m, _) = prepare("rte\nend:", &[]);
     m.mem.write(STACK - 8, Size::Long, 0x0000_2700).unwrap();
     m.mem.write(STACK - 4, Size::Long, BASE + 0x301).unwrap();
@@ -775,7 +797,9 @@ fn unmapped_vector_table_stops_unmapped() {
 
 /// RM Table 3-12: misaligned operand accesses are split into aligned ones, not address errors.
 #[test]
-fn odd_long_read_is_performed_misaligned() {
+fn odd_long_read_is_performed_misaligned_measured() {
+    // measured on an MCF54415: misaligned longword and word reads and writes in memory take no exception and are
+    // big-endian across the boundary.
     let (mut m, l) = prepare("move.l (%a0),%d0\nmove.w %d0,(%a1)\nend:", &["end"]);
     m.mem.load(MEM, &[0x11, 0x22, 0x33, 0x44, 0x55]).unwrap();
     m.cpu.a[0] = MEM + 1;
@@ -797,8 +821,8 @@ fn fpu_opcode_takes_line_f() {
     ];
     for insn in rows {
         for sr in [0x2700u16, 0x0000] {
-            // guess: with no FPU the opword is unimplemented, so FSAVE and FRESTORE take line F in user mode too
-            // rather than a privilege violation.
+            // measured on an MCF54415: FSAVE (A0) in user mode takes line F (vector 11), not a privilege
+            // violation; with no FPU the opword is unimplemented. guess: FRESTORE, not measured, does the same.
             let (mut m, l) = prepare(&format!("moveq #1,%d0\n{insn}\nend:"), &["end"]);
             m.cpu.set_sr(sr);
             m.cpu.a[0] = MEM;

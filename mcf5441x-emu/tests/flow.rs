@@ -213,14 +213,14 @@ fn link_unlk_frame() {
 }
 
 #[test]
-fn link_and_unlk_with_a7() {
-    // guess: CFPRM ch. 4 gives LINK as "SP - 4 -> SP; Ay -> (SP); SP -> Ay; SP + dn -> SP" and does not call out
-    // Ay = A7. Read in that order the value pushed is the decremented SP, A7 ends at that SP plus the displacement.
+fn link_and_unlk_with_a7_measured() {
+    // measured on an MCF54415: `link %a7,#-8` with A7 = 0x44800000 pushes 0x44800000, the A7 before the push, and
+    // leaves A7 = 0x447FFFF4. CFPRM ch. 4's "SP - 4 -> SP; Ay -> (SP)" read in order would push the decremented SP.
     let m = run_ok("link %a7,#-8", |_| {});
-    assert_eq!(m.mem_long(STACK - 4), STACK - 4);
+    assert_eq!(m.mem_long(STACK - 4), STACK);
     assert_eq!(m.cpu.a[7], STACK - 4 - 8);
 
-    // guess: UNLK does not call out Ax = A7 either; A7 + 4 is overwritten by the popped longword, which wins.
+    // measured on an MCF54415: for `unlk %a7` the popped longword wins over A7 + 4.
     let m = run_ok("unlk %a7", |m| {
         m.mem
             .write(STACK, mcf5441x_emu::Size::Long, 0x4012_3450)

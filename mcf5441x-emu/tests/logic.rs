@@ -126,7 +126,8 @@ fn logic_ops_clear_v_and_c_keep_x() {
 
 #[test]
 fn ext_extb_swap() {
-    // EXT.W: byte to word, the upper word untouched. guess: N and Z are those of the 16-bit result.
+    // EXT.W: byte to word, the upper word untouched. measured on an MCF54415: N and Z are those of the 16-bit
+    // result (0x12340080 gives 0x1234FF80 with N, 0x00010000 gives Z).
     check(
         "ext.w %d0",
         &[
