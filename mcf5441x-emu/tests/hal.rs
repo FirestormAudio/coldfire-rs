@@ -12,7 +12,7 @@ use std::sync::{Mutex, OnceLock};
 
 use mcf5441x_emu::elf::load_elf;
 use mcf5441x_emu::semihost::{Outcome, Semihost};
-use mcf5441x_emu::soc::{Chip, ChipOptions, Mcf5441x, PinChange};
+use mcf5441x_emu::soc::{Chip, ChipOptions, Mcf5441x, PeerCx, PinChange, SerialPeer, Uart};
 use mcf5441x_emu::{Limit, Machine};
 
 /// DDR as hal-tests/memory.x has it: 128 MB at 0x40000000, the stack at its top.
@@ -189,4 +189,108 @@ fn gpio_drives_reads_and_pulls() {
     assert_eq!(chip.gpio(&m).output(2, 2), Some(false));
     // PD0 stays an input
     assert_eq!(chip.gpio(&m).output(3, 0), None);
+}
+
+/// 115,200 baud in ticks: ten bits a character.
+const CHAR_TICKS: u64 = BUS_HZ * 10 / 115_200;
+
+/// Echoes each byte UART0 sends, but answers the 11th with a framing error and the 13th twice, back to back.
+#[derive(Default)]
+struct Loopback {
+    sent: Vec<u8>,
+}
+
+impl SerialPeer for Loopback {
+    fn transmitted(&mut self, byte: u8, cx: &mut PeerCx) {
+        self.sent.push(byte);
+        match self.sent.len() {
+            11 => cx.send(cx.now, None),
+            13 => {
+                cx.send(cx.now, Some(byte));
+                cx.send(cx.now + CHAR_TICKS, Some(byte));
+            }
+            _ => cx.send(cx.now, Some(byte)),
+        }
+    }
+}
+
+#[test]
+fn uart_blocking_reads_writes_and_errors() {
+    let Some(elf) = elf("uart") else { return };
+    let (mut m, chip) = machine(ChipOptions::default().with_uart_ticks(0, CHAR_TICKS));
+    m.device_mut::<Uart>(chip.uart[0])
+        .attach(Box::new(Loopback::default()));
+    let r = run(&mut m, &elf, 100);
+    passed(&r);
+    let sent = &m.device::<Uart>(chip.uart[0]).peer::<Loopback>().sent;
+    assert_eq!(sent.as_slice(), b"0123456789XYZ");
+}
+
+/// Records what UART0 sends; once it sends `!`, sends [`STREAM`] pattern bytes, one a character time.
+#[derive(Default)]
+struct Stream {
+    sent: Vec<u8>,
+    /// The next byte to send and its start tick, once started.
+    next: Option<(usize, u64)>,
+}
+
+/// The bytes [`Stream`] sends: byte i is `(i * 7 + i / 256) as u8`.
+const STREAM: usize = 1500;
+
+impl SerialPeer for Stream {
+    fn transmitted(&mut self, byte: u8, cx: &mut PeerCx) {
+        self.sent.push(byte);
+        if byte == b'!' && self.next.is_none() {
+            // after the `!` has left the line
+            self.next = Some((0, cx.now + CHAR_TICKS));
+        }
+    }
+
+    fn next_event(&self) -> Option<u64> {
+        self.next.filter(|&(i, _)| i < STREAM).map(|(_, at)| at)
+    }
+
+    fn advance(&mut self, cx: &mut PeerCx) {
+        if let Some((i, at)) = self.next
+            && i < STREAM
+        {
+            let start = at.max(cx.now);
+            cx.send(start, Some((i * 7 + i / 256) as u8));
+            self.next = Some((i + 1, start + CHAR_TICKS));
+        }
+    }
+}
+
+#[test]
+fn uart_buffered_wraps_its_ring_and_keeps_commands_whole() {
+    let Some(elf) = elf("uart-buffered") else {
+        return;
+    };
+    let (mut m, chip) = machine(ChipOptions::default().with_uart_ticks(0, CHAR_TICKS));
+    m.device_mut::<Uart>(chip.uart[0])
+        .attach(Box::new(Stream::default()));
+    let r = run(&mut m, &elf, 2_000);
+    passed(&r);
+    let sent = &m.device::<Uart>(chip.uart[0]).peer::<Stream>().sent;
+    let block: Vec<u8> = (0..200u32).map(|i| i as u8).collect();
+    assert_eq!(&sent[..200], block.as_slice());
+    let rest = &sent[200..];
+    assert_eq!(rest.len(), 100 + 120 + 1, "{rest:?}");
+    for k in 0..3u8 {
+        let c = b'A' + k;
+        let at = rest
+            .iter()
+            .position(|&b| b == c)
+            .expect("each command arrives");
+        assert!(
+            rest[at..at + 40].iter().all(|&b| b == c),
+            "command {} is whole: {:?}",
+            c as char,
+            rest
+        );
+        assert_eq!(rest.iter().filter(|&&b| b == c).count(), 40);
+    }
+    let digits: Vec<u8> = rest.iter().copied().filter(u8::is_ascii_digit).collect();
+    assert_eq!(digits, b"0123456789".repeat(10));
+    assert_eq!(rest.last(), Some(&b'!'));
 }
