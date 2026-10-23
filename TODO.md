@@ -5,9 +5,8 @@
 Peripherals a known board uses come first; the rest wait for hardware to test them on.
 
 1. eSDHC writes and erase (CMD24/25, CMD35/36/38): see "Existing drivers" below.
-2. EPORT: edge-port external interrupts, as an embassy `Wait`.
-3. DMA timers (DTIM0–3): a free-running timestamp counter, or a second time-driver option.
-4. Waiting for a board to test on: I2C (I2C0–I2C5); RTC; PWM (MCPWM); ADC and DAC; FlexCAN (FLEXCAN0/1);
+2. DMA timers (DTIM0–3): a free-running timestamp counter, or a second time-driver option.
+3. Waiting for a board to test on: I2C (I2C0–I2C5); RTC; PWM (MCPWM); ADC and DAC; FlexCAN (FLEXCAN0/1);
    Ethernet (MACNET0/1 and the switch, through embassy-net); a NAND flash driver (the cold-boot part only reads
    boot-format pages); USB host mode.
 
@@ -22,6 +21,9 @@ Peripherals a known board uses come first; the rest wait for hardware to test th
 - Image tooling (SBF header, NAND page split, interleave and BCH), if the crates should ever carry it.
 
 ## Existing drivers (embassy-mcf5441x)
+
+- EPORT: IRQ1, IRQ4 and IRQ7 once PAR_IRQ0H's layout is verified (they are the MCF54410's only IRQ pads); run on
+  hardware, including whether GPIO PPDSDR reads a pad muxed to IRQn, which the driver's levels rely on.
 
 - Settle the PAR layouts pinmux.json marks unverified: PAR_CS, PAR_IRQ0H and PAR_DSPIOWL's OWDAT by the reserved-bit
   readback on hardware.

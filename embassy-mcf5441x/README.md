@@ -12,6 +12,7 @@ An [Embassy](https://embassy.dev) HAL for the NXP MCF5441x (ColdFire V4e: MCF544
 | `executor` | A thread executor that idles in `stop`, and an interrupt executor driven by a software interrupt. |
 | time driver | embassy-time on one PIT, ticking at 1 kHz. |
 | `gpio`, `pinmux` | `Output`, `Input` and `Flex` pins, pad slew rates. Each driver muxes its own pads. |
+| `eport` | The edge port's IRQ pads as async inputs: `Input` with `embedded-hal-async`'s `Wait` (edges and levels) and `InputPin`; IRQ2, IRQ3 and IRQ6 on MCF54415–MCF54418. |
 | `dma` | eDMA channels and transfer descriptors. |
 | `uart` | Blocking `Uart`, `UartTx` and `UartRx`, and a `BufferedUart` with eDMA receive and interrupt-driven transmit (`embedded-io`, `embedded-io-async`). |
 | `spi` | DSPI: `SpiBus` and `SpiDevice` with hardware chip selects (`embedded-hal` 1.0, blocking). |

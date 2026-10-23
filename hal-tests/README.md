@@ -13,6 +13,7 @@ the emulated chip. It isn't published, and it stays out of the workspace as `exa
 | `esdhc` | eMMC bring-up, the sector count and EXT_CSD, multi-block reads. |
 | `ssi` | An I2S stream whose render adds 1 to each sample, with no block late or skipped. |
 | `time` | embassy-time timers and a ticker, against `Instant` and the host's clock. |
+| `eport` | The edge port's waits on IRQ2 and IRQ6: edges and levels within 1 ms of the host's, a dropped wait leaving its pin disarmed. |
 | `executor-interrupt` | Interrupt executors at levels 2 and 5 preempting each other and the thread executor. |
 
 Build them with the repository's toolchain:
