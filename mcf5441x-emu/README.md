@@ -170,9 +170,10 @@ is the board's) are not mapped by `build`; the reserved slots fault as unmapped.
 
 The SCM's peripheral power management registers (RM 9.2.2-9.2.4) are modelled inside the SCM stub: PPMSR0/1 and
 PPMCR0/1 set and clear one CDn bit, or all of them with SAMCD and CAMCD, and PPMHR0/1 and PPMLR0/1 hold the gates
-(bit set: the module's clock is off). Every module in a peripheral slot with a CDn bit (RM Tables 9-5 to 9-8) is tied
-to its gate; the SCM, the crossbar switch, the global IACK slot and RGPIO have none, and neither has RAM. While a
-module's gate is closed:
+(bit set: the module's clock is off). Only a byte write to PPMSR0/1 or PPMCR0/1 acts, and a write to PPMHR0 or
+PPMLR0 leaves their fixed bits as they read (both measured on an MCF54415). Every module in a peripheral slot with a
+CDn bit (RM Tables 9-5 to 9-8) is tied to its gate; the SCM, the crossbar switch, the global IACK slot and RGPIO have
+none, and neither has RAM. While a module's gate is closed:
 
 - a read of it returns all ones at every size, for the core and for bus masters alike (measured on an MCF54415);
 - a write to it is dropped (measured on an MCF54415);
@@ -194,7 +195,9 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
 
 - **INTC0-2 and the global IACK** (RM ch. 17): IPR, IMR, the forcing registers, ICRs, SIMR/CIMR, the software and
   level IACK registers, and ICONFIG, CLMASK and SLMASK shared by the three. A forced source delivers even when IMR
-  masks it, and IPR never shows forced sources (both measured on an MCF54415).
+  masks it, and IPR never shows forced sources (both measured on an MCF54415). With EMASK every SWIACK or LnIACK
+  read saves CLMASK in SLMASK and loads CLMASK with the level SWIACK returns (0 when none) or with n, spurious or
+  not; a word or longword write at SIMR ignores the CIMR byte (both measured).
 - **PIT0-3** (RM ch. 38): the prescaler, the modulus, reload and free-running modes, PIF and PIE; longword
   accesses read all ones and write nothing (measured on an MCF54415).
 - **DMA timers 0-3** (RM ch. 39): the bus clock (one per tick, as the PIT's; DMA timer 0 counts the bus clock, measured
@@ -205,9 +208,11 @@ sits on the device path only: RAM accesses never see it. The machine's own API (
   a PPDSDR write sets the PODR bits written as 1 and a PCLRR write clears those written as 0 (PCLRR reads 0); PPDSDR
   reads an output's PODR bit and an input's level, which the host drives with `GpioPorts::drive` or which follows
   the pin's PCR pull (an undriven pin with no pull reads 1, a guess). Accesses wider than a byte are split, big-endian;
-  the gaps between the register blocks read 0 and drop writes (a guess). Every register resets to 0 (a guess: not
-  measured), and the pin multiplexing is not consulted: a pin's direction and level are as if its pad were GPIO. Each
-  write that changes a port's direction or latch is logged (`GpioPorts::changes`).
+  the gaps between the register blocks read 0 and drop writes. PODR resets to 0xFF, PDDR to 0, PCR_A to 0x0300,
+  PCR_J to 0x0008, PCR_K to 0x0002 and the other PCRs to 0 (all measured on an MCF54415). The pin multiplexing is not
+  consulted: a pin's direction and level are as if its pad were GPIO, where on the part PPDSDR reads 0 for a pad
+  muxed away from GPIO (measured). Each write that changes a port's direction or latch is logged
+  (`GpioPorts::changes`).
 - **Edge port 0** (RM ch. 18): per-pin level or edge detection, EPIER and EPFR on INTC0 sources 1-7; the host drives
   pins IRQ1-IRQ7 with `Eport::set_pin` inside `Machine::with_device`, and a change asserts or drops the interrupt at
   once. All pins start high (guess). There is no EPDDR, EPDR or EPPDR (measured on an MCF54415, as RM Table 18-2 lists),
@@ -312,7 +317,7 @@ served in the tick it is raised. A bus-master write over cached code is seen by 
 ### Known differences
 
 - Clock gates: `build` starts with every gate open unless the options say otherwise; the chip resets with most of
-  them closed. Reserved bits of PPM{H,L}Rn are stored like the others (guess: not measured).
+  them closed. Reserved bits of PPMHR1 and PPMLR1 are stored like the others (guess: not measured).
 - Time: one instruction is one tick, so code runs at one instruction per tick of whatever clock the board's options
   scale to; transfers, frames and register accesses take no bus time. In particular a DSPI frame takes no time (DSPI
   frame time is a known gap): an endless TX-fill DMA stream that never ends the queue with EOQ stops on the eDMA's

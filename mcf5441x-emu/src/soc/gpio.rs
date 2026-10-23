@@ -12,6 +12,10 @@ const PDDR: u32 = 0x0C;
 const PPDSDR: u32 = 0x18;
 const PCLRR: u32 = 0x24;
 const PCR: u32 = 0x30;
+/// PODR at reset, every port (measured on an MCF54415).
+const PODR_RESET: u8 = 0xFF;
+/// The PCRs at reset: PCR_A 0x0300, PCR_J 0x0008, PCR_K 0x0002, the rest 0 (measured on an MCF54415).
+const PCR_RESET: [u16; PORTS] = [0x0300, 0, 0, 0, 0, 0, 0, 0, 0, 0x0008, 0x0002];
 
 /// A write that changed a port's direction or output latch, as [`GpioPorts::changes`] records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,12 +41,14 @@ pub struct PinChange {
 /// - PCR (+0x30 + 2 × port, 16 bits): pin n's PUE is bit 2n+1 and PUS bit 2n (1: pull up), stored as written.
 ///
 /// Wider accesses are taken a byte at a time, big-endian. The gaps between the blocks (+0x0B, +0x17, +0x23, +0x2F,
-/// +0x46 and +0x47) read 0 and drop writes (guess: reserved). Every register resets to 0, so every pin starts as an
-/// input with no pull (guess: the reset values are not measured). The pin multiplexing (PAR) is not consulted: a
-/// pin's direction and level are as if its pad were GPIO (guess). The host drives inputs ([`GpioPorts::drive`]);
-/// an input it leaves undriven reads its pull, and with no pull reads 1 (guess: the pad's keeper). Each write that
-/// changes a port's direction or latch is logged ([`GpioPorts::changes`]) unless [`GpioPorts::record`] turned the
-/// log off.
+/// +0x46 and +0x47) read 0 and drop writes. At reset PODR is 0xFF on every port, PDDR 0, PCR_A 0x0300 (PA4 pulled
+/// up), PCR_J 0x0008 (PJ1 pulled down), PCR_K 0x0002 (PK0 pulled down) and every other PCR 0, so every pin starts
+/// as an input (all measured on an MCF54415). The pin multiplexing (PAR) is not consulted: a pin's direction and
+/// level are as if its pad were GPIO, where on the part PPDSDR reads 0 for a pad muxed away from GPIO (measured on
+/// an MCF54415). The host drives inputs ([`GpioPorts::drive`]); an input it leaves undriven reads its pull, and
+/// with no pull reads 1 (guess: the pad's keeper). Each write that changes a port's direction or latch from the
+/// last logged state (the reset state at first) is logged ([`GpioPorts::changes`]) unless [`GpioPorts::record`]
+/// turned the log off.
 pub struct GpioPorts {
     podr: [u8; PORTS],
     pddr: [u8; PORTS],
@@ -63,12 +69,12 @@ impl GpioPorts {
     /// The GPIO offsets these registers take: PODR_A at +0x00 to PCR_K at +0x45, and the gap after it.
     pub const RANGE: Range<u32> = 0x00..0x48;
 
-    /// Every register at 0 and no pin driven.
+    /// Every register at its reset value and no pin driven.
     pub fn new() -> GpioPorts {
         GpioPorts {
-            podr: [0; PORTS],
+            podr: [PODR_RESET; PORTS],
             pddr: [0; PORTS],
-            pcr: [0; PORTS],
+            pcr: PCR_RESET,
             driven: [(0, 0); PORTS],
             changes: Vec::new(),
             record: true,
@@ -187,7 +193,7 @@ impl GpioPorts {
         };
         let (pddr, podr) = (self.pddr[p], self.podr[p]);
         let last = self.changes.iter().rev().find(|c| c.port as usize == p);
-        let before = last.map_or((0, 0), |c| (c.pddr, c.podr));
+        let before = last.map_or((0, PODR_RESET), |c| (c.pddr, c.podr));
         if self.record && before != (pddr, podr) {
             self.changes.push(PinChange {
                 at: now,
