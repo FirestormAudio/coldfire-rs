@@ -112,7 +112,7 @@ def test_flexbus_control_fields_are_settled():
 
 ENC = {"Gpio": 0, "Alt2": 1, "Alt1": 2, "Primary": 3}
 
-# digitakt's hardware-proven PAR writes: register, {pin: function}, value of those pins' bits
+# PAR writes proven on an MCF54415: register, {pin: function}, value of those pins' bits
 PROVEN = [
     ("PAR_CANI2C", {"PB2": "Alt1", "PB1": "Alt1"}, 0xA0),                       # panel link (stub, panel.rs)
     ("PAR_CANI2C", {"PB0": "Alt1", "PC7": "Alt1"}, 0x0A),                       # MIDI / flashdump
@@ -131,7 +131,7 @@ PROVEN = [
 
 
 @pytest.mark.parametrize("reg, funcs, value", PROVEN)
-def test_the_map_reproduces_digitakts_proven_writes(reg, funcs, value):
+def test_the_map_reproduces_the_proven_writes(reg, funcs, value):
     got = 0
     for pin, func in funcs.items():
         f = next(f for f in MAP["fields"] if f["pin"] == pin)

@@ -88,7 +88,7 @@ def _bit_problems(reg, entry: dict) -> list[str]:
 
 def _named(cands: list, register: str | None) -> list:
     """The alternates at an address that are the register the oracle names (`uart::UART0+UIMR` → UART0_UIMR;
-    `USR_UCSR` names both), or all of them when none is (digitakt's name differs from the manual's)."""
+    `USR_UCSR` names both), or all of them when none is (the oracle's name differs from the manual's)."""
     if not register:
         return cands
     short = register.split("::")[-1]
@@ -142,8 +142,8 @@ def checked_bits(oracles: list[Path]) -> int:
 
 
 def summary(oracles: list[Path]) -> str:
-    """The exclusion counts by kind. A bit constant under a prefix extract.py's BIT_REGISTERS doesn't know is
-    excluded with "no register known": counted apart, so a new digitakt constant left unchecked shows up here."""
+    """The exclusion counts by kind. A bit constant with no register known when the oracle was made is
+    excluded with "no register known": counted apart, so a constant left unchecked shows up here."""
     datas = [json.loads(Path(o).read_text()) for o in oracles]
     regs = [r for d in datas for r in d["registers"]]
     bits = [b for d in datas for b in d.get("bits", [])]

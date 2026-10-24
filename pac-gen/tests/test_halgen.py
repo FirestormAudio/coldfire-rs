@@ -85,7 +85,7 @@ def test_reserved_and_group_pins_get_no_par():
         assert re.search(rf"impl_pin!\({p}, {port}, {bit}, None\);", out), p
 
 
-PROVEN = {   # the hand-written UART pin table the generated one replaced, proven on hardware (console, MIDI, panel)
+PROVEN = {   # the hand-written UART pin table the generated one replaced, proven on an MCF54415
     ("UART0", "TxPin", "PF3", "PAR_UART0", "0", "Primary"), ("UART0", "RxPin", "PF4", "PAR_UART0", "2", "Primary"),
     ("UART1", "TxPin", "PF7", "PAR_UART1", "0", "Primary"), ("UART1", "RxPin", "PE0", "PAR_UART1", "2", "Primary"),
     ("UART2", "TxPin", "PE3", "PAR_UART2", "0", "Primary"), ("UART2", "RxPin", "PE4", "PAR_UART2", "2", "Primary"),
@@ -222,7 +222,7 @@ def test_generated_esdhc_pins_are_table_15_2s_sdhc_signals():
     assert set(ESDHC_ROW.findall(render_esdhc())) == RM_ESDHC
 
 
-def test_the_digitakts_esdhc_pads_are_offered():
+def test_the_proven_esdhc_pads_are_offered():
     # CLK PD6, CMD PG6, DAT0 PD4, DAT1 PD0, DAT2 PF1, DAT3 PD7 (a proven board's pad setup)
     rows = {(k, p) for k, p, *_ in ESDHC_ROW.findall(render_esdhc())}
     assert {("ClkPin", "PD6"), ("CmdPin", "PG6"), ("Dat0Pin", "PD4"), ("Dat1Pin", "PD0"), ("Dat2Pin", "PF1"),

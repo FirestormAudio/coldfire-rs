@@ -1,4 +1,4 @@
-{"source": "digitakt", "registers": [
+{"source": "drivers", "registers": [
   {"name": "uart::UART8+UMR", "address": 3959881728, "width": 8},
   {"name": "uart::UART8", "address": 3959881728, "width": null},
   {"name": "uart::UART8+USR_UCSR", "address": 3959881732, "width": 8},

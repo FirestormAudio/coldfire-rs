@@ -94,7 +94,7 @@ def test_verify_checks_bits_against_fields(tmp_path):
 
 
 def test_verify_catches_a_register_carrying_another_registers_fields(tmp_path):
-    # C1: CTAR with SR's fields; digitakt's CTAR1 value names FMSZ
+    # C1: CTAR with SR's fields; the drivers' CTAR1 value names FMSZ
     svd = tmp_path / "x.svd"
     svd.write_text(FIELDS.replace("<name>FMSZ</name>", "<name>RXCTR</name>"))
     entry = [{"name": "dspi::CTAR1_FLASH16", "register": "dspi::DSPI0+CTAR1", "address": 0xFC05C010,

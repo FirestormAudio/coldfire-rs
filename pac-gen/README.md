@@ -50,32 +50,27 @@ RM=<markdown dir> CF_PYTHON=<python> pac-gen/regen.sh
    every oracle bit constant must lie in that register's fields (below). It prints the exclusion counts, then
    `verify: ok` or one line per finding, and exits non-zero on any finding.
 
-The oracles (`pac-gen/oracles/`, written by `extract.py <digitakt checkout>` and committed):
+The oracles (`pac-gen/oracles/`, committed data):
 
-- `uboot-linux.json`: module bases and registers from digitakt's `re/peripherals/mcf54415.json`
-  (U-Boot and Linux headers).
-- `digitakt-mcf5441x.json`: the address constants of digitakt's `mcf5441x` and `mcf5441x-usb` crates. The width
-  of each register is the accessor width (`r8`/`w8`, `r16`/`w16`, `r32`/`w32`) that digitakt's drivers use on it.
-  `mcf5441x-usb` became `embassy_mcf5441x::usb` on 2026-10-18, so `extract.py` needs a digitakt checkout from before
-  then (e.g. commit 821fd7b); it refuses a later one.
+- `uboot-linux.json`: module bases and registers from the U-Boot and Linux MCF5441x headers.
+- `drivers-mcf54415.json`: the register address constants of earlier hand-written drivers, run on an MCF54415. The
+  width of each register is the accessor width (`r8`/`w8`, `r16`/`w16`, `r32`/`w32`) those drivers use on it.
 
-`digitakt-mcf5441x.json` also lists digitakt's bit constants under `bits` (PIT `PIF`, UART `USR_*`, eDMA `CSR_*`,
+`drivers-mcf54415.json` also lists the drivers' bit constants under `bits` (PIT `PIF`, UART `USR_*`, eDMA `CSR_*`,
 DSPI `SR_*`/`PUSHR_*` and the CTAR values, eSDHC `IRQSTAT`/`PRSSTAT`/`SYSCTL` bits, SSI `CR_*`, USB `cmd`/`sts`/
 `portsc`/`epcr`, …). `verify.py` checks each against the SVD's fields at that address: against the register
-digitakt names where one of the registers there is it (`UART0+UIMR`, not the UISR sharing its address), else any
+the drivers name where one of the registers there is it (`UART0+UIMR`, not the UISR sharing its address), else any
 alternate there: every set bit lies in a field; a constant named like a field (`SR_EOQF`) is exactly that field;
 names its doc comment lists (`OE | PE | FE`) are fields holding some of its bits; `NAME = n` in its doc comment
 (`FMSZ = 15` for `CTAR1_FLASH16`) is the field's value in it; a `_SHIFT` is the field's first bit. Field names
 are compared without underscores or case, but with their index: `PCS1` is not `PCS2`, and an indexed field
 (`PCSn`) holds any index.
 
-`extract.py` places each bit constant in its register by hand tables (`BIT_REGISTERS`, `ESDHC_BITS`); a constant
-under a prefix they don't know is kept, excluded with the note "no register known for this constant", and
-counted apart in verify's summary line, so a new digitakt constant left unchecked shows there until the table
-learns it.
+Each bit constant is placed in its register when the oracle is made; one with no known register is kept, excluded
+with the note "no register known for this constant", and counted apart in verify's summary line.
 
-An entry judged wrong keeps its place, with `"excluded": true` and a `note` giving the reason (`EXCLUDE` in
-`extract.py`); `verify.py` skips it. An entry whose width alone is wrong (`EXCLUDE_WIDTH`) is
+An entry judged wrong keeps its place, with `"excluded": true` and a `note` giving the reason; `verify.py` skips
+it. An entry whose width alone is wrong (`EXCLUDE_WIDTH`) is
 `"excluded": "width"`: its address must still be a register.
 
 ## Peripheral names
