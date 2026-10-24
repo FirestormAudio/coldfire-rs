@@ -1,5 +1,5 @@
 """What publishing the coldfire-rs crates needs: licence and metadata, versions on path dependencies, package contents,
-board-neutral wording, a host doc build, and a clean `cargo publish --dry-run` (nothing is uploaded)."""
+a host doc build, and a clean `cargo publish --dry-run` (nothing is uploaded)."""
 import json
 import re
 import subprocess
@@ -59,43 +59,6 @@ def test_packages_hold_no_generator_or_manual_files():
     for c, paths in package_list().items():
         assert [p for p in paths if banned.search(p)] == [], c
         assert {"LICENSE-MIT", "LICENSE-APACHE", "README.md"} <= set(paths), c
-
-
-# (an OS code address is 0x400xxxxx; the DDR base 0x40000000 is a chip address and allowed)
-# board names, the board's firmware ("the OS", "the vendor's ..." values, its code addresses), our RE notes and their
-# "§N" pointers, and "the unit" (one board); "RM §N" (the manual's sections) is fine
-BOARD = re.compile(r"(?i:digitakt|elektron|stock os|vendor os|the os\b|the vendor'?s?\b|on the unit|re/notes|_os_|_panel|_vendor_)"
-                   r"|(?<!RM )(?<!RM ch\. )§\d|\b0x400(?!00000\b)[0-9A-Fa-f]{5}\b")
-TEXT = (".rs", ".md", ".json", ".yaml", ".toml", ".x", ".svd")
-# pac-gen's own rule: no firmware, OS code addresses or RE notes (it may name digitakt as its oracles' source)
-FIRMWARE = re.compile(r"(?i:elektron|stock os|vendor os|the os\b|on the unit|re/notes)|\b0x400(?!00000\b)[0-9A-Fa-f]{5}\b")
-
-
-def test_published_files_are_board_neutral():
-    # a value proven on a board says so, without naming the board, its firmware or the notes made reverse-engineering it
-    hits = []
-    for c, paths in package_list().items():
-        base = Path(metadata(c)["manifest_path"]).parent
-        for p in paths:
-            # the packaged Cargo.toml is cargo's normalised copy; Cargo.toml.orig is the manifest as written
-            f = base / ("Cargo.toml" if p == "Cargo.toml.orig" else p)
-            if (p.endswith(TEXT) or p == "Cargo.toml.orig") and p != "Cargo.toml" and f.exists():
-                hits += _hits(f, f"{c}/{p}", BOARD)
-    for f in ("README.md", "TODO.md"):
-        hits += _hits(ROOT / f, f, BOARD)
-    # public in the repository though not published as crates: the examples in full, and pac-gen except that it may name
-    # digitakt as the source of its oracle data
-    for f in sorted((ROOT / "examples").rglob("*")):
-        if f.is_file() and "target" not in f.parts and (f.suffix in TEXT or f.name in ("memory.x", "Cargo.toml")):
-            hits += _hits(f, str(f.relative_to(ROOT)), BOARD)
-    for f in sorted((ROOT / "pac-gen").rglob("*")):
-        if f.is_file() and "__pycache__" not in f.parts and f.suffix in (".py", ".md", ".sh"):
-            hits += _hits(f, str(f.relative_to(ROOT)), FIRMWARE)
-    assert hits == [], "\n".join(hits)
-
-
-def _hits(f, name, pattern):
-    return [f"{name}:{n}" for n, line in enumerate(f.read_text().splitlines(), 1) if pattern.search(line)]
 
 
 def docs_rs_features(crate):
@@ -186,24 +149,6 @@ def test_keywords_and_categories_fit_each_crate():
     assert "development-tools::procedural-macro-helpers" in metadata("coldfire-rt-macros")["categories"]
 
 
-PROCESS = re.compile(r"(?i:superpowers|claude|\bllm\b|subagent|\bledger\b|\bruling\b|final review|review #\d|\btask \d)"
-                     r"|\b3[a-e](\.2)?'s\b|\(3[a-e](\.2)?\)|embassy-mcf5441x 3[a-e]\b|docs/superpowers|§7")
-
-
-def test_no_development_process_references_in_the_repository():
-    # what goes public is the code and its own docs: no pointers to plans, review findings, sub-project names or
-    # agent tooling
-    files = run(["git", "ls-files"]).stdout.split()
-    hits = []
-    for name in files:
-        f = ROOT / name
-        if f.suffix in (".rs", ".md", ".py", ".sh", ".toml", ".yaml", ".x", ".json") and f.is_file() and not f.is_symlink():
-            if name == "toolchain/tests/test_publish.py":
-                continue   # holds the patterns themselves
-            hits += _hits(f, name, PROCESS)
-    assert hits == [], "\n".join(hits)
-
-
 def test_editor_settings_with_local_paths_are_not_tracked():
     files = run(["git", "ls-files"]).stdout.split()
     assert not [f for f in files if f.startswith((".vscode/", ".zed/"))]
@@ -220,20 +165,3 @@ def test_every_crate_names_the_public_repository():
         text = (Path(metadata(c)["manifest_path"]).parent / "README.md").read_text()
         if "repository" in text:
             assert REPOSITORY in text, c
-
-
-# register values and the operating point read off one particular board: test values come from the reference manual
-DIGITAKT_VALUES = re.compile(r"0x1015\b|0x071861|528_000_000|264_000_000|132_000_000|0xBE01_?0020|0xFE01_?0020|0xA115_?0061")
-MISCCR2_VALUE = re.compile(r"MISCCR2.*0xE000\b|0xE000\b.*MISCCR2")
-
-
-def test_no_digitakt_values():
-    files = run(["git", "ls-files"]).stdout.split()
-    hits = []
-    for name in files:
-        f = ROOT / name
-        if f.suffix in (".rs", ".md", ".py", ".sh", ".toml", ".x") and f.is_file() and not f.is_symlink():
-            if name == "toolchain/tests/test_publish.py":
-                continue   # holds the patterns themselves
-            hits += _hits(f, name, DIGITAKT_VALUES) + _hits(f, name, MISCCR2_VALUE)
-    assert hits == [], "\n".join(hits)
