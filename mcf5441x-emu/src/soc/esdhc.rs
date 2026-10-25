@@ -170,7 +170,8 @@ struct Pending {
 ///   the same tick. The read that empties it ends the transfer with TC. A buffer still holding words one tick after
 ///   the data phase began ends it with DTOE and is emptied (guess: the RM's data timeout, SYSCTL\[DTOCV\], is not
 ///   modelled). A read whose CRC fails (an injected fault) ends with DCE.
-/// - CMD14: the card's word is put in the buffer with BREN; the read that takes it ends the transfer with TC.
+/// - CMD14: the card's word is put in the buffer with BREN and DCE is latched (guess: not measured; a driver waits
+///   for a status before it reads the word); the read that takes it ends the transfer with TC.
 /// - CMD19: BWEN; the DATPORT write that follows goes to the card and ends the transfer with DCE (measured on an
 ///   MCF54415: even when the bus test passes) and TC (guess: the bus-test sequence waits for TC before CMD14).
 ///
@@ -482,6 +483,11 @@ impl Esdhc {
             Transfer::BusTestRead => {
                 self.buffer.push_back(card.bus_test_read());
                 self.prs |= BREN;
+                // guess: the bus-test word carries no CRC16, so the data phase ends with DCE at once, as CMD19's does
+                // (measured). A driver waits for an interrupt status before it reads DATPORT; which status the chip
+                // latches here is not measured.
+                self.latch(DCE);
+                self.signal(cx);
                 self.request(cx);
             }
             Transfer::BusTestWrite => self.prs |= BWEN,

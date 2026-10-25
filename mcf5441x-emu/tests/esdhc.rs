@@ -365,8 +365,10 @@ fn bus_test_inverts_the_pattern_and_cmd19_reports_dce() {
     b.w(IRQSTAT, 0xFFFF_FFFF);
     b.cmd(CMD14, 0, true);
     assert_ne!(b.r(PRSSTAT) & BREN, 0);
+    // guess: a status is latched before the word is read (the driver waits for one), DCE as for CMD19
+    assert_eq!(b.r(IRQSTAT) & (TC | DCE), DCE);
     assert_eq!((b.r(DATPORT) ^ 0xA5) & 0xFF, 0);
-    assert_eq!(b.r(IRQSTAT) & (TC | DCE), TC);
+    assert_eq!(b.r(IRQSTAT) & (TC | DCE), TC | DCE);
     assert_eq!(b.r(PRSSTAT) & CDIHB, 0, "the data line is free again");
 }
 
