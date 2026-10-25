@@ -456,8 +456,8 @@ fn a_failed_read_needs_rstd_and_cmd12() {
 
 #[test]
 fn unmodelled_write_commands_halt() {
-    // CMD23 (SET_BLOCK_COUNT, reliable write) and CMD24 (WRITE_BLOCK); CMD38 other than TRIM has its own test
-    for cmd in [23, 24] {
+    // CMD24 (WRITE_BLOCK); CMD38 other than TRIM has its own test
+    for cmd in [24] {
         let mut b = board(&[]);
         b.w(CMDARG, 0);
         let d = b.refused(XFERTYP, cmd << 24);
@@ -947,4 +947,23 @@ fn only_trim_is_modelled_of_cmd38() {
     let mut b = board(&[]);
     b.w(CMDARG, 0);
     assert!(b.refused(XFERTYP, CMD38).contains("only TRIM"));
+}
+
+#[test]
+fn erase_group_def_and_set_block_count_are_taken() {
+    let mut b = board(&[]);
+    // CMD6 write-byte ERASE_GROUP_DEF (EXT_CSD 175) = 1
+    let (st, _) = b.cmd(CMD6, 0x03AF_0100, true);
+    assert_ne!(st & CC, 0);
+    b.idle(BUSY);
+    b.w(IRQSTAT, 0xFFFF_FFFF);
+    // CMD23 SET_BLOCK_COUNT, R1
+    let (st, _) = b.cmd(0x171A_0000, 8, true);
+    assert_eq!(st & (CC | CTOE), CC);
+    let cmds = b.esdhc().card().unwrap().commands().to_vec();
+    assert!(cmds.contains(&(6, 0x03AF_0100)) && cmds.contains(&(23, 8)), "{cmds:x?}");
+    // other EXT_CSD bytes stay refused
+    b.w(CMDARG, 0x03AE_0100);
+    let d = b.refused(XFERTYP, CMD6);
+    assert!(d.contains("CMD6"), "{d}");
 }

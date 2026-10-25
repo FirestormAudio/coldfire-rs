@@ -7,6 +7,7 @@ use std::fmt;
 const WRITE_BYTE: u32 = 3;
 const BUS_WIDTH: usize = 183;
 const HS_TIMING: usize = 185;
+const ERASE_GROUP_DEF: usize = 175;
 /// EXT_CSD SEC_COUNT, bytes 212-215, little-endian.
 const SEC_COUNT: usize = 212;
 /// EXT_CSD ERASED_MEM_CONT: 1 when erased memory reads 0xFF, else 0x00.
@@ -21,8 +22,8 @@ const ERASE_PARAM: u32 = 1 << 27;
 const R1: u32 = 0x900;
 
 /// The commands modelled: no reliable writes, erase-group erases, locks or write protection.
-const MODELLED: [u8; 19] = [
-    0, 1, 2, 3, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 19, 25, 35, 36, 38,
+const MODELLED: [u8; 20] = [
+    0, 1, 2, 3, 6, 7, 8, 9, 10, 12, 13, 14, 16, 18, 19, 23, 25, 35, 36, 38,
 ];
 
 /// What the board decides about its card.
@@ -71,8 +72,8 @@ pub(crate) enum Transfer {
 /// - CMD0 (GO_IDLE): back to a 1-bit bus; CMD1 (SEND_OP_COND): the OCR; CMD2 and CMD10: the CID; CMD9: the CSD;
 ///   every other command R1 with the card in the transfer state, ready for data. The card has no state machine
 ///   beyond its bus width and the stuck-sending state below: no RCA, select or block length is checked.
-/// - CMD6 (SWITCH): only writes of a byte to BUS_WIDTH (183; 0 for a 1-bit bus, 1 for a 4-bit bus) and HS_TIMING
-///   (185), which change the card's EXT_CSD. The controller holds DAT0 low after it (the card is busy).
+/// - CMD6 (SWITCH): only writes of a byte to BUS_WIDTH (183; 0 for a 1-bit bus, 1 for a 4-bit bus), HS_TIMING
+///   (185) and ERASE_GROUP_DEF (175; 0 or 1, stored, with no effect on the erase commands), which change the card's EXT_CSD. The controller holds DAT0 low after it (the card is busy).
 /// - CMD8 (SEND_EXT_CSD): the 512-byte EXT_CSD, all zero but SEC_COUNT and the board's bytes; each 4-byte group
 ///   reversed, which is where a 32-bit DATPORT read puts each byte (measured on an MCF54415: byte `i` lands at
 ///   `i ^ 3`).
@@ -85,7 +86,7 @@ pub(crate) enum Transfer {
 ///   range ending before its start or past SEC_COUNT trims nothing and sets ERASE_PARAM. Any other CMD38 argument
 ///   (erase-group ERASE, secure erase or trim, discard) is not modelled. The controller holds DAT0 low after CMD38.
 /// - CMD13 (SEND_STATUS): R1 with the error bits set since the last CMD13, which it clears.
-/// - CMD3, CMD7, CMD12 and CMD16: R1. CMD12 ends the stuck-sending state.
+/// - CMD3, CMD7, CMD12, CMD16 and CMD23 (SET_BLOCK_COUNT, taken and ignored): R1. CMD12 ends the stuck-sending state.
 ///
 /// guess: none of the write side is measured (the unit's card is not written); timings are the controller's
 /// ([`EsdhcConfig`](crate::soc::EsdhcConfig)).
@@ -233,11 +234,12 @@ impl Emmc {
                 && match index {
                     BUS_WIDTH => value <= 1,
                     HS_TIMING => true,
+                    ERASE_GROUP_DEF => value <= 1,
                     _ => false,
                 };
             if !ok {
                 return Some(format!(
-                    "eMMC: CMD6 {arg:#010x} is not modelled (only byte writes of BUS_WIDTH 0 or 1 and HS_TIMING)"
+                    "eMMC: CMD6 {arg:#010x} is not modelled (only byte writes of BUS_WIDTH 0 or 1, HS_TIMING and ERASE_GROUP_DEF 0 or 1)"
                 ));
             }
         }
