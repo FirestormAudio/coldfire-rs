@@ -1,6 +1,7 @@
 //! An eMMC card: the subset of the MMC command set a boot loader and a block driver use (JEDEC eMMC, JESD84): reads,
 //! multiple-block writes and TRIM, behind the eSDHC ([`Esdhc`](crate::soc::Esdhc)).
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// CMD6 SWITCH arguments: access mode (bits 25:24), EXT_CSD index (23:16), value (15:8).
@@ -66,8 +67,10 @@ pub(crate) enum Transfer {
 
 /// An eMMC with sector addressing and 512-byte blocks behind an eSDHC.
 ///
-/// Its contents are `image`: sector `n` is bytes `512 n .. 512 n + 512`, and reads past the end of the image are 0.
-/// Writes and TRIM change it ([`Emmc::image`]), growing it as needed up to SEC_COUNT sectors.
+/// Its contents are the `image` it was made with (sector `n` is bytes `512 n .. 512 n + 512`, and sectors past the end
+/// of the image read 0), changed by writes and TRIM. The card is sparse: written sectors are held one by one and a
+/// TRIM is held as a range, so a card of any SEC_COUNT costs only what was given or written
+/// ([`Emmc::resident_sectors`]). [`Emmc::image`] builds the dense bytes on request.
 /// The card answers:
 /// - CMD0 (GO_IDLE): back to a 1-bit bus; CMD1 (SEND_OP_COND): the OCR; CMD2 and CMD10: the CID; CMD9: the CSD;
 ///   every other command R1 with the card in the transfer state, ready for data. The card has no state machine
@@ -98,7 +101,12 @@ pub(crate) enum Transfer {
 /// card sending: until CMD12 it answers no command but CMD12 (the controller sees a command timeout). Each CMD25
 /// while it is above 0 takes one off and fails its data's CRC: nothing is written (the controller sees DCE).
 pub struct Emmc {
-    image: Vec<u8>,
+    /// The contents the card was made with, under everything below.
+    base: Vec<u8>,
+    /// TRIMs, in order: (first sector, last sector, fill byte); later ones win over earlier ones and the base.
+    fills: Vec<(u32, u32, u8)>,
+    /// Sectors written since the last TRIM covering them: they win over the fills and the base.
+    sectors: BTreeMap<u32, Box<[u8; 512]>>,
     ocr: u32,
     cid: [u32; 4],
     csd: [u32; 4],
@@ -120,7 +128,8 @@ pub struct Emmc {
 impl fmt::Debug for Emmc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Emmc")
-            .field("image", &self.image.len())
+            .field("base", &self.base.len())
+            .field("resident", &self.sectors.len())
             .field("wide", &self.wide)
             .field("sending", &self.sending)
             .field("faults", &self.faults)
@@ -139,7 +148,9 @@ impl Emmc {
             ext_csd[i] = v;
         }
         Emmc {
-            image,
+            base: image,
+            fills: Vec::new(),
+            sectors: BTreeMap::new(),
             ocr: config.ocr,
             cid: config.cid,
             csd: config.csd,
@@ -157,9 +168,43 @@ impl Emmc {
         }
     }
 
-    /// The card's contents: sector `n` at bytes `512 n ..`, anything past the end reading 0.
-    pub fn image(&self) -> &[u8] {
-        &self.image
+    /// The card's contents as dense bytes: sector `n` at bytes `512 n ..`, up to the end of the image it was made
+    /// with, the last sector written and the last sector trimmed (anything past that reads 0). A copy: the card
+    /// is sparse, so this costs the size of that extent; use [`Emmc::sector`] on a big card.
+    pub fn image(&self) -> Vec<u8> {
+        let end = self
+            .sectors
+            .keys()
+            .next_back()
+            .map(|&n| n as usize + 1)
+            .into_iter()
+            .chain(self.fills.iter().map(|&(_, last, _)| last as usize + 1))
+            .max()
+            .unwrap_or(0)
+            .max(self.base.len().div_ceil(512));
+        (0..end as u32).flat_map(|n| self.sector(n)).collect()
+    }
+
+    /// Sector `n` as it reads.
+    pub fn sector(&self, n: u32) -> [u8; 512] {
+        if let Some(s) = self.sectors.get(&n) {
+            return **s;
+        }
+        if let Some(&(_, _, fill)) = self.fills.iter().rev().find(|&&(a, b, _)| (a..=b).contains(&n)) {
+            return [fill; 512];
+        }
+        let mut out = [0; 512];
+        let start = n as usize * 512;
+        if start < self.base.len() {
+            let end = (start + 512).min(self.base.len());
+            out[..end - start].copy_from_slice(&self.base[start..end]);
+        }
+        out
+    }
+
+    /// How many sectors the card holds one by one (written since the last TRIM over them).
+    pub fn resident_sectors(&self) -> usize {
+        self.sectors.len()
     }
 
     /// Every CMD25 that wrote, (first sector, sectors), in order.
@@ -184,14 +229,6 @@ impl Emmc {
 
     fn sectors(&self) -> u32 {
         u32::from_le_bytes(self.ext_csd[SEC_COUNT..SEC_COUNT + 4].try_into().unwrap())
-    }
-
-    /// Bytes `start..start + len` of the image, growing it with zeros to cover them.
-    fn span(&mut self, start: usize, len: usize) -> &mut [u8] {
-        if self.image.len() < start + len {
-            self.image.resize(start + len, 0);
-        }
-        &mut self.image[start..start + len]
     }
 
     /// The number of CMD18s and CMD25s still to fail: a CMD18 fails its CRC and leaves the card sending until CMD12;
@@ -324,14 +361,9 @@ impl Emmc {
             self.sending = true;
             return None;
         }
-        let start = u64::from(arg) * 512;
-        let len = u64::from(blocks) * 512;
-        let mut out = vec![0; len as usize];
-        let size = self.image.len() as u64;
-        if start < size {
-            let end = (start + len).min(size);
-            out[..(end - start) as usize]
-                .copy_from_slice(&self.image[start as usize..end as usize]);
+        let mut out = Vec::with_capacity(blocks as usize * 512);
+        for k in 0..blocks {
+            out.extend_from_slice(&self.sector(arg.wrapping_add(k)));
         }
         Some(out)
     }
@@ -348,8 +380,11 @@ impl Emmc {
         } else {
             0
         };
-        let (from, len) = (start as usize * 512, (end - start + 1) as usize * 512);
-        self.span(from, len).fill(erased);
+        let covered: Vec<u32> = self.sectors.range(start..=end).map(|(&n, _)| n).collect();
+        for n in covered {
+            self.sectors.remove(&n);
+        }
+        self.fills.push((start, end, erased));
         if self.record {
             self.trimmed.push((start, end));
         }
@@ -370,8 +405,11 @@ impl Emmc {
             self.status |= OUT_OF_RANGE;
             return true;
         }
-        self.span(arg as usize * 512, data.len())
-            .copy_from_slice(data);
+        for (k, block) in data.chunks_exact(512).enumerate() {
+            let mut sector = Box::new([0u8; 512]);
+            sector.copy_from_slice(block);
+            self.sectors.insert(arg + k as u32, sector);
+        }
         if self.record {
             self.written.push((arg, blocks));
         }

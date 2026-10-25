@@ -969,3 +969,27 @@ fn erase_group_def_and_set_block_count_are_taken() {
     let d = b.refused(XFERTYP, CMD6);
     assert!(d.contains("CMD6"), "{d}");
 }
+
+#[test]
+fn the_card_is_sparse() {
+    // a sector at the end of the card costs one sector, not the card up to it; a TRIM costs a range
+    let mut b = board(&[]);
+    let data: Vec<u8> = (0..512u32).map(|i| (i * 3 + 1) as u8).collect();
+    b.m.mem.load(0x4010_2000, &data).unwrap();
+    b.arm_write(0x4010_2000, 512);
+    b.w(BLKATTR, 1 << 16 | 512);
+    let last = SECTORS - 1;
+    let (st, _) = b.cmd(CMD25, last, false);
+    assert_eq!(st & CC, CC);
+    let now = b.m.now();
+    b.idle(now + LATENCY + WRITE_BUSY);
+    assert_eq!(b.card().written(), [(last, 1)]);
+    assert_eq!(b.card().sector(last).as_slice(), data.as_slice());
+    assert_eq!(b.card().resident_sectors(), 1);
+    assert_eq!(b.card().sector(last - 1), [0; 512], "its neighbour is untouched");
+    b.w(IRQSTAT, 0xFFFF_FFFF);
+    // trimming the whole card drops the sector and keeps nothing resident
+    trim(&mut b, 0, last);
+    assert_eq!(b.card().resident_sectors(), 0);
+    assert_eq!(b.card().sector(last), [0; 512]);
+}
