@@ -182,3 +182,21 @@ fn the_stub_still_logs_port_writes() {
     assert_eq!(writes.len(), 1);
     assert_eq!((writes[0].1, writes[0].3), (E, 0x80));
 }
+
+#[test]
+fn a_linked_input_follows_its_source_while_the_source_is_an_output() {
+    let (mut m, chip) = chip();
+    // pin C3 wired to pin D4; C3 undriven reads 1 (no pull)
+    chip.gpio_mut(&mut m).link((2, 3), (3, 4));
+    assert_eq!(r(&mut m, PPDSDR + 2, Size::Byte) & 8, 8);
+    // D4 an output: C3 follows its latch
+    w(&mut m, PDDR + 3, Size::Byte, 0x10);
+    w(&mut m, PODR + 3, Size::Byte, 0xEF);
+    assert_eq!(r(&mut m, PPDSDR + 2, Size::Byte) & 8, 0);
+    w(&mut m, PODR + 3, Size::Byte, 0x10);
+    assert_eq!(r(&mut m, PPDSDR + 2, Size::Byte) & 8, 8);
+    // D4 an input again: C3 reads what the host drives
+    w(&mut m, PDDR + 3, Size::Byte, 0);
+    chip.gpio_mut(&mut m).drive(2, 3, Some(false));
+    assert_eq!(r(&mut m, PPDSDR + 2, Size::Byte) & 8, 0);
+}

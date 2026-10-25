@@ -55,6 +55,8 @@ pub struct GpioPorts {
     pcr: [u16; PORTS],
     /// The host's drive: (pins driven, their levels) per port.
     driven: [(u8, u8); PORTS],
+    /// Board nets: (input pin, source pin), each as (port, mask).
+    links: Vec<((usize, u8), (usize, u8))>,
     changes: Vec<PinChange>,
     record: bool,
 }
@@ -76,6 +78,7 @@ impl GpioPorts {
             pddr: [0; PORTS],
             pcr: PCR_RESET,
             driven: [(0, 0); PORTS],
+            links: Vec::new(),
             changes: Vec::new(),
             record: true,
         }
@@ -93,6 +96,13 @@ impl GpioPorts {
             }
             None => *driven &= !mask,
         }
+    }
+
+    /// Wire pin `to` to pin `from` on the board: while `from` is an output and `to` an input, `to` reads `from`'s
+    /// output latch; otherwise `to` reads the host's drive or its pull as usual. The pin multiplexing is not
+    /// consulted. Panics on a port above 10 or a bit above 7.
+    pub fn link(&mut self, to: (u8, u8), from: (u8, u8)) {
+        self.links.push((pin(to.0, to.1), pin(from.0, from.1)));
     }
 
     /// The level the pin shows: its PODR bit when PDDR makes it an output, else the host's drive or its pull.
@@ -137,6 +147,11 @@ impl GpioPorts {
             };
             if level {
                 inputs |= mask;
+            }
+        }
+        for &((tp, tm), (sp, sm)) in &self.links {
+            if tp == p && self.pddr[sp] & sm != 0 {
+                inputs = if self.podr[sp] & sm != 0 { inputs | tm } else { inputs & !tm };
             }
         }
         (self.podr[p] & self.pddr[p]) | (inputs & !self.pddr[p])
