@@ -1,5 +1,6 @@
 //! Models of the MCF5441x's on-chip modules.
 
+pub mod adc;
 pub mod ddrmc;
 pub mod dspi;
 pub mod dtim;
@@ -12,12 +13,14 @@ pub mod map;
 pub mod nfc;
 pub mod pit;
 pub mod pll;
+pub mod rgpio;
 pub mod scm;
 pub mod ssi;
 pub mod stub;
 pub mod uart;
 pub mod usb;
 
+pub use adc::Adc;
 pub use ddrmc::Ddrmc;
 pub use dspi::{Dspi, Frame, SpiDevice};
 pub use dtim::Dtim;
@@ -30,6 +33,7 @@ pub use map::{Chip, ChipOptions, Gates, Mcf5441x};
 pub use nfc::{NandArray, Nfc};
 pub use pit::Pit;
 pub use pll::Pll;
+pub use rgpio::Rgpio;
 pub use scm::PowerManagement;
 pub use ssi::{Ssi, SsiConfig, SsiCounters};
 pub use stub::{StubBlock, StubMode, Unmodelled};

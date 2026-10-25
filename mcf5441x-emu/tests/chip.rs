@@ -70,12 +70,11 @@ const STUBS: [(&str, u32); 5] = [
     ("GPIO", 0xEC09_4000),
 ];
 /// Every other module of RM Table 1-3 and Table 1-4, and RGPIO (RM Table 1-2, RM ch. 16).
-const UNMODELLED: [(&str, u32); 20] = [
+const UNMODELLED: [(&str, u32); 19] = [
     ("FlexCAN 0", 0xFC02_0000),
     ("FlexCAN 1", 0xFC02_4000),
     ("I2C 1", 0xFC03_8000),
     ("I2C 0", 0xFC05_8000),
-    ("ADC", 0xFC09_4000),
     ("DAC 0", 0xFC09_8000),
     ("DAC 1", 0xFC09_C000),
     ("Robust real-time clock", 0xFC0A_8000),
@@ -92,8 +91,8 @@ const UNMODELLED: [(&str, u32); 20] = [
     ("I2C 4", 0xEC01_8000),
     ("I2C 5", 0xEC01_C000),
 ];
-/// The rest of RM Table 1-4, and RGPIO.
-const UNMODELLED_MORE: [(&str, u32); 2] = [("mcPWM", 0xEC08_8000), ("RGPIO", 0x8C00_0000)];
+/// The rest of RM Table 1-4.
+const UNMODELLED_MORE: [(&str, u32); 1] = [("mcPWM", 0xEC08_8000)];
 
 /// Test values for the board's side.
 const UART_TICKS: [u64; 10] = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109];

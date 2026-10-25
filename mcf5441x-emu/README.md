@@ -162,12 +162,13 @@ assert_eq!(m.access(0xFC06_000C, mcf5441x_emu::Size::Byte, None), Ok(u32::from(b
 Every window is the module's 16 KB slot unless the table says otherwise. The interrupt controllers are added in
 order, so INTC0 wins over INTC1 and INTC1 over INTC2 at an equal level (RM 17.3.2).
 
+The [ADC](soc::Adc) (0xFC09_4000), minimal: registers read back what is written, and the result registers hold what the host sets (`Adc::set_result`, 0 by default); no conversion runs. [RGPIO](soc::Rgpio) (0x8C00_0000) is minimal too: the direction, enable and data registers with the host driving the inputs (`Rgpio::set_input`, low by default).
 Stub blocks, which accept every access and read back the last value written at each offset
 ([`StubBlock`](soc::StubBlock)): the crossbar switch (0xFC00_4000), the FlexBus registers (0xFC00_8000), the SCM
 (0xFC04_0000), the CCM with the reset controller and power management (0xEC09_0000) and pin multiplexing and GPIO
 (0xEC09_4000), whose port data registers below +0x48 are the [GPIO ports](soc::GpioPorts) model (the pin
-multiplexing, PAR, MSCR, SRCR and DSCR, stays read-back). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, the I2Cs, the ADC and DACs, the RTC, the
-SIM, the USB host, the RNG, the Ethernet MACs and switch, 1-Wire and the mcPWM) and RGPIO (0x8C00_0000) is an
+multiplexing, PAR, MSCR, SRCR and DSCR, stays read-back). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, the I2Cs, the DACs, the RTC, the
+SIM, the USB host, the RNG, the Ethernet MACs and switch, 1-Wire and the mcPWM) is an
 [`Unmodelled`](soc::Unmodelled) block: an access stops the run with `Stop::Unmodelled` and the module's name and offset
 as the detail, with PC on the instruction. The SRAM (where the board's RAMBAR puts it, RM ch. 7) and the DDR (its size
 is the board's) are not mapped by `build`; the reserved slots fault as unmapped.
