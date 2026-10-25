@@ -30,6 +30,8 @@ const TE: u32 = 0x02;
 const RE: u32 = 0x04;
 const NET: u32 = 0x08;
 const SYN: u32 = 0x10;
+/// Master clock enable: only the MCLK pin (the oversampling clock, RM 35.3.6) changes, not the frames.
+const MCE: u32 = 0x80;
 const I2S: u32 = 0b11 << 5;
 
 /// ISR (RM Table 35-8).
@@ -131,7 +133,7 @@ pub struct SsiCounters {
 /// writes of RX0, TX1 and RX1 (the second FIFO pair), nonzero writes of the AC97 registers and of the time slot
 /// masks, and the rest of the window. A write of CR, IER, TCR, RCR, CCR or FCSR that leaves SSI_EN and TE set is
 /// checked, and refused (not stored) as "configuration" when the result leaves the modelled subset:
-/// - CR without SYN, or with a bit other than SYN, NET, I2S, SSI_EN, TE and RE; CR\[I2S\] neither I2S master nor
+/// - CR without SYN, or with a bit other than SYN, NET, I2S, MCE (a pin; no effect on the frames), SSI_EN, TE and RE; CR\[I2S\] neither I2S master nor
 ///   normal with NET (I2S slave and the clocks from outside are not modelled)
 /// - TCR without TFEN0, with TFEN1, or without TFDIR and TXDIR; with RE, RCR without RFEN0 or with RFEN1
 /// - IER bits other than TDMAE and RDMAE (the SSI's own interrupt request is not modelled; the reset IER, 0x3003,
@@ -314,7 +316,7 @@ impl Ssi {
     /// What the configuration `regs` (CR, IER, TCR, RCR, FCSR) has outside the modelled subset.
     fn problems(cr: u32, ier: u32, tcr: u32, rcr: u32, fcsr: u32) -> Vec<String> {
         let mut p = Vec::new();
-        if cr & SYN == 0 || cr & !(SYN | NET | I2S | SSI_EN | TE | RE) != 0 {
+        if cr & SYN == 0 || cr & !(SYN | NET | I2S | MCE | SSI_EN | TE | RE) != 0 {
             p.push(format!("CR {cr:#x}"));
         }
         let i2s = cr >> 5 & 0b11;

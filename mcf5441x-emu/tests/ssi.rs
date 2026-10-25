@@ -331,6 +331,16 @@ fn hal_config_is_accepted() {
     assert_eq!(b.capture(), [(FRAME, vec![0; 4])]);
 }
 
+#[test]
+fn master_clock_enable_is_accepted() {
+    // MCE only drives the MCLK pin: the frames run as without it
+    let mut b = board();
+    b.configure(14, TDMAE);
+    b.w(CR, 0x80 | 0x30 | 0x03);
+    assert_eq!(b.r(CR), 0xB3);
+    assert!(b.ssi().next_event().is_some());
+}
+
 /// Channel 52: RX0 into a ring at RAM + 0x101000, one 8-byte frame per request, wrapping after 64.
 fn rx_tcd(b: &mut Board) {
     b.tcd(
