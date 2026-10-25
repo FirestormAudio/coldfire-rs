@@ -363,7 +363,10 @@ fn bus_test_inverts_the_pattern_and_cmd19_reports_dce() {
     assert_eq!(st & (TC | DCE), TC | DCE);
     assert_eq!(b.r(PRSSTAT) & (CDIHB | BWEN), 0);
     b.w(IRQSTAT, 0xFFFF_FFFF);
-    b.cmd(CMD14, 0, true);
+    let (st, _) = b.cmd(CMD14, 0, true);
+    assert_eq!(st & (TC | DCE), 0, "a polled command sees CC alone");
+    let t = b.esdhc().next_event().expect("the word and status are due");
+    b.idle(t);
     assert_ne!(b.r(PRSSTAT) & BREN, 0);
     // guess: a status is latched before the word is read (the driver waits for one), DCE as for CMD19
     assert_eq!(b.r(IRQSTAT) & (TC | DCE), DCE);

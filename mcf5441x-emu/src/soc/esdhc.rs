@@ -37,6 +37,13 @@ const VENDOR_RESET: u32 = 1;
 const HOSTCAPBLT_VALUE: u32 = 0x07F3_0000;
 const HOSTVER_VALUE: u32 = 0x1201;
 
+/// Ticks from CMD14's data phase to its word and status when no one reads IRQSTAT first (guess: not measured).
+const WORD_DELAY: u64 = 512;
+
+/// Ticks from the first IRQSTAT read that shows CMD14's CC to its word and status (guess: not measured; room for a
+/// driver to check what it read, with a second read, before they come).
+const SEEN_DELAY: u64 = 64;
+
 /// XFERTYP (RM Table 25-6).
 const DPSEL: u32 = 1 << 21;
 const MSBSEL: u32 = 1 << 5;
@@ -170,8 +177,9 @@ struct Pending {
 ///   the same tick. The read that empties it ends the transfer with TC. A buffer still holding words one tick after
 ///   the data phase began ends it with DTOE and is emptied (guess: the RM's data timeout, SYSCTL\[DTOCV\], is not
 ///   modelled). A read whose CRC fails (an injected fault) ends with DCE.
-/// - CMD14: the card's word is put in the buffer with BREN and DCE is latched (guess: not measured; a driver waits
-///   for a status before it reads the word); the read that takes it ends the transfer with TC.
+/// - CMD14: after CC, the card's word is put in the buffer with BREN and DCE is latched, `SEEN_DELAY` ticks after the first
+///   IRQSTAT read that shows CC or `WORD_DELAY` ticks into the data phase (guess: not measured; a driver waits for a
+///   status before it reads the word); the read that takes it ends the transfer with TC.
 /// - CMD19: BWEN; the DATPORT write that follows goes to the card and ends the transfer with DCE (measured on an
 ///   MCF54415: even when the bus test passes) and TC (guess: the bus-test sequence waits for TC before CMD14).
 ///
@@ -201,6 +209,8 @@ pub struct Esdhc {
     buffer: VecDeque<u32>,
     /// The tick at which a block read still holding words times out.
     drain_by: Option<u64>,
+    /// The tick a CMD14's word becomes ready: BREN and DCE come then, after the command's CC.
+    word_at: Option<u64>,
     /// DAT0 is low until this tick.
     busy_until: u64,
     /// A CMD25's words still to come through DATPORT, and those that have.
@@ -240,6 +250,7 @@ impl Esdhc {
             pending: None,
             buffer: VecDeque::new(),
             drain_by: None,
+            word_at: None,
             busy_until: 0,
             want: 0,
             incoming: Vec::new(),
@@ -307,6 +318,7 @@ impl Esdhc {
         self.pending = None;
         self.buffer.clear();
         self.drain_by = None;
+        self.word_at = None;
         self.want = 0;
         self.incoming.clear();
         self.tc_at = None;
@@ -482,13 +494,12 @@ impl Esdhc {
             }
             Transfer::BusTestRead => {
                 self.buffer.push_back(card.bus_test_read());
-                self.prs |= BREN;
-                // guess: the bus-test word carries no CRC16, so the data phase ends with DCE at once, as CMD19's does
+                // guess: the bus-test word carries no CRC16, so the data phase ends with DCE, as CMD19's does
                 // (measured). A driver waits for an interrupt status before it reads DATPORT; which status the chip
-                // latches here is not measured.
-                self.latch(DCE);
-                self.signal(cx);
-                self.request(cx);
+                // latches here is not measured. The word and the status come after the command's CC, so a driver
+                // polling for CC alone (the HAL's bus test) sees no error: one tick after the first IRQSTAT read
+                // that shows CC, or `WORD_DELAY` ticks after the data phase begins, whichever is first.
+                self.word_at = Some(now + WORD_DELAY);
             }
             Transfer::BusTestWrite => self.prs |= BWEN,
         }
@@ -566,7 +577,15 @@ impl Device for Esdhc {
             }
             PROCTL => self.proctl,
             SYSCTL => self.sysctl,
-            IRQSTAT => self.irqstat,
+            IRQSTAT => {
+                // guess: a driver that has seen the command complete finds the word's status a little later
+                if self.irqstat & CC != 0
+                    && let Some(t) = &mut self.word_at
+                {
+                    *t = (*t).min(cx.now + SEEN_DELAY);
+                }
+                self.irqstat
+            }
             IRQSTATEN => self.irqstaten,
             IRQSIGEN => self.irqsigen,
             HOSTCAPBLT => HOSTCAPBLT_VALUE,
@@ -631,7 +650,7 @@ impl Device for Esdhc {
     }
 
     fn next_event(&self) -> Option<u64> {
-        [self.pending.map(|p| p.at), self.drain_by, self.tc_at]
+        [self.pending.map(|p| p.at), self.drain_by, self.word_at, self.tc_at]
             .into_iter()
             .flatten()
             .min()
@@ -643,6 +662,15 @@ impl Device for Esdhc {
         {
             self.pending = None;
             self.data_phase(p, now, cx);
+        }
+        if let Some(t) = self.word_at
+            && now >= t
+        {
+            self.word_at = None;
+            self.prs |= BREN;
+            self.latch(DCE);
+            self.signal(cx);
+            self.request(cx);
         }
         if let Some(t) = self.drain_by
             && now >= t
@@ -679,6 +707,7 @@ impl Device for Esdhc {
                 p.at += d;
             }
             self.drain_by = self.drain_by.map(|t| t + d);
+            self.word_at = self.word_at.map(|t| t + d);
             self.tc_at = self.tc_at.map(|t| t + d);
             if self.busy_until > at {
                 self.busy_until += d;
