@@ -162,7 +162,7 @@ assert_eq!(m.access(0xFC06_000C, mcf5441x_emu::Size::Byte, None), Ok(u32::from(b
 Every window is the module's 16 KB slot unless the table says otherwise. The interrupt controllers are added in
 order, so INTC0 wins over INTC1 and INTC1 over INTC2 at an equal level (RM 17.3.2).
 
-The [ADC](soc::Adc) (0xFC09_4000), minimal: registers read back what is written, and the result registers hold what the host sets (`Adc::set_result`, 0 by default); no conversion runs. [RGPIO](soc::Rgpio) (0x8C00_0000) is minimal too: the direction, enable and data registers with the host driving the inputs (`Rgpio::set_input`, low by default).
+The [ADC](soc::Adc) (0xFC09_4000), minimal: registers read back what is written, and the result registers hold what the host sets (`Adc::set_result`, 0 by default); no conversion runs. [I2C 0](soc::I2c) (0xFC05_8000) is a master of instant transfers with `I2cTarget` parts on the bus (`I2c::attach`); IIEN raises no interrupt, and slave mode and DMAEN are refused. [RGPIO](soc::Rgpio) (0x8C00_0000) is minimal too: the direction, enable and data registers with the host driving the inputs (`Rgpio::set_input`, low by default).
 Stub blocks, which accept every access and read back the last value written at each offset
 ([`StubBlock`](soc::StubBlock)): the crossbar switch (0xFC00_4000), the FlexBus registers (0xFC00_8000), the SCM
 (0xFC04_0000), the CCM with the reset controller and power management (0xEC09_0000) and pin multiplexing and GPIO

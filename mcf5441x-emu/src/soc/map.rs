@@ -7,9 +7,9 @@ use crate::parts::{Emmc, SpiNor};
 
 use super::scm::{self, POWER_MANAGEMENT};
 use super::{
-    Adc, Ddrmc, Dspi, Dtim, Edma, Eport, Esdhc, EsdhcConfig, GpioPorts, Intc, NandArray, Nfc, Pit,
-    Pll, PowerManagement, Rgpio, Ssi, SsiConfig, StubBlock, StubMode, Uart, UartConfig, Unmodelled,
-    UsbConfig, UsbOtg,
+    Adc, Ddrmc, Dspi, Dtim, Edma, Eport, Esdhc, EsdhcConfig, GpioPorts, I2c, Intc, NandArray, Nfc,
+    Pit, Pll, PowerManagement, Rgpio, Ssi, SsiConfig, StubBlock, StubMode, Uart, UartConfig,
+    Unmodelled, UsbConfig, UsbOtg,
 };
 
 /// Each peripheral slot is 16 KB (RM 1.8.1).
@@ -80,12 +80,13 @@ const STUBS: [(&str, u32); 5] = [
 
 /// The ADC (RM Table 1-3, slot 37).
 const ADC: u32 = 0xFC09_4000;
+/// I2C 0 (RM Table 1-3, slot 22).
+const I2C0: u32 = 0xFC05_8000;
 /// The modules of RM Table 1-3 and Table 1-4 nobody models, each over its 16 KB slot.
-const UNMODELLED: [(&str, u32); 20] = [
+const UNMODELLED: [(&str, u32); 19] = [
     ("FlexCAN 0", 0xFC02_0000),
     ("FlexCAN 1", 0xFC02_4000),
     ("I2C 1", 0xFC03_8000),
-    ("I2C 0", 0xFC05_8000),
     ("DAC 0", 0xFC09_8000),
     ("DAC 1", 0xFC09_C000),
     ("Robust real-time clock", 0xFC0A_8000),
@@ -375,6 +376,8 @@ pub struct Chip {
     pub nfc: Option<DeviceId>,
     /// The ADC ([`Adc`]): minimal, host-set results.
     pub adc: DeviceId,
+    /// I2C 0 ([`I2c`]): a master of instant transfers, with the parts the board attaches.
+    pub i2c0: DeviceId,
     /// Rapid GPIO ([`Rgpio`]): minimal, host-driven inputs.
     pub rgpio: DeviceId,
     /// The [`StubBlock`]s, by name: XBS, FlexBus, SCM, CCM, GPIO.
@@ -632,6 +635,7 @@ impl Mcf5441x {
             m.add_device(base, SLOT, Box::new(Unmodelled::new(name)));
         }
         let adc = m.add_device(ADC, SLOT, Box::new(Adc::new()));
+        let i2c0 = m.add_device(I2C0, SLOT, Box::new(I2c::new()));
         let rgpio = m.add_device(RGPIO.0, RGPIO.1, Box::new(Rgpio::new()));
 
         for (name, base, gate) in CLOCK_GATES {
@@ -660,6 +664,7 @@ impl Mcf5441x {
             pll,
             nfc,
             adc,
+            i2c0,
             rgpio,
             stubs,
         }
