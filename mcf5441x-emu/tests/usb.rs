@@ -545,16 +545,23 @@ fn full_speed_bulk_in_over_64_bytes_is_unmodelled() {
 }
 
 #[test]
-fn in_without_zlt_is_unmodelled() {
+fn in_without_zlt_ends_a_full_packet_transfer_with_a_zero_length_packet() {
     let mut t = rig();
     t.start();
-    t.wr(QH + 0x40, 64 << 16); // EP0 IN without ZLT
+    t.wr(QH + 0x40, 64 << 16); // EP0 IN without ZLT: automatic zero-length packets
+    t.dtd(TD, 64, BUF);
+    t.prime(0, 1, TD);
+    let Token::Data(first) = t.in_token(0, 0) else { panic!("data") };
+    assert_eq!(first.len(), 64);
+    assert_ne!(t.r(EPSR) & 1 << 16, 0, "still primed: the zero-length packet is due");
+    assert_eq!(t.in_token(0, 0), Token::Data(Vec::new()));
+    assert_eq!(t.r(EPSR) & 1 << 16, 0, "retired after it");
+    // a short transfer needs none
     t.dtd(TD, 8, BUF);
     t.prime(0, 1, TD);
-    assert_eq!(t.in_token(0, 0), Token::Nak);
-    let stop = t.spin();
-    assert_eq!(stop.kind, Stop::Unmodelled);
-    assert_eq!(stop.detail, "USB: EP0 IN with ZLT = 0");
+    let Token::Data(short) = t.in_token(0, 0) else { panic!("data") };
+    assert_eq!(short.len(), 8);
+    assert_eq!(t.r(EPSR) & 1 << 16, 0);
 }
 
 #[test]

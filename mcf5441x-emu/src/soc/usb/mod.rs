@@ -364,8 +364,7 @@ pub struct UsbStats {
 ///
 /// Not modelled: host mode, isochronous endpoints, data toggles, SOF and FRINDEX, suspend and resume, the ATDTW
 /// tripwire, the NAK registers, TXFILLTUNING and the ULPI viewport. These halt the run with
-/// [`Stop::Unmodelled`] (refused when a register access reaches them): an IN dQH without ZLT (automatic zero-length
-/// packets), a data-endpoint IN with packets over 64 bytes at full speed (64 is bulk's limit), and a DMA access that
+/// [`Stop::Unmodelled`] (refused when a register access reaches them): a data-endpoint IN with packets over 64 bytes at full speed (64 is bulk's limit), and a DMA access that
 /// fails (the RM's system error for it is not modelled).
 pub struct UsbOtg {
     config: UsbConfig,
@@ -814,9 +813,6 @@ impl UsbOtg {
     fn send(&mut self, ep: usize, cx: &mut DeviceCx) -> Result<Token, String> {
         let q = self.qh(ep, 1);
         let (cap, token) = (self.rd(q, cx)?, self.rd(q + 0xC, cx)?);
-        if cap & ZLT == 0 {
-            return Err(format!("USB: EP{ep} IN with ZLT = 0"));
-        }
         let (mps, total) = (cap >> 16 & 0x7FF, token >> 16 & 0x7FFF);
         let high_speed = self.portsc >> 26 & 3 == PSPD_HIGH;
         if ep > 0 && mps > 64 && !high_speed {
@@ -849,7 +845,9 @@ impl UsbOtg {
         self.pos[ep][1] = p + n;
         let total = total - n;
         self.wr(q + 0xC, token & !TOTAL_BYTES | total << 16, cx)?;
-        if total == 0 || n < mps {
+        // ZLT clear: a transfer ending on a full packet is closed by a zero-length packet, sent on the next IN token
+        let zlp_due = cap & ZLT == 0 && total == 0 && n == mps && n > 0;
+        if (total == 0 && !zlp_due) || n < mps {
             self.retire(ep, 1, 0, cx)?;
         }
         self.signal(cx);
