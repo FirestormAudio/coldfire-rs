@@ -362,7 +362,7 @@ pub struct UsbStats {
 /// buffer is 64 bytes (RM 24.4.3, HWTXBUF), the rest streams from memory on the wire, and an underflow is a forced
 /// bit-stuff error (RM Table 24-55) the controller retries without retiring the dTD.
 ///
-/// Not modelled: host mode, isochronous endpoints, data toggles, SOF and FRINDEX, suspend and resume, the ATDTW
+/// Not modelled: host mode, isochronous endpoints, the OUT endpoints' ZLT bit (ignored), data toggles, SOF and FRINDEX, suspend and resume, the ATDTW
 /// tripwire, the NAK registers, TXFILLTUNING and the ULPI viewport. These halt the run with
 /// [`Stop::Unmodelled`] (refused when a register access reaches them): a data-endpoint IN with packets over 64 bytes at full speed (64 is bulk's limit), and a DMA access that
 /// fails (the RM's system error for it is not modelled).

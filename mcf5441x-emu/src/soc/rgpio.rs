@@ -93,6 +93,9 @@ impl Device for Rgpio {
         let n = size.bytes();
         for i in 0..n {
             let at = offset + i;
+            if at > 0xF {
+                continue; // dropped
+            }
             let b = u16::from((value >> (8 * (n - 1 - i))) as u8);
             let (v, mask) = if at & 1 == 0 {
                 (b << 8, 0xFF00)

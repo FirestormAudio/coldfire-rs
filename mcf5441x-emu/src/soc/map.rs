@@ -490,8 +490,9 @@ impl Chip {
 /// state.
 ///
 /// Every other module of RM Table 1-3 and Table 1-4 is an [`Unmodelled`] block over its 16 KB slot, named as the
-/// table names it, and so is RGPIO at 0x8C00_0000-0x8FFF_FFFF: an access stops the run with
-/// [`Stop::Unmodelled`](crate::Stop::Unmodelled) and the detail `"<module> +<offset>"`.
+/// table names it: an access stops the run with [`Stop::Unmodelled`](crate::Stop::Unmodelled) and the detail
+/// `"<module> +<offset>"`. The ADC, I2C 0 and RGPIO (at 0x8C00_0000-0x8FFF_FFFF) are the exceptions: minimal models
+/// ([`Adc`], [`I2c`], [`Rgpio`]).
 ///
 /// The interrupt sources the models leave unwired are not driven: SSI, DSPI and NFC raise no interrupts (their
 /// enables are refused, see each model); the DDR controller and the PLL store their interrupt enables (DDR INTMASK,

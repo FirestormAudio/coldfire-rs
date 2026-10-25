@@ -167,7 +167,7 @@ Stub blocks, which accept every access and read back the last value written at e
 ([`StubBlock`](soc::StubBlock)): the crossbar switch (0xFC00_4000), the FlexBus registers (0xFC00_8000), the SCM
 (0xFC04_0000), the CCM with the reset controller and power management (0xEC09_0000) and pin multiplexing and GPIO
 (0xEC09_4000), whose port data registers below +0x48 are the [GPIO ports](soc::GpioPorts) model (the pin
-multiplexing, PAR, MSCR, SRCR and DSCR, stays read-back). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, the I2Cs, the DACs, the RTC, the
+multiplexing, PAR, MSCR, SRCR and DSCR, stays read-back). Every other module in RM Table 1-3 and Table 1-4 (the FlexCANs, I2C 1-5, the DACs, the RTC, the
 SIM, the USB host, the RNG, the Ethernet MACs and switch, 1-Wire and the mcPWM) is an
 [`Unmodelled`](soc::Unmodelled) block: an access stops the run with `Stop::Unmodelled` and the module's name and offset
 as the detail, with PC on the instruction. The SRAM (where the board's RAMBAR puts it, RM ch. 7) and the DDR (its size

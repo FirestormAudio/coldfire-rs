@@ -69,7 +69,7 @@ const STUBS: [(&str, u32); 5] = [
     ("CCM", 0xEC09_0000),
     ("GPIO", 0xEC09_4000),
 ];
-/// Every other module of RM Table 1-3 and Table 1-4, and RGPIO (RM Table 1-2, RM ch. 16).
+/// Every other module of RM Table 1-3 and Table 1-4 (the ADC, I2C 0 and RGPIO are minimal models).
 const UNMODELLED: [(&str, u32); 18] = [
     ("FlexCAN 0", 0xFC02_0000),
     ("FlexCAN 1", 0xFC02_4000),
